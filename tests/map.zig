@@ -4,6 +4,7 @@ const facts = emetgate.facts;
 const map = emetgate.map;
 const map_listing = emetgate.map_listing;
 const map_delta = emetgate.map_delta;
+const map_command = emetgate.map_command;
 const answer = emetgate.answer;
 const test_util = emetgate.test_util;
 const Repo = @import("facts_repo.zig").Repo;
@@ -390,7 +391,9 @@ test "map listing: a region over the budget is paged, every page declares the cu
         seen += value.shown;
         if (value.next) |next| {
             try testing.expectEqual(answer.Status.partial, page.status());
-            try testing.expect(std.mem.indexOf(u8, value.text, "next page") != null);
+            const hint = try nextPageCommand(arena, value.text);
+            try testing.expectEqual(@as(?u32, 0), hint.region);
+            try testing.expectEqual(next, hint.offset);
             var budget_cut = false;
             for (page.missingList()) |m| {
                 if (m.reason == .budget) budget_cut = true;
@@ -489,7 +492,17 @@ test "map delta: a delta over the character limit is summarized by region and po
     try testing.expect(delta.summarized);
     try testing.expect(delta.text.len <= map_delta.max_chars);
     try testing.expectEqual(@as(u32, 150), delta.added);
-    try testing.expect(std.mem.indexOf(u8, delta.text, "emetgate_region") != null);
+    try testing.expect(std.mem.indexOf(u8, delta.text, "emetgate map region r") != null);
+}
+
+fn nextPageCommand(arena: Allocator, text: []const u8) !map_command.Options {
+    const lead = "next page: emetgate map ";
+    const start = (std.mem.indexOf(u8, text, lead) orelse return error.NoNextPage) + lead.len;
+    const end = std.mem.indexOfScalarPos(u8, text, start, '\n') orelse text.len;
+    var args: std.ArrayList([:0]const u8) = .empty;
+    var words = std.mem.tokenizeScalar(u8, text[start..end], ' ');
+    while (words.next()) |word| try args.append(arena, try arena.dupeZ(u8, word));
+    return map_command.parse(args.items) orelse error.NextPageNotACommand;
 }
 
 fn conceptFixture(repo: *Repo) !void {

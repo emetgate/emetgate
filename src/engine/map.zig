@@ -1178,7 +1178,7 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), ");
         try w.writeAll(if (b.options.fold_files) "[more files; service{a, b} = a.service and b.service], #terms.\n" else "[more files], #terms.\n");
     }
-    try w.writeAll("emetgate_region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
+    try w.writeAll("emetgate map region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
     var terms_count: u32 = 0;

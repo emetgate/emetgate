@@ -177,7 +177,7 @@ fn summary(arena: Allocator, m: *const map.Map, changes: []const SymbolChange, h
         while (j < changes.len and sameGroup(changes[i], changes[j])) : (j += 1) counts[@intFromEnum(changes[j].change)] += 1;
         const name = try regionName(m, changes[i].region, changes[i].path, &buf);
         const line = if (changes[i].region) |r|
-            try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d} (emetgate_region r{d})\n", .{ name, counts[0], counts[1], counts[2], r + 1 })
+            try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d} (emetgate map region r{d})\n", .{ name, counts[0], counts[1], counts[2], r + 1 })
         else
             try std.fmt.allocPrint(arena, "{s}: +{d} -{d} ~{d}\n", .{ name, counts[0], counts[1], counts[2] });
         try lines.append(arena, line);

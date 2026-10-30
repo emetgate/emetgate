@@ -8020,7 +8020,7 @@
     {
       "id": "MP7-listing-next-page-line-missing",
       "file": "src/engine/map_listing.zig",
-      "from": "        try w.print(\"... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate_region r{d} offset {d}\\n\", .{ next + 1, total, total, budget, region_id + 1, next });",
+      "from": "        try w.print(\"... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate map region r{d} --offset {d}\\n\", .{ next + 1, total, total, budget, region_id + 1, next });",
       "to": "        _ = next;",
       "kills": [
         "map listing: a region over the budget is paged, every page declares the cut, and the pages cover it exactly once"
