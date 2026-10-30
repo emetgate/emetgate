@@ -73,6 +73,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
+      - run: node --version
+      - run: zig build test -Doptimize=${{ matrix.optimize }} -Dtest-filter="other modules: a rename that puts" -Dtest-filter="other modules: a symbol move whose rewritten" -Dtest-filter="frozen: a rename that would rewrite" -Dtest-filter="frozen: a move is refused when" --summary all
+        continue-on-error: true
       - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
