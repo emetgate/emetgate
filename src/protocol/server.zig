@@ -497,7 +497,7 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     try js.endObject();
 }
 
-pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck and tests pass, and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
+pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck passes and no test fails that did not fail before (pytest and dotnet let a new test fail until emetgate_commit), and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
 fn writeEmptyResult(out: *Writer, id: Value) !void {
     var js: std.json.Stringify = .{ .writer = out };

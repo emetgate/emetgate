@@ -67,7 +67,7 @@ const success = tool_result.success;
 const failure = tool_result.failure;
 const dupTrim = tool_result.dupTrim;
 
-pub const unverified_note = "none: no test command yet, so this write ran no test; add one (" ++ test_command_mod.markers_hint ++ ") or pass --test; then every write must pass it";
+pub const unverified_note = "none: no test command yet, so this write ran no test; add one (" ++ test_command_mod.markers_hint ++ ") or pass --test; then every write runs it";
 
 pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     wire.clearFix();
