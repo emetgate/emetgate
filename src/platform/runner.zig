@@ -350,7 +350,7 @@ fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_ro
     try deriveGate(gpa, io, root, location, session, &.{.{ .rel = rel, .content = patched }});
 
     if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = patched }}, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = options.typecheck_command, .test_command = command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null });
+    return baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = patched }}, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = options.typecheck_command, .test_command = command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null, .commits = session.committing() });
 }
 
 fn linkedPath(path: []const u8, linked: []const []const u8) bool {

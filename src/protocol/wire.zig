@@ -620,6 +620,7 @@ pub const verified_text = "tests ran on a mirror of this exact tree; no need to 
 fn writeVerified(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
     if (!n.tested or n.baseline.skipped) return;
+    if (n.baseline.failing or n.baseline.unverified or n.baseline.debt or n.baseline.regressed) return;
     try js.objectField("verified");
     try js.write(verified_text);
 }
@@ -634,6 +635,14 @@ fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
         try js.objectField("unverified");
         try js.write(n.baseline.text());
         return;
+    }
+    if (n.baseline.regressed) {
+        try js.objectField("regressed");
+        try js.write(n.baseline.text());
+    }
+    if (n.baseline.debt) {
+        try js.objectField("failing_tests");
+        try tool_names.writeJson(js, n.baseline.text());
     }
     if (n.baseline.failing) {
         try js.objectField("baseline_failing");
@@ -2053,6 +2062,18 @@ test "a committed reply says the tests ran on a mirror only when they ran and we
             var n = base;
             n.tested = true;
             n.baseline.skipped = true;
+            break :blk n;
+        }, .want = false },
+        .{ .note = blk: {
+            var n = base;
+            n.tested = true;
+            n.baseline.debt = true;
+            break :blk n;
+        }, .want = false },
+        .{ .note = blk: {
+            var n = base;
+            n.tested = true;
+            n.baseline.failing = true;
             break :blk n;
         }, .want = false },
     };

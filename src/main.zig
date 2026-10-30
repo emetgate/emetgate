@@ -720,6 +720,7 @@ fn commitCmd(init: std.process.Init, runtime: *Runtime, parsed: CommitArgs, out:
         .message = parsed.message,
         .shadow_root = parsed.shadow_root,
         .runtime = runtime,
+        .tests = .{ .given = emetgate.test_command.detect },
     });
     defer result.deinit(gpa);
     switch (result) {
@@ -743,6 +744,12 @@ fn commitCmd(init: std.process.Init, runtime: *Runtime, parsed: CommitArgs, out:
         },
         .rule_check_failed => {
             try out.writeAll("refused: a rule check could not be run\n");
+            return 1;
+        },
+        .tests_failing => |f| {
+            try out.print("refused: {d} test(s) that passed or did not exist when this session started fail now; make them pass, then commit again:\n", .{f.total});
+            for (f.names) |name| try out.print("  {s}\n", .{name});
+            if (f.total > f.names.len) try out.print("  ... and {d} more\n", .{f.total - f.names.len});
             return 1;
         },
     }

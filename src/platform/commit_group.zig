@@ -6,9 +6,10 @@
 //! attest, checks the working tree still matches each receipt byte for byte
 //! (fail-closed on drift — never silently re-gate), builds a single commit from
 //! HEAD with the already-gated content, and chains + attaches the pending
-//! receipts as its note. It reuses the evidence; it never re-runs the typecheck
-//! or tests. `emetgate verify --branch` then replays that note and returns
-//! "verified".
+//! receipts as its note. It reuses the evidence, and re-runs the tests only
+//! while the test ledger says a test that passed or did not exist when the
+//! session started still fails; the commit is refused until it passes.
+//! `emetgate verify --branch` then replays that note and returns "verified".
 
 const std = @import("std");
 const receipt = @import("../verify/receipt.zig");
@@ -24,6 +25,11 @@ const repo = @import("repo.zig");
 const rules = @import("rules.zig");
 const own_dir = @import("own_dir.zig");
 const git_commit = @import("git_commit.zig");
+const sandbox = @import("sandbox.zig");
+const baseline = @import("baseline.zig");
+const test_command = @import("test_command.zig");
+const test_results = @import("test_results.zig");
+const test_debt = @import("test_debt.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -38,6 +44,24 @@ pub const Options = struct {
     gate_tree: shadow.Choice = .{},
     linked: []const []const u8 = &shadow.dependency_dirs,
     runtime: ?*Runtime = null,
+    tests: ?Tests = null,
+};
+
+pub const Tests = struct {
+    given: []const u8,
+    typecheck: []const u8 = "",
+    allow_repo_config: bool = false,
+    limits: sandbox.Limits = .{},
+};
+
+pub const Failing = struct {
+    names: [][]u8,
+    total: usize,
+
+    pub fn deinit(self: Failing, gpa: Allocator) void {
+        for (self.names) |name| gpa.free(name);
+        gpa.free(self.names);
+    }
 };
 
 pub const Committed = struct {
@@ -70,12 +94,14 @@ pub const Result = union(enum) {
     drift: Drift,
     rule_violation: rules.Report,
     rule_check_failed: rules.Failure,
+    tests_failing: Failing,
 
     pub fn deinit(self: Result, gpa: Allocator) void {
         switch (self) {
             .committed => |c| c.deinit(gpa),
             .nothing_pending => {},
             .drift => |d| d.deinit(gpa),
+            .tests_failing => |f| f.deinit(gpa),
             .rule_violation => |r| r.deinit(gpa),
             .rule_check_failed => |f| f.deinit(gpa),
         }
@@ -248,6 +274,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         if (change.content) |bytes| try workspace.writeFile(change.rel, bytes) else try workspace.deleteFile(change.rel);
     }
     try runner.deriveGate(gpa, io, root, location, &session, changes.items);
+    if (try owedTests(gpa, io, arena, root, runner.gateDir(location, &session), options.tests)) |owed| return .{ .tests_failing = try failingCopy(gpa, owed) };
     try session.prepare(gpa, io, root, changes.items);
     // The working tree already holds the gated content, so the commit moves only
     // HEAD/branch/index — no file pendings to replay.
@@ -265,6 +292,57 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         .files = changes.items.len,
         .receipts = attached.count,
     } };
+}
+
+fn owedTests(gpa: Allocator, io: std.Io, arena: Allocator, root: []const u8, gate_abs: []const u8, tests: ?Tests) !?[]const []const u8 {
+    const ledger = (try test_debt.load(arena, io, root)) orelse return null;
+    const owed = try test_debt.introduced(arena, ledger.start, ledger.failing);
+    if (owed.len == 0) return null;
+    const given = tests orelse return owed;
+    const command = test_command.resolveTestCommand(arena, io, root, given.given, given.allow_repo_config) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return owed,
+    };
+    _ = test_command.takeUnverified();
+    if (std.mem.eql(u8, command, test_command.unverified_command)) return owed;
+    const measured = try baseline.measured(gpa, io, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = if (given.typecheck.len == 0) null else given.typecheck, .test_command = command, .limits = given.limits });
+    var results = measured.results;
+    defer if (results) |*r| r.deinit();
+    defer switch (measured.run) {
+        .typecheck, .tests => |report| report.deinit(gpa),
+        .rule_violation => |report| report.deinit(gpa),
+        .rule_check_failed => |failure| failure.deinit(gpa),
+    };
+    const passed = switch (measured.run) {
+        .tests => |report| report.passed(),
+        else => false,
+    };
+    const now = results orelse {
+        if (!passed) return owed;
+        try test_debt.record(gpa, io, root, &.{});
+        return null;
+    };
+    const listed = try test_results.failingOf(arena, now.cases);
+    const failing = try arena.alloc([]const u8, listed.len);
+    for (failing, listed) |*slot, id| slot.* = try arena.dupe(u8, id);
+    try test_debt.record(gpa, io, root, failing);
+    const still = try test_debt.introduced(arena, ledger.start, failing);
+    return if (still.len == 0) null else still;
+}
+
+fn failingCopy(gpa: Allocator, owed: []const []const u8) !Failing {
+    const shown = @min(owed.len, test_debt.shown);
+    const names = try gpa.alloc([]u8, shown);
+    var copied: usize = 0;
+    errdefer {
+        for (names[0..copied]) |name| gpa.free(name);
+        gpa.free(names);
+    }
+    for (names, owed[0..shown]) |*slot, id| {
+        slot.* = try gpa.dupe(u8, id);
+        copied += 1;
+    }
+    return .{ .names = names, .total = owed.len };
 }
 
 fn lessString(_: void, a: []const u8, b: []const u8) bool {

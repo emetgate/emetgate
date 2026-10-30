@@ -38,6 +38,8 @@ const recovery = @import("recovery.zig");
 const batch_stage = @import("batch_stage.zig");
 const runner = @import("../platform/runner.zig");
 const test_command_mod = @import("../platform/test_command.zig");
+const test_debt = @import("../platform/test_debt.zig");
+const tool_names = @import("../engine/tool_names.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
 const file_edit = @import("../platform/file_edit.zig");
@@ -74,6 +76,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = commit_refusal.take();
     _ = test_command_mod.takeUnverified();
     _ = test_command_mod.takeLate();
+    test_debt.drop();
     defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
@@ -733,6 +736,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .runtime = runtime,
+        .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = trustedTypecheckCommand(policy), .allow_repo_config = policy.allow_repo_config },
     });
     defer result.deinit(gpa);
     var js: std.json.Stringify = .{ .writer = w };
@@ -795,8 +799,27 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
             try wire.writeRuleCheckFailed(w, crashed, null);
             return true;
         },
+        .tests_failing => |failing| {
+            event.outcome = .rejected;
+            event.reason = "tests_failing";
+            try js.beginObject();
+            try js.objectField("status");
+            try js.write("error");
+            try js.objectField("error");
+            try js.write("TestsFailing");
+            try js.objectField("failing");
+            try js.write(failing.names);
+            try js.objectField("total");
+            try js.write(failing.total);
+            try js.objectField("fix");
+            try tool_names.writeJson(&js, commit_tests_fix);
+            try js.endObject();
+            return true;
+        },
     }
 }
+
+pub const commit_tests_fix = "these tests passed or did not exist when this session started and fail now; make them pass with emetgate_try, then call emetgate_commit again";
 
 fn commitShortstat(gpa: Allocator, io: std.Io, root: []const u8, base: []const u8, oid: []const u8) !?[]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);

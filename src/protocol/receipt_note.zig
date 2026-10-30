@@ -2,6 +2,7 @@ const std = @import("std");
 const receipts = @import("../platform/receipts.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const commit_refusal = @import("../platform/commit_refusal.zig");
+const test_debt = @import("../platform/test_debt.zig");
 const wire = @import("wire.zig");
 
 const Allocator = std.mem.Allocator;
@@ -14,6 +15,7 @@ pub fn record(gpa: Allocator, io: std.Io, root: []const u8, rec: receipts.Record
     if (request) |made| {
         if (made.oid) |oid| bound.commit = .{ .base = made.base.?, .oid = oid, .runtime = made.runtime };
     }
+    test_debt.settle(gpa, io, root) catch {};
     const written = receipts.write(gpa, io, root, bound);
     if (written) |ok| {
         if (request) |made| made.receipt = ok.batch[0..16].*;

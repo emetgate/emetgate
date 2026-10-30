@@ -4,6 +4,9 @@ const shadow = @import("shadow.zig");
 const runner = @import("runner.zig");
 const test_outcome = @import("test_outcome.zig");
 const output_digest = @import("../protocol/output_digest.zig");
+const test_results = @import("test_results.zig");
+const test_debt = @import("test_debt.zig");
+const test_command_mod = @import("test_command.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -11,7 +14,9 @@ pub const Note = struct {
     failing: bool = false,
     unverified: bool = false,
     skipped: bool = false,
-    buf: [200]u8 = undefined,
+    debt: bool = false,
+    regressed: bool = false,
+    buf: [600]u8 = undefined,
     len: usize = 0,
 
     pub fn text(self: *const Note) []const u8 {
@@ -44,6 +49,7 @@ pub const Stage = enum { typecheck, tests };
 pub const Failures = struct {
     stage: ?Stage,
     keys: []const u64,
+    cases: ?[]const test_results.Case = null,
 };
 
 pub fn inert(rel: []const u8) bool {
@@ -88,6 +94,7 @@ const Entry = struct {
     key: u64,
     stage: ?Stage,
     keys: []u64,
+    results: ?test_results.Results,
 };
 
 const cache_size = 8;
@@ -97,17 +104,25 @@ var cache_next: usize = 0;
 fn lookup(key: u64) ?Failures {
     for (cache) |slot| {
         const entry = slot orelse continue;
-        if (entry.key == key) return .{ .stage = entry.stage, .keys = entry.keys };
+        if (entry.key == key) return .{ .stage = entry.stage, .keys = entry.keys, .cases = if (entry.results) |r| r.cases else null };
     }
     return null;
 }
 
-fn remember(key: u64, stage: ?Stage, keys: []const u64) Failures {
-    const owned = std.heap.page_allocator.dupe(u64, keys) catch return .{ .stage = stage, .keys = &.{} };
-    if (cache[cache_next]) |old| std.heap.page_allocator.free(old.keys);
-    cache[cache_next] = .{ .key = key, .stage = stage, .keys = owned };
+fn remember(key: u64, stage: ?Stage, keys: []const u64, results: ?test_results.Results) Failures {
+    var held = results;
+    const owned = std.heap.page_allocator.dupe(u64, keys) catch {
+        if (held) |*r| r.deinit();
+        return .{ .stage = stage, .keys = &.{} };
+    };
+    if (cache[cache_next]) |old| {
+        std.heap.page_allocator.free(old.keys);
+        var dropped = old.results;
+        if (dropped) |*r| r.deinit();
+    }
+    cache[cache_next] = .{ .key = key, .stage = stage, .keys = owned, .results = held };
     cache_next = (cache_next + 1) % cache_size;
-    return .{ .stage = stage, .keys = owned };
+    return .{ .stage = stage, .keys = owned, .cases = if (held) |r| r.cases else null };
 }
 
 fn readOriginal(gpa: Allocator, io: std.Io, root: []const u8, rel: []const u8) !?[]u8 {
@@ -154,26 +169,75 @@ pub const Gate = struct {
     test_command: []const u8,
     limits: sandbox.Limits,
     note: ?*Note = null,
+    commits: bool = false,
 };
+
+fn reporterFor(gpa: Allocator, gate_dir: []const u8, command: []const u8) !?test_results.Reporter {
+    if (!test_command_mod.chosen(command)) return null;
+    return test_results.Reporter.of(gpa, gate_dir, command);
+}
+
+fn runGate(gpa: Allocator, io: std.Io, gate: Gate, reporter: ?test_results.Reporter) !runner.ShadowRun {
+    if (reporter) |r| r.clear(io);
+    return runner.runStages(gpa, io, gate.gate_dir, gate.typecheck_command, if (reporter) |r| r.command else gate.test_command, gate.limits);
+}
+
+fn collected(gpa: Allocator, io: std.Io, reporter: ?test_results.Reporter, ran: runner.ShadowRun) !?test_results.Results {
+    const r = reporter orelse return null;
+    return switch (ran) {
+        .tests => |report| r.collect(gpa, io, report),
+        else => null,
+    };
+}
+
+pub const Measured = struct {
+    run: runner.ShadowRun,
+    results: ?test_results.Results,
+};
+
+pub fn measured(gpa: Allocator, io: std.Io, gate: Gate) !Measured {
+    const reporter = try reporterFor(gpa, gate.gate_dir, gate.test_command);
+    defer if (reporter) |r| r.deinit(gpa);
+    const ran = try runGate(gpa, io, gate, reporter);
+    errdefer switch (ran) {
+        .typecheck, .tests => |report| report.deinit(gpa),
+        else => {},
+    };
+    return .{ .run = ran, .results = try collected(gpa, io, reporter, ran) };
+}
 
 pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Change, gate: Gate) !runner.ShadowRun {
     if (allInert(changes)) {
         if (gate.note) |n| n.skipped = true;
         return .{ .tests = try passReport(gpa) };
     }
-    const after = try runner.runStages(gpa, io, gate.gate_dir, gate.typecheck_command, gate.test_command, gate.limits);
+    const reporter = try reporterFor(gpa, gate.gate_dir, gate.test_command);
+    defer if (reporter) |r| r.deinit(gpa);
+    const after = try runGate(gpa, io, gate, reporter);
     const stage: Stage, const report = switch (after) {
         .typecheck => |r| .{ .typecheck, r },
         .tests => |r| .{ .tests, r },
         else => return after,
     };
-    if (report.passed() or !comparable(report)) return after;
     errdefer report.deinit(gpa);
+    var now = try collected(gpa, io, reporter, after);
+    defer if (now) |*results| results.deinit();
+    if (report.passed()) {
+        if (now != null) {
+            try test_debt.begin(gpa, io, gate.root, &.{});
+            test_debt.stage(gate.root, &.{});
+        }
+        return after;
+    }
+    if (!comparable(report)) return after;
 
+    const key = try treeKey(gpa, io, gate.root, gate.typecheck_command, gate.test_command);
+    const before = lookup(key) orelse try measure(gpa, io, workspace, changes, gate, key, reporter);
+    if (now) |results| {
+        if (before.cases) |cases| return judged(gpa, io, changes, gate, report, cases, results.cases);
+    }
     const now_keys = try output_digest.failureKeys(gpa, report.stdout, report.stderr);
     defer gpa.free(now_keys);
-    const key = try treeKey(gpa, io, gate.root, gate.typecheck_command, gate.test_command);
-    const before = lookup(key) orelse try measure(gpa, io, workspace, changes, gate, key);
     if (!noNewFailures(.{ .stage = stage, .keys = now_keys }, before)) return after;
 
     if (gate.note) |n| {
@@ -194,13 +258,50 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
     return .{ .tests = accepted };
 }
 
-fn measure(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Change, gate: Gate, key: u64) !Failures {
+fn judged(gpa: Allocator, io: std.Io, changes: []const Change, gate: Gate, report: sandbox.Report, before: []const test_results.Case, now: []const test_results.Case) !runner.ShadowRun {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var text: std.Io.Writer.Allocating = .init(arena);
+    const verdict = try test_results.judge(arena, before, now);
+    var blocked: std.ArrayList([]const u8) = .empty;
+    try blocked.appendSlice(arena, verdict.regressed);
+    if (verdict.vanished.len != 0) {
+        const touched = try arena.alloc(test_results.Touched, changes.len);
+        for (touched, changes) |*slot, change| slot.* = .{ .rel = change.rel, .original = try readOriginal(arena, io, gate.root, change.rel) };
+        try blocked.appendSlice(arena, try test_results.unexempt(arena, verdict.vanished, touched));
+    }
+    if (blocked.items.len != 0) {
+        if (gate.note) |n| {
+            try test_debt.names(&text.writer, blocked.items);
+            n.regressed = true;
+            n.keep(text.written());
+        }
+        return .{ .tests = report };
+    }
+    const failing = try test_results.failingOf(arena, now);
+    try test_debt.begin(gpa, io, gate.root, try test_results.failingOf(arena, before));
+    const owed = try test_debt.introduced(arena, try test_debt.startOf(arena, io, gate.root), failing);
+    if (gate.note) |n| {
+        try test_debt.summary(&text.writer, failing, owed.len);
+        n.debt = true;
+        n.keep(text.written());
+    }
+    if (gate.commits and owed.len != 0) return .{ .tests = report };
+    test_debt.stage(gate.root, failing);
+    var accepted = report;
+    accepted.outcome = .{ .exited = 0 };
+    accepted.no_tests = false;
+    return .{ .tests = accepted };
+}
+
+fn measure(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Change, gate: Gate, key: u64, reporter: ?test_results.Reporter) !Failures {
     for (changes) |change| {
         const original = try readOriginal(gpa, io, gate.root, change.rel);
         defer if (original) |bytes| gpa.free(bytes);
         if (original) |bytes| try workspace.writeFile(change.rel, bytes) else if (change.content != null) try workspace.deleteFile(change.rel);
     }
-    const base = try runner.runStages(gpa, io, gate.gate_dir, gate.typecheck_command, gate.test_command, gate.limits);
+    const base = try runGate(gpa, io, gate, reporter);
     for (changes) |change| {
         if (change.content) |bytes| try workspace.writeFile(change.rel, bytes) else try workspace.deleteFile(change.rel);
     }
@@ -210,10 +311,11 @@ fn measure(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
         else => return .{ .stage = null, .keys = &.{} },
     };
     defer report.deinit(gpa);
-    if (report.passed() or !comparable(report)) return remember(key, null, &.{});
+    const results = if (stage == .tests) try collected(std.heap.page_allocator, io, reporter, base) else null;
+    if (report.passed() or !comparable(report)) return remember(key, null, &.{}, results);
     const keys = try output_digest.failureKeys(gpa, report.stdout, report.stderr);
     defer gpa.free(keys);
-    return remember(key, stage, keys);
+    return remember(key, stage, keys, results);
 }
 
 const testing = std.testing;
