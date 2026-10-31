@@ -113,6 +113,7 @@ pub const Result = union(enum) {
 const Attested = struct {
     rel: []u8,
     after: ?Hash,
+    written: std.ArrayList(Hash) = .empty,
 };
 
 /// Gather the distinct files the pending (not-yet-attached) receipts attest,
@@ -151,10 +152,13 @@ fn put(arena: Allocator, list: *std.ArrayList(Attested), rel: []u8, after: ?Hash
     for (list.items) |*item| {
         if (eqlPath(item.rel, rel)) {
             item.after = after;
+            if (after) |hash| try item.written.append(arena, hash);
             return;
         }
     }
-    try list.append(arena, .{ .rel = rel, .after = after });
+    var item: Attested = .{ .rel = rel, .after = after };
+    if (after) |hash| try item.written.append(arena, hash);
+    try list.append(arena, item);
 }
 
 fn eqlPath(a: []const u8, b: []const u8) bool {
@@ -206,6 +210,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
     // the latest receipt attests. Collect the files that do not, and refuse.
     var changes: std.ArrayList(commit_plan.Change) = .empty;
     var rels: std.ArrayList([]const u8) = .empty;
+    var written: std.ArrayList([]const Hash) = .empty;
     var drifted: std.ArrayList([]const u8) = .empty;
     for (items) |item| {
         const abs = try std.fs.path.join(arena, &.{ root, item.rel });
@@ -225,6 +230,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         }
         try changes.append(arena, .{ .rel = item.rel, .content = bytes });
         try rels.append(arena, item.rel);
+        try written.append(arena, item.written.items);
     }
     if (drifted.items.len != 0) {
         commit_refusal.note(drifted.items, drifted.items.len);
@@ -260,7 +266,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         .failed => |failure| return .{ .rule_check_failed = failure },
     }
     commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));
-    var session: commit_plan.Session = .{ .request = &request, .head = try git_commit.preflightWritten(gpa, io, root, rels.items) };
+    var session: commit_plan.Session = .{ .request = &request, .head = try git_commit.preflightWritten(gpa, io, root, rels.items, written.items) };
     defer session.deinit(gpa);
 
     // Rebuild the HEAD tree in the shadow, lay the gated content on top of it,

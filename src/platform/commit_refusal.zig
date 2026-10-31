@@ -40,6 +40,10 @@ pub fn note(paths: []const []const u8, total: usize) void {
     last = named;
 }
 
+pub fn peek() ?Named {
+    return last;
+}
+
 pub fn take() ?Named {
     const found = last;
     last = null;
