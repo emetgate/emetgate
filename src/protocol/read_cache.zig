@@ -7,7 +7,7 @@ const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const Mirror = mirror_mod.Mirror;
 
-pub const covered_hint = "inside your earlier whole read of this file, unchanged since (same file_hash); force:true resends";
+pub const covered_hint = "inside your earlier whole read of this file, unchanged since (same file_hash); if it is no longer in your context, force:true resends it";
 
 fn wholeKey(gpa: Allocator, file: []const u8) ![]u8 {
     return std.fmt.allocPrint(gpa, "whole:{s}", .{file});
@@ -21,15 +21,23 @@ pub fn recordWhole(gpa: Allocator, mirror: ?*Mirror, file: []const u8, file_hash
 }
 
 pub fn coversWhole(gpa: Allocator, mirror: ?*Mirror, file: []const u8, file_hash: symbol.Hash, force: bool) !bool {
-    const m = mirror orelse return false;
-    if (force or !m.enabled) return false;
+    return try wholeSince(gpa, mirror, file, file_hash, force) != null;
+}
+
+pub fn wholeSince(gpa: Allocator, mirror: ?*Mirror, file: []const u8, file_hash: symbol.Hash, force: bool) !?u32 {
+    const m = mirror orelse return null;
+    if (force or !m.enabled) return null;
     const key = try wholeKey(gpa, file);
     defer gpa.free(key);
-    const held = m.entries.get(key) orelse return false;
-    return std.mem.eql(u8, &held, &file_hash);
+    const held = m.get(key) orelse return null;
+    return if (std.mem.eql(u8, &held.hash, &file_hash)) held.call else null;
 }
 
 pub fn writeCovered(w: *Writer, file: []const u8, unit: ?[]const u8, file_hash: symbol.Hash) !void {
+    return writeCoveredSince(w, file, unit, file_hash, null);
+}
+
+pub fn writeCoveredSince(w: *Writer, file: []const u8, unit: ?[]const u8, file_hash: symbol.Hash, since: ?u32) !void {
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
@@ -41,6 +49,10 @@ pub fn writeCovered(w: *Writer, file: []const u8, unit: ?[]const u8, file_hash: 
         try js.write(u);
     }
     try wire.writeFileHash(&js, file_hash);
+    if (since) |call| {
+        try js.objectField("since_call");
+        try js.write(call);
+    }
     try js.objectField("hint");
     try js.write(covered_hint);
     try js.endObject();
