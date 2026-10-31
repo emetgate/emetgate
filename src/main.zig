@@ -19,6 +19,7 @@ const prompt_hook = emetgate.prompt_hook;
 const pretool_hook = emetgate.pretool_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
+const rule_catalog = emetgate.rule_catalog;
 const rules_command = emetgate.rules_command;
 const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
@@ -180,6 +181,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return scanCmd(init, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "rule")) {
+        if (args.len >= 3) if (rule_catalog.verbOf(args[2])) |verb| return ruleCatalogCmd(init, runtime, verb, args[3..], out);
         const request = rule_command.parse(args[2..]) orelse exitWithUsage();
         return ruleCmd(init, runtime, request, out);
     }
@@ -590,6 +592,17 @@ fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Requ
     defer stderr_writer.interface.flush() catch {};
     try rule_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
     return 0;
+}
+
+fn ruleCatalogCmd(init: std.process.Init, runtime: *Runtime, verb: rule_catalog.Verb, args: []const [:0]const u8, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = runner.repoRoot(gpa, init.io);
+    defer if (root) |path| gpa.free(path) else |_| {};
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
+    const outcome = try rule_catalog.run(verb, gpa, init.io, root, args, "emetgate rule ", out, &stderr_writer.interface);
+    return if (outcome == .refused) 1 else 0;
 }
 
 fn rulesCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
