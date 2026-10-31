@@ -1309,3 +1309,290 @@ test "list includes untracked files that are not ignored and leaves ignored ones
     try testing.expect(containsString(files, "src/new.ts"));
     try testing.expect(!containsString(files, "secret.txt"));
 }
+
+fn sectionOf(text: []const u8, file: []const u8) ?[]const u8 {
+    var head_buf: [512]u8 = undefined;
+    const head = std.fmt.bufPrint(&head_buf, "{s}{s}\n", .{ read_tools.section_head, file }) catch return null;
+    const at = std.mem.indexOf(u8, text, head) orelse return null;
+    const rest = text[at + head.len ..];
+    const next = std.mem.indexOf(u8, rest, "\n" ++ read_tools.section_head) orelse return rest;
+    return rest[0 .. next + 1];
+}
+
+fn sectionStatus(section: []const u8) ![]const u8 {
+    const end = std.mem.indexOfScalar(u8, section, '\n') orelse section.len;
+    var parsed = try std.json.parseFromSlice(Value, testing.allocator, section[0..end], .{});
+    defer parsed.deinit();
+    const status = parsed.value.object.get("status") orelse return "content";
+    if (std.mem.eql(u8, status.string, "unchanged")) return "unchanged";
+    if (std.mem.eql(u8, status.string, "error")) return "error";
+    return "content";
+}
+
+const ReadRepo = struct {
+    tmp: testing.TmpDir,
+    root: [:0]u8,
+
+    fn init(files: []const [2][]const u8) !ReadRepo {
+        var tmp = testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+        for (files) |f| try tmp.dir.writeFile(testing.io, .{ .sub_path = f[0], .data = f[1] });
+        const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+        errdefer testing.allocator.free(root);
+        try commitAll(root);
+        return .{ .tmp = tmp, .root = root };
+    }
+
+    fn deinit(self: *ReadRepo) void {
+        testing.allocator.free(self.root);
+        self.tmp.cleanup();
+    }
+
+    fn path(self: *const ReadRepo, buf: []u8, name: []const u8) []const u8 {
+        return std.fmt.bufPrint(buf, "{s}\\{s}", .{ self.root, name }) catch unreachable;
+    }
+};
+
+test "read many: files returns each file under its own heading with its usual rendering, and a missing file as an error in its place" {
+    var repo = try ReadRepo.init(&.{
+        .{ "notes.txt", "alpha\nbeta\n" },
+        .{ "cfg.json", "{\"name\":\"x\",\"deps\":{\"a\":1}}\n" },
+        .{ "doc.md", "# One\n\ntext one\n\n# Two\n\ntext two\n" },
+        .{ "a.ts", "export const a = 1;\nexport const b = 2;\n" },
+    });
+    defer repo.deinit();
+    var b1: [512]u8 = undefined;
+    var b2: [512]u8 = undefined;
+    var b3: [512]u8 = undefined;
+    var b4: [512]u8 = undefined;
+    var b5: [512]u8 = undefined;
+    const notes = repo.path(&b1, "notes.txt");
+    const cfg = repo.path(&b2, "cfg.json");
+    const doc = repo.path(&b3, "doc.md");
+    const missing = repo.path(&b4, "missing.txt");
+    const ts_file = repo.path(&b5, "a.ts");
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = repo.root, .raw_code = true };
+
+    var reply = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = .{ notes, cfg, .{ .file = doc, .heading = "Two" }, missing, .{ .file = ts_file, .line_start = 2, .line_end = 2 } } }, policy);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    const notes_part = sectionOf(reply.text, notes).?;
+    try testing.expect(std.mem.indexOf(u8, notes_part, "alpha") != null);
+    try testing.expect(std.mem.indexOf(u8, notes_part, "\"file_hash\"") != null);
+    const cfg_part = sectionOf(reply.text, cfg).?;
+    try testing.expect(std.mem.indexOf(u8, cfg_part, "deps") != null);
+    const doc_part = sectionOf(reply.text, doc).?;
+    try testing.expect(std.mem.indexOf(u8, doc_part, "text two") != null);
+    try testing.expect(std.mem.indexOf(u8, doc_part, "text one") == null);
+    try testing.expectEqualStrings("error", try sectionStatus(sectionOf(reply.text, missing).?));
+    const ts_part = sectionOf(reply.text, ts_file).?;
+    try testing.expect(std.mem.indexOf(u8, ts_part, "export const b = 2;") != null);
+    try testing.expect(std.mem.indexOf(u8, ts_part, "export const a = 1;") == null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "not_sent") == null);
+
+    var again = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = .{ notes, cfg, .{ .file = doc, .heading = "Two" }, missing } }, policy);
+    defer again.deinit();
+    errdefer std.debug.print("again: {s}\n", .{again.text});
+    try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(again.text, notes).?));
+    try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(again.text, cfg).?));
+    try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(again.text, doc).?));
+    try testing.expectEqualStrings("error", try sectionStatus(sectionOf(again.text, missing).?));
+}
+
+test "read many: files over the reply cap are named as not sent, are not remembered as sent, and come in a later call" {
+    const big = try testing.allocator.alloc(u8, 15 * 1024);
+    defer testing.allocator.free(big);
+    for (big, 0..) |*c, i| c.* = if (i % 64 == 63) '\n' else 'a' + @as(u8, @intCast(i % 26));
+    var repo = try ReadRepo.init(&.{ .{ "f1.txt", big }, .{ "f2.txt", big }, .{ "f3.txt", big }, .{ "f4.txt", big }, .{ "f5.txt", big } });
+    defer repo.deinit();
+    var bufs: [5][512]u8 = undefined;
+    var paths: [5][]const u8 = undefined;
+    const names = [_][]const u8{ "f1.txt", "f2.txt", "f3.txt", "f4.txt", "f5.txt" };
+    for (names, 0..) |name, i| paths[i] = repo.path(&bufs[i], name);
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = repo.root, .raw_code = true };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = paths }, policy);
+    defer first.deinit();
+    errdefer std.debug.print("reply tail: {s}\n", .{first.text[first.text.len -| 600..]});
+    try testing.expect(!first.is_error);
+    try testing.expect(first.text.len <= read_tools.max_many_bytes + 1024);
+    try testing.expect(sectionOf(first.text, paths[0]) != null);
+    try testing.expect(sectionOf(first.text, paths[4]) == null);
+    const trimmed = std.mem.trimEnd(u8, first.text, "\n");
+    const tail_at = std.mem.lastIndexOfScalar(u8, trimmed, '\n').?;
+    var tail = try std.json.parseFromSlice(Value, testing.allocator, trimmed[tail_at + 1 ..], .{});
+    defer tail.deinit();
+    try testing.expectEqualStrings("partial", tail.value.object.get("status").?.string);
+    const not_sent = tail.value.object.get("not_sent").?.array.items;
+    try testing.expectEqualStrings(paths[4], not_sent[not_sent.len - 1].string);
+    try testing.expect(tail.value.object.get("fix") != null);
+
+    var alone = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = paths[4] }, policy);
+    defer alone.deinit();
+    try testing.expect(std.mem.indexOf(u8, alone.text, "\"unchanged\"") == null);
+    try testing.expect(std.mem.indexOf(u8, alone.text, big[0..60]) != null);
+
+    var second = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = paths }, policy);
+    defer second.deinit();
+    errdefer std.debug.print("second: {s}\n", .{second.text});
+    try testing.expect(std.mem.indexOf(u8, second.text, "not_sent") == null);
+    for (paths) |p| try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(second.text, p).?));
+}
+
+test "read many: an empty, oversized or malformed files list is refused" {
+    var repo = try ReadRepo.init(&.{.{ "a.txt", "a\n" }});
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const policy: server.Policy = .{ .root = repo.root };
+    var many: [read_tools.max_many_files + 1][]const u8 = undefined;
+    for (&many) |*p| p.* = "a.txt";
+    inline for (.{ .{ .files = [_][]const u8{} }, .{ .files = many }, .{ .files = .{7} }, .{ .files = "a.txt" } }) |args| {
+        var line: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer line.deinit();
+        var js: std.json.Stringify = .{ .writer = &line.writer };
+        try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_read_file", .arguments = args } });
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        _ = try server.handleMessageObserved(testing.allocator, testing.io, runtime, line.written(), &out.writer, null, policy);
+        errdefer std.debug.print("reply: {s}\n", .{out.written()});
+        var parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{});
+        defer parsed.deinit();
+        const message = parsed.value.object.get("error").?.object.get("message").?.string;
+        try testing.expect(std.mem.indexOf(u8, message, "files") != null);
+    }
+}
+
+test "read cache: an unchanged re-read names the call that sent it and how to get it again, and force:true always resends" {
+    var repo = try ReadRepo.init(&.{ .{ "notes.txt", "hello\n" }, .{ "other.txt", "other\n" } });
+    defer repo.deinit();
+    var b1: [512]u8 = undefined;
+    var b2: [512]u8 = undefined;
+    const notes = repo.path(&b1, "notes.txt");
+    const other_file = repo.path(&b2, "other.txt");
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = repo.root, .raw_code = true };
+
+    var first = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes }, policy);
+    defer first.deinit();
+    try testing.expect(std.mem.indexOf(u8, first.text, "hello") != null);
+    var other = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = other_file }, policy);
+    defer other.deinit();
+
+    var second = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes }, policy);
+    defer second.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{second.text});
+    try testing.expect(std.mem.indexOfScalar(u8, std.mem.trimEnd(u8, second.text, "\n"), '\n') == null);
+    try testing.expect(std.mem.indexOf(u8, second.text, "hello") == null);
+    var body = try second.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("unchanged", body.value.object.get("status").?.string);
+    try testing.expectEqual(@as(i64, 1), body.value.object.get("since_call").?.integer);
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("hint").?.string, "force:true") != null);
+
+    for (0..2) |_| {
+        var forced = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .force = true }, policy);
+        defer forced.deinit();
+        try testing.expect(std.mem.indexOf(u8, forced.text, "hello") != null);
+    }
+    var many_forced = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = .{notes}, .force = true }, policy);
+    defer many_forced.deinit();
+    try testing.expect(std.mem.indexOf(u8, many_forced.text, "hello") != null);
+    var item_forced = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .files = .{.{ .file = notes, .force = true }} }, policy);
+    defer item_forced.deinit();
+    try testing.expect(std.mem.indexOf(u8, item_forced.text, "hello") != null);
+    var after_force = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes }, policy);
+    defer after_force.deinit();
+    var after_body = try after_force.payload();
+    defer after_body.deinit();
+    try testing.expectEqual(@as(i64, 7), after_body.value.object.get("since_call").?.integer);
+}
+
+test "read cache: a different line range is never unchanged, and a change on disk outside the range resends it" {
+    var repo = try ReadRepo.init(&.{.{ "notes.txt", "one\ntwo\nthree\nfour\n" }});
+    defer repo.deinit();
+    var b1: [512]u8 = undefined;
+    const notes = repo.path(&b1, "notes.txt");
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = repo.root };
+
+    var r12 = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 2 }, policy);
+    defer r12.deinit();
+    try testing.expect(std.mem.indexOf(u8, r12.text, "two") != null);
+    var r12b = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 2 }, policy);
+    defer r12b.deinit();
+    try testing.expectEqualStrings("unchanged", try statusOf(&r12b));
+    var r23 = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 2, .line_end = 3 }, policy);
+    defer r23.deinit();
+    try testing.expectEqualStrings("", try statusOf(&r23));
+    try testing.expect(std.mem.indexOf(u8, r23.text, "three") != null);
+    var r11 = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 1 }, policy);
+    defer r11.deinit();
+    try testing.expectEqualStrings("", try statusOf(&r11));
+    try testing.expect(std.mem.indexOf(u8, r11.text, "one") != null);
+
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "notes.txt", .data = "one\ntwo\nthree\nFOUR\n" });
+    var moved = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 2 }, policy);
+    defer moved.deinit();
+    try testing.expectEqualStrings("", try statusOf(&moved));
+    try testing.expect(std.mem.indexOf(u8, moved.text, "two") != null);
+    var settled = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 2 }, policy);
+    defer settled.deinit();
+    try testing.expectEqualStrings("unchanged", try statusOf(&settled));
+}
+
+test "read cache: a write through emetgate makes the next read of the file and of an untouched range send content" {
+    var repo = try ReadRepo.init(&.{.{ "notes.txt", "first\nsecond\nthird\n" }});
+    defer repo.deinit();
+    var b1: [512]u8 = undefined;
+    const notes = repo.path(&b1, "notes.txt");
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var m: mirror_mod.Mirror = .init(testing.allocator, true);
+    defer m.deinit();
+    const policy: server.Policy = .{ .mirror = &m, .root = repo.root, .test_command = "cmd /c exit 0" };
+
+    var range = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 1 }, policy);
+    defer range.deinit();
+    var range_again = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 1 }, policy);
+    defer range_again.deinit();
+    try testing.expectEqualStrings("unchanged", try statusOf(&range_again));
+
+    var edited = try callToolServedPolicy(runtime, "emetgate_edit", .{ .file = notes, .old_string = "third", .new_string = "THIRD" }, policy);
+    defer edited.deinit();
+    errdefer std.debug.print("edit: {s}\n", .{edited.text});
+    try testing.expect(!edited.is_error);
+
+    var range_after = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes, .line_start = 1, .line_end = 1 }, policy);
+    defer range_after.deinit();
+    try testing.expectEqualStrings("", try statusOf(&range_after));
+    try testing.expect(std.mem.indexOf(u8, range_after.text, "first") != null);
+
+    var whole = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes }, policy);
+    defer whole.deinit();
+    try testing.expect(std.mem.indexOf(u8, whole.text, "THIRD") != null);
+    var edited_back = try callToolServedPolicy(runtime, "emetgate_edit", .{ .file = notes, .old_string = "second", .new_string = "SECOND" }, policy);
+    defer edited_back.deinit();
+    try testing.expect(!edited_back.is_error);
+    var whole_after = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .file = notes }, policy);
+    defer whole_after.deinit();
+    try testing.expectEqualStrings("", try statusOf(&whole_after));
+    try testing.expect(std.mem.indexOf(u8, whole_after.text, "SECOND") != null);
+}

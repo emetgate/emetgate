@@ -623,7 +623,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_move` | Move a top-level declaration to another file; the kernel derives and checks every import and commits source, target and users as one batch |
 | `emetgate_move_file` | Move or rename a file and rewrite every relative import to and from it as one batch |
 | `emetgate_write_doc` | Verify, gate and commit a hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section or a text line range; a file of a registered language is refused (`UseSymbolToolsForSource`); can commit together with a code edit in `emetgate_try_batch` |
-| `emetgate_read_file` | A JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
+| `emetgate_read_file` | For one file, or up to 32 in one call: a JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
 | `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 | `emetgate_find` | Every place a literal text occurs in the project's files, from a prebuilt index (see Find) |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
@@ -733,7 +733,7 @@ The first two flags give the session the `/rule` command and are described under
 | `emetgate_symbols` | Loads one file through the repository jail and the in-memory tree cache and lists its symbols |
 | `emetgate_skeleton` | Same load, plus a read of the rule ledger without taking its lock |
 | `emetgate_read_symbol` | Same load; the session mirror lives in memory |
-| `emetgate_read_file` | Reads one file inside the repository |
+| `emetgate_read_file` | Reads one or more files inside the repository |
 | `emetgate_list` | Runs `git ls-files` with a fixed argument list |
 | `emetgate_search` | Reads tracked files; its only write is its own index cache under `%LOCALAPPDATA%\emetgate\index` |
 | `emetgate_find` | Reads the files `git ls-files` lists; its only write is its own index under `%LOCALAPPDATA%\emetgate\find` |
@@ -869,13 +869,29 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
 - **Any other text file**: `line_start`/`line_end` reads just that line range with its
   own hash, the `cat`/`sed -n` replacement; without them the file is returned whole, up
   to 16 KiB.
-- **Session mirror (opt-in, `emetgate mcp --mirror`).** The server remembers, in
-  process memory only, the content hash of every unit (file, JSON pointer, Markdown
-  heading or symbol) it has already sent this session. A repeat request for an
-  unchanged unit gets back one line (`{"status":"unchanged", "hash": ...}`) instead of
-  the full content; a request for `force:true` always gets the full content again, and
-  every `unchanged` reply repeats that as a hint. Off by default: see Limits below for
-  why.
+- **Several files in one call**: `files` takes up to 32 entries, each a path or an
+  object `{file, raw, pointer, heading, line_start, line_end, force}` whose fields
+  override the same fields given at the top level; `file`, if also given, is read
+  first. Each file comes back under its own `== path` line with the rendering it would
+  get alone, a file that fails as its own error reply in its place. The reply is capped
+  at 64 KiB: a file that would push it over is left out, and a last line
+  `{"status":"partial","not_sent":[...],"fix":...}` names every such file and says to
+  read it in another call, alone or by line range. A file left out is not remembered
+  as sent.
+- **Session mirror (on by default, `emetgate mcp --no-mirror` turns it off).** The
+  server remembers, in process memory only, the content hash of every unit it has
+  already sent this session, keyed by path and selector (whole file, line range, JSON
+  key tree or pointer, Markdown heading tree or section, skeleton, symbol), together
+  with the hash of the whole file it came from and the number of the tool call that
+  sent it. A repeat request answers one line
+  (`{"status":"unchanged","hash":...,"file_hash":...,"since_call":N,"hint":...}`)
+  only when the unit and the whole file both hash the same as when it was sent, so the
+  same text would be sent again; any change to the file, through an emetgate write or
+  on disk, even outside the requested range, makes the next read send the content. A
+  different range or selector is its own key and is never answered `unchanged` from
+  another. `force:true` always sends the full content and records it again; every
+  `unchanged` reply says so in its hint. Symbol reads (`emetgate_read_symbol`) are
+  keyed by the symbol's own hash and do not carry `since_call`.
 
 Measured with `tests/bench/reader.py` (o200k_base tokens; reproduce with
 `python tests/bench/reader.py`, a built `emetgate` binary, and, for the two real-project
@@ -930,9 +946,11 @@ get wrong, which is why `force:true` exists and every `unchanged` reply advertis
 This branch does not wire an automatic reset on compaction: `src/platform/lockdown.zig`
 only launches Claude Code with a fixed argv and one environment variable today and does not
 manage `.claude/settings.json` or hooks, and a `PreCompact` hook would need to reach a
-mirror that lives in a specific running MCP process's memory. Until that lands, the
-mirror stays **off by default**; a project that opts in with `--mirror` is accepting
-that a compaction mid-session can make one `unchanged` reply stale.
+mirror that lives in a specific running MCP process's memory. The mirror is **on by
+default**, so a compaction mid-session can make one `unchanged` reply stale; the reply
+names the call that sent the content (`since_call`) so the model can tell how far back
+it was, and `--no-mirror` turns the mirror off for a project that does not accept
+that.
 
 ### Writer
 
