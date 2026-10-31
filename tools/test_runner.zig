@@ -30,10 +30,11 @@ pub const Options = struct {
     timing: ?usize = null,
     tsv: ?[]const u8 = null,
     record: ?[]const u8 = null,
+    claim: ?[]const u8 = null,
     jobs: usize = 1,
 };
 
-pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH]\n";
+pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH] [--claim=DIR]\n";
 
 pub fn parseShard(text: []const u8) error{InvalidShard}!Shard {
     const slash = std.mem.indexOfScalar(u8, text, '/') orelse return error.InvalidShard;
@@ -85,11 +86,14 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
             options.tsv = arg["--tsv=".len..];
         } else if (std.mem.startsWith(u8, arg, "--record=")) {
             options.record = arg["--record=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--claim=")) {
+            options.claim = arg["--claim=".len..];
+            if (options.claim.?.len == 0) return error.InvalidArgs;
         } else {
             return error.InvalidArgs;
         }
     }
-    if (options.jobs > 1 and (options.shard.count != 1 or options.record != null)) return error.InvalidArgs;
+    if (options.jobs > 1 and (options.shard.count != 1 or options.record != null or options.claim != null)) return error.InvalidArgs;
     options.filters = try filters.toOwnedSlice(gpa);
     options.skips = try skips.toOwnedSlice(gpa);
     return options;
@@ -207,9 +211,11 @@ fn oom() noreturn {
     @panic("oom");
 }
 
-fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, i: usize, record: []const u8, options: Options) []const []const u8 {
+fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, dir: []const u8, i: usize, record: []const u8, options: Options) []const []const u8 {
     var argv: std.ArrayList([]const u8) = .empty;
-    argv.appendSlice(gpa, &.{ exe, "--shard", std.fmt.allocPrint(gpa, "{d}/{d}", .{ i, options.jobs }) catch oom() }) catch oom();
+    argv.append(gpa, exe) catch oom();
+    argv.append(gpa, std.fmt.allocPrint(gpa, "--claim={s}", .{dir}) catch oom()) catch oom();
+    argv.append(gpa, std.fmt.allocPrint(gpa, "--tsv={s}/shard-{d}.tsv", .{ dir, i }) catch oom()) catch oom();
     argv.append(gpa, std.fmt.allocPrint(gpa, "--record={s}", .{record}) catch oom()) catch oom();
     for (options.filters) |filter| argv.appendSlice(gpa, &.{ "--filter", filter }) catch oom();
     for (options.skips) |skip| argv.appendSlice(gpa, &.{ "--skip", skip }) catch oom();
@@ -273,6 +279,14 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
     };
     defer cwd.deleteTree(io, dir_path) catch {};
 
+    var times = loadTimes(gpa, io, cwd);
+    const selection = select(gpa, names, options.filters, .{}) catch oom();
+    const order = runOrder(gpa, names, selection.indices, &times) catch oom();
+    writeQueue(io, cwd, gpa, dir_path, order) catch |err| {
+        std.debug.print("error: cannot write the test queue in {s}: {t}\n", .{ dir_path, err });
+        return 1;
+    };
+
     const ShardRun = struct { process: std.process.Child, log: []const u8, record: []const u8 };
     const shards = gpa.alloc(ShardRun, options.jobs) catch oom();
     var started: usize = 0;
@@ -286,7 +300,7 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
         };
         defer log_file.close(io);
         shard.process = std.process.spawn(io, .{
-            .argv = shardArgs(gpa, exe, i, shard.record, options),
+            .argv = shardArgs(gpa, exe, dir_path, i, shard.record, options),
             .stdin = .ignore,
             .stdout = .ignore,
             .stderr = .{ .file = log_file },
@@ -332,6 +346,11 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
         };
     }
     started = 0;
+    for (1..options.jobs + 1) |i| {
+        const tsv = std.fmt.allocPrint(gpa, "{s}/shard-{d}.tsv", .{ dir_path, i }) catch oom();
+        parseTimes(gpa, cwd.readFileAlloc(io, tsv, gpa, .limited(16 * 1024 * 1024)) catch "", &times) catch oom();
+    }
+    saveTimes(gpa, io, cwd, &times);
 
     var uncovered = true;
     const result = coverage(gpa, names, options.filters, recorded.items) catch oom();
@@ -346,6 +365,97 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
         sum.passed, sum.total, sum.skipped, sum.failed, sum.leaked, options.mutant, options.jobs,
     });
     return if (broken != 0 or uncovered or sum.failed != 0 or sum.leaked != 0) 1 else 0;
+}
+
+pub const Times = std.StringHashMapUnmanaged(u64);
+
+const times_dir = ".zig-cache/test-all";
+const times_path = times_dir ++ "/times.tsv";
+
+pub fn parseTimes(gpa: std.mem.Allocator, text: []const u8, times: *Times) !void {
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, " \r");
+        var fields = std.mem.splitScalar(u8, line, '\t');
+        const us = std.fmt.parseUnsigned(u64, fields.next() orelse continue, 10) catch continue;
+        _ = fields.next() orelse continue;
+        const name = fields.rest();
+        if (name.len == 0) continue;
+        const slot = try times.getOrPut(gpa, name);
+        if (!slot.found_existing) slot.key_ptr.* = try gpa.dupe(u8, name);
+        slot.value_ptr.* = us;
+    }
+}
+
+fn loadTimes(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir) Times {
+    var times: Times = .empty;
+    const text = cwd.readFileAlloc(io, times_path, gpa, .limited(16 * 1024 * 1024)) catch return times;
+    parseTimes(gpa, text, &times) catch oom();
+    return times;
+}
+
+fn saveTimes(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir, times: *const Times) void {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    var it = times.iterator();
+    while (it.next()) |entry| out.writer.print("{d}\tpass\t{s}\n", .{ entry.value_ptr.*, entry.key_ptr.* }) catch oom();
+    const stamp: u96 = @bitCast(Io.Timestamp.now(io, .real).nanoseconds);
+    const tmp = std.fmt.allocPrint(gpa, "{s}/times-{x}.tmp", .{ times_dir, stamp }) catch oom();
+    cwd.writeFile(io, .{ .sub_path = tmp, .data = out.written() }) catch return;
+    cwd.rename(tmp, cwd, times_path, io) catch cwd.deleteFile(io, tmp) catch {};
+}
+
+pub fn runOrder(gpa: std.mem.Allocator, names: []const []const u8, indices: []const usize, times: *const Times) ![]usize {
+    const order = try gpa.dupe(usize, indices);
+    const Ctx = struct {
+        names: []const []const u8,
+        times: *const Times,
+        fn cost(ctx: @This(), i: usize) u64 {
+            return ctx.times.get(ctx.names[i]) orelse std.math.maxInt(u64);
+        }
+        fn slower(ctx: @This(), a: usize, b: usize) bool {
+            return ctx.cost(a) > ctx.cost(b);
+        }
+    };
+    std.sort.block(usize, order, Ctx{ .names = names, .times = times }, Ctx.slower);
+    return order;
+}
+
+fn writeQueue(io: Io, cwd: Io.Dir, gpa: std.mem.Allocator, dir: []const u8, order: []const usize) !void {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    for (order) |i| try out.writer.print("{d}\n", .{i});
+    try cwd.writeFile(io, .{ .sub_path = try std.fmt.allocPrint(gpa, "{s}/queue.txt", .{dir}), .data = out.written() });
+    try cwd.createDirPath(io, try std.fmt.allocPrint(gpa, "{s}/claims", .{dir}));
+}
+
+fn queued(gpa: std.mem.Allocator, dir: []const u8, picked: []const usize) ![]const usize {
+    const text = try Io.Dir.cwd().readFileAlloc(rio, try std.fmt.allocPrint(gpa, "{s}/queue.txt", .{dir}), gpa, .limited(16 * 1024 * 1024));
+    var order: std.ArrayList(usize) = .empty;
+    try parseRecord(gpa, text, &order);
+    const wanted = try gpa.alloc(bool, builtin.test_functions.len);
+    @memset(wanted, false);
+    for (picked) |i| wanted[i] = true;
+    var kept: std.ArrayList(usize) = .empty;
+    for (order.items) |i| {
+        if (i >= wanted.len or !wanted[i]) continue;
+        wanted[i] = false;
+        try kept.append(gpa, i);
+    }
+    for (picked) |i| if (wanted[i]) try kept.append(gpa, i);
+    return kept.toOwnedSlice(gpa);
+}
+
+fn claimed(gpa: std.mem.Allocator, dir: []const u8, index: usize) bool {
+    const path = std.fmt.allocPrint(gpa, "{s}/claims/{d}", .{ dir, index }) catch oom();
+    defer gpa.free(path);
+    const file = Io.Dir.cwd().createFile(rio, path, .{ .exclusive = true }) catch |err| switch (err) {
+        error.PathAlreadyExists => return false,
+        else => {
+            std.debug.print("error: cannot claim test #{d} in {s}: {t}\n", .{ index, dir, err });
+            std.process.exit(3);
+        },
+    };
+    file.close(rio);
+    return true;
 }
 
 const Result = struct { name: []const u8, ns: u64, status: enum { pass, skip, fail } };
@@ -456,6 +566,13 @@ fn run(gpa: std.mem.Allocator, init: std.process.Init.Minimal, options: Options)
         return 0;
     }
     if (options.jobs > 1) return runSharded(gpa, init, names, options);
+    if (options.claim) |dir| {
+        const order = queued(gpa, dir, selection.indices) catch |err| {
+            std.debug.print("error: cannot read the test queue in {s}: {t}\n", .{ dir, err });
+            return 1;
+        };
+        return runTests(gpa, init, order, options);
+    }
     if (options.record) |path| writeRecord(path, selection.indices) catch |err| {
         std.debug.print("error: cannot write shard record {s}: {t}\n", .{ path, err });
         return 1;
@@ -474,13 +591,17 @@ fn writeRecord(path: []const u8, indices: []const usize) !void {
 
 fn runTests(gpa: std.mem.Allocator, init: std.process.Init.Minimal, indices: []const usize, options: Options) u8 {
     const results = gpa.alloc(Result, indices.len) catch @panic("oom");
+    var ran: std.ArrayList(usize) = .empty;
     var failed: std.ArrayList([]const u8) = .empty;
     var ok: usize = 0;
     var skip: usize = 0;
     var leaks: usize = 0;
     const t_all = Io.Timestamp.now(rio, .awake);
 
-    for (indices, 0..) |index, n| {
+    for (indices) |index| {
+        if (options.claim) |dir| if (!claimed(gpa, dir, index)) continue;
+        const n = ran.items.len;
+        ran.append(gpa, index) catch @panic("oom");
         const test_fn = builtin.test_functions[index];
         testing.allocator_instance = .{};
         testing.io_instance = .init(testing.allocator, .{
@@ -528,15 +649,21 @@ fn runTests(gpa: std.mem.Allocator, init: std.process.Init.Minimal, indices: []c
         }
     }
     const total_ns: u64 = @intCast(@max(0, t_all.durationTo(Io.Timestamp.now(rio, .awake)).nanoseconds));
+    const done = results[0..ran.items.len];
 
-    if (options.timing) |top_n| printTiming(gpa, results, top_n, total_ns);
-    if (options.tsv) |path| writeTsv(path, results) catch |e| std.debug.print("tsv write failed: {t}\n", .{e});
+    if (options.timing) |top_n| printTiming(gpa, done, top_n, total_ns);
+    if (options.tsv) |path| writeTsv(path, done) catch |e| std.debug.print("tsv write failed: {t}\n", .{e});
+    var record_failed = false;
+    if (options.claim != null) if (options.record) |path| writeRecord(path, ran.items) catch |err| {
+        std.debug.print("error: cannot write shard record {s}: {t}\n", .{ path, err });
+        record_failed = true;
+    };
 
     for (failed.items) |name| std.debug.print("error: '{s}' failed\n", .{name});
     std.debug.print("{d}/{d} tests passed; {d} skipped; {d} failed; {d} leaked; mutant {d}; shard {d}/{d}\n", .{
-        ok, indices.len, skip, failed.items.len, leaks, options.mutant, options.shard.index, options.shard.count,
+        ok, ran.items.len, skip, failed.items.len, leaks, options.mutant, options.shard.index, options.shard.count,
     });
-    return if (failed.items.len != 0) 1 else 0;
+    return if (failed.items.len != 0 or record_failed) 1 else 0;
 }
 
 fn printTiming(gpa: std.mem.Allocator, results: []const Result, top_n: usize, total_ns: u64) void {

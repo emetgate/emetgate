@@ -340,28 +340,84 @@ fn exercise(tool: []const u8, seed: u64, tally: *Tally) !void {
 
 const seeds_per_tool = 6;
 
-test "write invariant: after any accepted write through a served write tool a scan finds no violation it did not find before" {
+const exercised_tools = [_][]const u8{
+    "emetgate_try",
+    "emetgate_try_batch",
+    "emetgate_edit",
+    "emetgate_write",
+    "emetgate_write_doc",
+    "emetgate_rename",
+    "emetgate_move",
+    "emetgate_move_file",
+    "emetgate_run",
+    "emetgate_git_write",
+};
+
+fn exerciseTool(tool: []const u8) !void {
     try skipOffWindows();
+    var tally: Tally = .{};
+    var seed: u64 = 1;
+    while (seed <= seeds_per_tool) : (seed += 1) try exercise(tool, seed * 7919 + tool.len, &tally);
+    errdefer std.debug.print("write invariant: tool {s} accepted {d} refused {d} other {d}\n", .{ tool, tally.accepted, tally.refused_by_rule, tally.other });
+    try testing.expect(tally.accepted != 0);
+    const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc") and !std.mem.eql(u8, tool, "emetgate_git_write");
+    if (writes_source) try testing.expect(tally.refused_by_rule != 0);
+}
+
+test "write invariant: every served write tool but emetgate_commit is exercised by its own test below" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var write_tools: usize = 0;
+    var served_writers: usize = 0;
     for (try servedTools(arena)) |tool| {
-        if (readOnly(tool)) continue;
-        // emetgate_commit writes no source of its own: it commits the content
-        // earlier gated writes already landed, so this per-call write invariant
-        // does not apply to it (it is exercised in tests/commit_group.zig).
-        if (std.mem.eql(u8, tool, "emetgate_commit")) continue;
-        write_tools += 1;
-        var tally: Tally = .{};
-        var seed: u64 = 1;
-        while (seed <= seeds_per_tool) : (seed += 1) try exercise(tool, seed * 7919 + tool.len, &tally);
-        errdefer std.debug.print("write invariant: tool {s} accepted {d} refused {d} other {d}\n", .{ tool, tally.accepted, tally.refused_by_rule, tally.other });
-        try testing.expect(tally.accepted != 0);
-        const writes_source = !std.mem.eql(u8, tool, "emetgate_run") and !std.mem.eql(u8, tool, "emetgate_write_doc") and !std.mem.eql(u8, tool, "emetgate_git_write");
-        if (writes_source) try testing.expect(tally.refused_by_rule != 0);
+        if (readOnly(tool) or std.mem.eql(u8, tool, "emetgate_commit")) continue;
+        served_writers += 1;
+        errdefer std.debug.print("served write tool {s} has no write invariant test\n", .{tool});
+        var listed = false;
+        for (exercised_tools) |name| listed = listed or std.mem.eql(u8, name, tool);
+        try testing.expect(listed);
     }
-    try testing.expect(write_tools >= 7);
+    try testing.expectEqual(exercised_tools.len, served_writers);
+}
+
+test "write invariant: after any accepted emetgate_try a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_try");
+}
+
+test "write invariant: after any accepted emetgate_try_batch a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_try_batch");
+}
+
+test "write invariant: after any accepted emetgate_edit a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_edit");
+}
+
+test "write invariant: after any accepted emetgate_write a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_write");
+}
+
+test "write invariant: after any accepted emetgate_write_doc a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_write_doc");
+}
+
+test "write invariant: after any accepted emetgate_rename a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_rename");
+}
+
+test "write invariant: after any accepted emetgate_move a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_move");
+}
+
+test "write invariant: after any accepted emetgate_move_file a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_move_file");
+}
+
+test "write invariant: after any accepted emetgate_run a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_run");
+}
+
+test "write invariant: after any accepted emetgate_git_write a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_git_write");
 }
 
 test "write invariant: the served list holds a write tool that the tool table does not, and no read-only tool is exercised as a writer" {

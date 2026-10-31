@@ -73,7 +73,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - run: zig build test -Doptimize=${{ matrix.optimize }} --summary all
+      - name: Restore the build cache and test times main last saved
+        if: github.event_name != 'push'
+        uses: actions/cache/restore@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
+          restore-keys: zig-cache-${{ matrix.optimize }}-
+      - run: zig build test -Doptimize=${{ matrix.optimize }} -Dtest-jobs=8 --summary all
+      - name: Save the build cache and test times of main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: .zig-cache
+          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug'
         shell: bash
