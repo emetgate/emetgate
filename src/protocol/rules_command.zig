@@ -17,16 +17,18 @@ const Allocator = std.mem.Allocator;
 
 pub fn run(gpa: Allocator, io: std.Io, root_abs: []const u8, out: *Writer, err_out: *Writer) !void {
     var ed = rules_tui.Editor.init();
+    var marks: rule_catalog.Marks = .{};
     {
         const recalled = try memory.recall(gpa, io, root_abs);
         defer recalled.deinit();
         rules_tui.precheck(&ed.state, recalled.decisions);
+        marks = .of(recalled.decisions);
         ed.seed(); // copy seeded paths into the editor's own buffers before the arena dies
     }
 
     const handles = console_raw.Handles.get();
     if (!console_raw.isTty(handles)) {
-        try rule_catalog.render(out);
+        try rule_catalog.render(out, "/rule ", marks);
         try out.writeAll(
             \\
             \\not a terminal: run `emetgate rules` in an interactive terminal to toggle
