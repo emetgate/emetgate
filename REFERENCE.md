@@ -1774,7 +1774,9 @@ tools/accept.ps1 <ref>      # the tests three times, then the mutations on lines
 every file under `tests/`. Its runner, `tools/test_runner.zig`, chooses the tests at run time
 (`--filter`, `--skip`, `--shard`, `--jobs`, `--slow`, `--mutant`), so `-Dtest-filter` does not
 recompile anything, and a filter that matches no test fails the run. With `--jobs` the binary
-starts itself as shards and fails unless together they ran every selected test exactly once.
+starts itself as shards that take the tests from one queue, slowest first by the times of the
+last run kept in `.zig-cache/test-all/times.tsv`, and fails unless together they ran every
+selected test exactly once.
 `tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
 `test_root.zig`. On the development machine (Windows, Debug) the binary compiles in about 10 s
 with 0.7 GB of memory; the run takes about 20 s, and 40 s with the slow tests. The nine binaries

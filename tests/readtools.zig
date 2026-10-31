@@ -752,23 +752,46 @@ test "list returns only tracked files under the requested directory" {
 }
 
 test "search finds a literal in tracked files under a directory and refuses an empty pattern" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const line = "export function afterUnicode(): string { return \"\"; }\n";
+    try tmp.dir.createDirPath(testing.io, "repo/tests/fixtures/deep");
+    try tmp.dir.createDirPath(testing.io, "repo/tests/fixtures2");
+    try tmp.dir.createDirPath(testing.io, "repo/src");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tests/fixtures/functions.ts", .data = line });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tests/fixtures/deep/more.ts", .data = line });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tests/fixtures2/near.ts", .data = line });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/outside.ts", .data = line });
+    const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
+    defer testing.allocator.free(root_abs);
+    try commitAll(root_abs);
+
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    var reply = try callTool(runtime, "emetgate_search", .{ .pattern = "export function afterUnicode", .dir = "tests/fixtures" });
+    const dir = try std.fmt.allocPrint(testing.allocator, "{s}/tests/fixtures", .{root_abs});
+    defer testing.allocator.free(dir);
+    var reply = try callToolServed(runtime, root_abs, "emetgate_search", .{ .pattern = "export function afterUnicode", .dir = dir });
     defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
     const groups = body.value.object.get("groups").?.array.items;
-    try testing.expect(groups.len >= 1);
-    var found = false;
+    var found = [_]bool{ false, false };
     for (groups) |g| {
-        try testing.expect(std.mem.startsWith(u8, g.object.get("file").?.string, "tests/fixtures/"));
-        if (std.mem.eql(u8, g.object.get("file").?.string, "tests/fixtures/functions.ts")) found = true;
+        const file = g.object.get("file").?.string;
+        try testing.expect(std.mem.startsWith(u8, file, "tests/fixtures/"));
+        if (std.mem.eql(u8, file, "tests/fixtures/functions.ts")) found[0] = true;
+        if (std.mem.eql(u8, file, "tests/fixtures/deep/more.ts")) found[1] = true;
     }
-    try testing.expect(found);
+    try testing.expectEqualSlices(bool, &.{ true, true }, &found);
 
-    try expectToolError(runtime, "emetgate_search", .{ .pattern = "" }, "EmptyPattern");
+    var empty = try callToolServed(runtime, root_abs, "emetgate_search", .{ .pattern = "" });
+    defer empty.deinit();
+    try testing.expect(empty.is_error);
+    var refusal = try empty.payload();
+    defer refusal.deinit();
+    try testing.expectEqualStrings("EmptyPattern", refusal.value.object.get("error").?.string);
 }
 
 test "a read is cut on a UTF-8 boundary, never inside a character" {

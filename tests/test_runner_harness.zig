@@ -63,6 +63,18 @@ test "runner: shard coverage names a test no shard ran, one two shards ran and a
     try testing.expectEqual(runner.Coverage{}, try runner.coverage(testing.allocator, &sample, &.{"c.test."}, &.{ 4, 5, 6 }));
 }
 
+test "runner: the queue puts the slowest known test first, an unknown one before every known one, and keeps ties in order" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var times: runner.Times = .empty;
+    try runner.parseTimes(arena, "5\tpass\ta.test.one\n900\tpass\tb.test.three\n5\tskip\ta.test.two\nbad line\n\n70\tfail\tc.test.six\n", &times);
+    try runner.parseTimes(arena, "40\tpass\tc.test.five\r\n1000\tpass\tc.test.six\n", &times);
+    try testing.expectEqual(@as(?u64, 1000), times.get("c.test.six"));
+    const order = try runner.runOrder(arena, &sample, &.{ 0, 1, 2, 3, 4, 5, 6 }, &times);
+    try testing.expectEqualSlices(usize, &.{ 3, 6, 5, 2, 4, 0, 1 }, order);
+}
+
 test "runner: arguments parse into filters, a shard, a mutant and the slow switch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -75,7 +87,7 @@ test "runner: arguments parse into filters, a shard, a mutant and the slow switc
     try testing.expectEqual(@as(u32, 17), options.mutant);
     try testing.expect(options.slow);
     try testing.expectEqualStrings("x.txt", options.record.?);
-    for ([_][]const []const u8{ &.{"--filter"}, &.{ "--filter", "" }, &.{ "--shard", "0/2" }, &.{ "--mutant", "x" }, &.{"--nope"}, &.{"loose"}, &.{ "--jobs", "0" }, &.{ "--jobs", "2", "--shard", "1/2" }, &.{ "--jobs", "2", "--record=x" } }) |bad| {
+    for ([_][]const []const u8{ &.{"--filter"}, &.{ "--filter", "" }, &.{ "--shard", "0/2" }, &.{ "--mutant", "x" }, &.{"--nope"}, &.{"loose"}, &.{ "--jobs", "0" }, &.{ "--jobs", "2", "--shard", "1/2" }, &.{ "--jobs", "2", "--record=x" }, &.{ "--jobs", "2", "--claim=x" }, &.{"--claim="} }) |bad| {
         try testing.expectError(error.InvalidArgs, runner.parseArgs(arena, bad));
     }
 }

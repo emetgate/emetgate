@@ -11513,7 +11513,10 @@
         "every write: a file move into the scope of a rule it breaks is refused",
         "every write: a file move whose rewritten import is a forbidden text is refused",
         "other modules: a rename that puts a forbidden name into another module is refused",
-        "write invariant: after any accepted write through a served write tool a scan finds no violation it did not find before"
+        "write invariant: after any accepted emetgate_try a scan finds no violation it did not find before",
+        "write invariant: after any accepted emetgate_edit a scan finds no violation it did not find before",
+        "write invariant: after any accepted emetgate_write a scan finds no violation it did not find before",
+        "write invariant: after any accepted emetgate_move_file a scan finds no violation it did not find before"
       ],
       "note": "the hole of v0.5.2 to v0.6.0: rename, move and file move rewrite files with no symbol ref"
     },
