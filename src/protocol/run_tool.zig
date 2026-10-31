@@ -13,6 +13,7 @@ const sandbox = @import("../platform/sandbox.zig");
 const toolchain = @import("../platform/toolchain.zig");
 const output_digest = @import("output_digest.zig");
 const receipt_note = @import("receipt_note.zig");
+const open_run = @import("open_run.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -58,6 +59,13 @@ pub fn callRun(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event
     event.label = "run";
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
+    if (policy.open_run) {
+        const failed = open_run.render(gpa, io, args, &policy, &buffer.writer, event) catch |err| {
+            if (err == error.OutOfMemory) return err;
+            return tool_result.failure(gpa, &buffer, err, event);
+        };
+        return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = failed };
+    }
     const requested: ?[]const u8 = if (args) |a| switch (tool_result.getField(a, "command") orelse Value{ .null = {} }) {
         .null => null,
         .string => |text| text,
@@ -82,6 +90,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         try writeAllowlist(w, allowed, if (policy.detect_test) undetected_fix else empty_allowlist_fix);
         return false;
     };
+    event.command = command;
     if (output_digest.logRequest(command)) |id| return output_digest.writeLog(gpa, io, root_abs, id, w);
     var project: ?[]u8 = null;
     defer if (project) |local| gpa.free(local);
@@ -115,6 +124,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
         else => |e| return e,
     };
     defer report.deinit(gpa);
+    recordExit(event, report);
     try writeRan(gpa, io, root_abs, w, command, report, used, "shadow");
     return false;
 }
@@ -129,6 +139,7 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         else => |e| return e,
     };
     defer ran.report.deinit(gpa);
+    recordExit(event, ran.report);
     try writeRan(gpa, io, root_abs, w, command, ran.report, null, "repo");
     if (ran.changed != 0) {
         const field = if (ran.receipt) |id|
@@ -143,6 +154,13 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         try receipt_note.insert(gpa, w, field);
     }
     return false;
+}
+
+fn recordExit(event: *telemetry.Event, report: sandbox.Report) void {
+    switch (report.outcome) {
+        .exited => |code| event.exit_code = code,
+        else => {},
+    }
 }
 
 pub const empty_allowlist_fix = "no test command is configured (emetgate mcp --test or --detect-test adds one); toolchain commands run without an entry: " ++ toolchain.families_hint;

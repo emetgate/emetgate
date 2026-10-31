@@ -1,6 +1,10 @@
 const std = @import("std");
 const lockdown = @import("emetgate").lockdown;
 const server = @import("emetgate").server;
+const lockdown_slash = @import("emetgate").lockdown_slash;
+const pretool_hook = @import("emetgate").pretool_hook;
+const exe_path = @import("emetgate").exe_path;
+const doctor = @import("emetgate").doctor;
 
 const testing = std.testing;
 
@@ -189,7 +193,7 @@ test "lockdown gives a project emetgate server without a test flag --detect-test
     ;
     const marked = (try lockdown.alwaysLoadConfig(gpa, bare)).?;
     defer gpa.free(marked);
-    try testing.expect(std.mem.indexOf(u8, marked, "[\"mcp\",\"--detect-test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, marked, "[\"mcp\",\"--detect-test\",\"--open-run\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     const tested = (try lockdown.alwaysLoadConfig(gpa, emetgate_config)).?;
     defer gpa.free(tested);
     try testing.expect(std.mem.indexOf(u8, tested, "--detect-test") == null);
@@ -208,7 +212,6 @@ const gated_tools = [_][]const u8{
     "emetgate_rename",
     "emetgate_move",
     "emetgate_move_file",
-    "emetgate_run",
     "emetgate_commit",
     "emetgate_git_write",
 };
@@ -220,8 +223,9 @@ fn listed(list: []const []const u8, name: []const u8) bool {
     return false;
 }
 
-test "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command" {
+test "lockdown pre-allows emetgate tools that neither write to the repo nor run a command, and the run tool its hook judges" {
     for (lockdown.read_only_tools) |tool| try testing.expect(!listed(&gated_tools, tool));
+    for (lockdown.hook_judged_tools) |tool| try testing.expect(!listed(&gated_tools, tool) and !listed(&lockdown.read_only_tools, tool));
     const value = try lockdown.allowedTools(testing.allocator, "emetgate");
     defer testing.allocator.free(value);
     const prefix = "mcp__emetgate__";
@@ -230,14 +234,17 @@ test "lockdown pre-allows only emetgate tools that neither write to the repo nor
     while (names.next()) |name| : (count += 1) {
         try testing.expect(std.mem.startsWith(u8, name, prefix));
         try testing.expect(!listed(&gated_tools, name[prefix.len..]));
-        try testing.expect(listed(&lockdown.read_only_tools, name[prefix.len..]));
+        try testing.expect(listed(&lockdown.read_only_tools, name[prefix.len..]) or listed(&lockdown.hook_judged_tools, name[prefix.len..]));
     }
-    try testing.expectEqual(lockdown.read_only_tools.len, count);
+    try testing.expectEqual(lockdown.read_only_tools.len + lockdown.hook_judged_tools.len, count);
 }
 
 test "every emetgate tool is either pre-allowed by lockdown or left to the permission mode" {
-    for (server.tool_defs) |tool| try testing.expect(listed(&lockdown.read_only_tools, tool.name) != listed(&gated_tools, tool.name));
-    for (lockdown.read_only_tools) |name| {
+    for (server.tool_defs) |tool| {
+        const kinds = @as(u8, @intFromBool(listed(&lockdown.read_only_tools, tool.name))) + @intFromBool(listed(&lockdown.hook_judged_tools, tool.name)) + @intFromBool(listed(&gated_tools, tool.name));
+        try testing.expectEqual(@as(u8, 1), kinds);
+    }
+    for (lockdown.read_only_tools ++ lockdown.hook_judged_tools) |name| {
         var served = false;
         for (server.tool_defs) |tool| served = served or std.mem.eql(u8, tool.name, name);
         try testing.expect(served);
@@ -245,7 +252,7 @@ test "every emetgate tool is either pre-allowed by lockdown or left to the permi
 }
 
 const loaded_config =
-    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--test","npm test","--tool-prefix","mcp__gate__"],"alwaysLoad":true}}}
+    \\{"mcpServers":{"gate":{"command":"C:/tools/emetgate.exe","args":["mcp","--test","npm test","--open-run","--tool-prefix","mcp__gate__"],"alwaysLoad":true}}}
 ;
 
 const emetgate_config =
@@ -259,7 +266,7 @@ test "the allow-list names the emetgate server by its .mcp.json key" {
     const value = try lockdown.allowedTools(testing.allocator, name);
     defer testing.allocator.free(value);
     try testing.expect(std.mem.startsWith(u8, value, "mcp__gate__emetgate_explore mcp__gate__emetgate_evidence mcp__gate__emetgate_symbols mcp__gate__emetgate_skeleton "));
-    try testing.expect(std.mem.endsWith(u8, value, " mcp__gate__emetgate_mutate"));
+    try testing.expect(std.mem.endsWith(u8, value, " mcp__gate__emetgate_mutate mcp__gate__emetgate_run"));
 }
 
 test "a server key becomes the tool name prefix claude derives from it" {
@@ -376,10 +383,10 @@ test "lockdown's own config hands the server --test with a given command and --d
     const gpa = testing.allocator;
     const given = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", "npm test");
     defer gpa.free(given);
-    try testing.expect(std.mem.indexOf(u8, given, "\"args\":[\"mcp\",\"--test\",\"npm test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, given, "\"args\":[\"mcp\",\"--test\",\"npm test\",\"--open-run\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     const detect = try lockdown.ownMcpConfigJson(gpa, "C:\\e.exe", null);
     defer gpa.free(detect);
-    try testing.expect(std.mem.indexOf(u8, detect, "\"args\":[\"mcp\",\"--detect-test\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
+    try testing.expect(std.mem.indexOf(u8, detect, "\"args\":[\"mcp\",\"--detect-test\",\"--open-run\",\"--tool-prefix\",\"mcp__emetgate__\"]") != null);
     try testing.expect(server.parsePolicy(&[_][]const u8{lockdown.detect_flag}).?.detect_test);
 }
 
@@ -446,7 +453,8 @@ test "lockdown tells its own server the prefix Claude Code puts before every all
     var tools = std.mem.tokenizeScalar(u8, allowed_tools, ' ');
     var count: usize = 0;
     while (tools.next()) |tool| : (count += 1) try testing.expect(std.mem.startsWith(u8, tool, policy.tool_prefix));
-    try testing.expectEqual(lockdown.read_only_tools.len, count);
+    try testing.expectEqual(lockdown.read_only_tools.len + lockdown.hook_judged_tools.len, count);
+    try testing.expect(policy.open_run);
     try testing.expectEqualStrings("mcp__emetgate__", policy.tool_prefix);
 }
 
@@ -476,4 +484,146 @@ test "the server takes one valid --tool-prefix and refuses a second or one a too
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--tool-prefix", "mcp gate" }) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--tool-prefix", "" }) == null);
     try testing.expect(server.parsePolicy(&[_][]const u8{"--tool-prefix"}) == null);
+}
+
+test "lockdown turns open run on for its own server and every project emetgate server, and plain mcp keeps the allowlist" {
+    const gpa = testing.allocator;
+    try testing.expectEqualStrings(server.open_run_flag, lockdown.open_run_flag);
+    try testing.expect(!server.parsePolicy(&[_][]const u8{}).?.open_run);
+    try testing.expect(server.parsePolicy(&[_][]const u8{lockdown.open_run_flag}).?.open_run);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ lockdown.open_run_flag, lockdown.open_run_flag }) == null);
+    const marked = (try lockdown.alwaysLoadConfig(gpa, emetgate_config)).?;
+    defer gpa.free(marked);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, marked, .{});
+    defer parsed.deinit();
+    const servers = parsed.value.object.get("mcpServers").?.object;
+    try testing.expect((try policyOf(gpa, servers.get("gate").?)).open_run);
+    try testing.expectEqual(@as(usize, 1), servers.get("docs").?.object.get("args").?.array.items.len);
+}
+
+test "the hook pattern lockdown writes matches the run tool under any server name and no other tool" {
+    const matcher = lockdown_slash.pretool_matcher;
+    try testing.expect(std.mem.startsWith(u8, matcher, "^mcp__"));
+    try testing.expect(std.mem.endsWith(u8, matcher, "__" ++ lockdown.hook_judged_tools[0] ++ "$"));
+    for (lockdown.hook_judged_tools) |tool| try testing.expect(pretool_hook.isRunTool(tool));
+}
+
+fn outsideRepo(gpa: std.mem.Allocator, tmp: *testing.TmpDir) !std.process.Environ.Map {
+    var parent = try testing.environ.createMap(gpa);
+    errdefer parent.deinit();
+    const top = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(top);
+    for (lockdown.guarded_variables) |name| _ = parent.swapRemove(name);
+    try parent.put("GIT_CEILING_DIRECTORIES", top);
+    try parent.put("LOCALAPPDATA", top);
+    return parent;
+}
+
+test "lockdown resolves claude before it changes the disk, so a missing claude leaves no git init behind" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "work");
+    var work = try tmp.dir.openDir(testing.io, "work", .{ .iterate = true });
+    defer work.close(testing.io);
+    var parent = try outsideRepo(gpa, &tmp);
+    defer parent.deinit();
+    const missing = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(missing);
+    const program = try std.fmt.allocPrint(gpa, "{s}\\no-such-claude.exe", .{missing});
+    defer gpa.free(program);
+    try testing.expectError(error.ClaudeNotFound, lockdown.launchIn(gpa, testing.io, work, &parent, program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "work/.git", .{}));
+    var it = work.iterate();
+    try testing.expect(try it.next(testing.io) == null);
+}
+
+test "lockdown refuses git init in a drive root, the home folder or a folder holding it, and leaves a project folder below home alone" {
+    const gpa = testing.allocator;
+    var env: std.process.Environ.Map = .init(gpa);
+    defer env.deinit();
+    try env.put("USERPROFILE", "C:\\Users\\someone");
+    try env.put("ProgramFiles", "C:/Program Files");
+    try testing.expectEqual(lockdown.InitRefusal.drive_root, lockdown.placeRefusal("C:\\", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.drive_root, lockdown.placeRefusal("d:", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.drive_root, lockdown.placeRefusal("\\\\server\\share\\", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.drive_root, lockdown.placeRefusal("\\\\?\\C:\\", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.holds_home, lockdown.placeRefusal("C:\\Users\\someone", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.holds_home, lockdown.placeRefusal("c:\\users\\SOMEONE\\", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.holds_home, lockdown.placeRefusal("C:\\Users", &env).?);
+    try testing.expectEqual(lockdown.InitRefusal.holds_home, lockdown.placeRefusal("C:\\Program Files", &env).?);
+    try testing.expect(lockdown.placeRefusal("C:\\Users\\someone\\code\\app", &env) == null);
+    try testing.expect(lockdown.placeRefusal("C:\\Users\\someone2", &env) == null);
+    try testing.expect(lockdown.placeRefusal("D:\\work\\app", &env) == null);
+}
+
+test "lockdown refuses git init in a folder that holds other repositories or user profiles, and stops there before any change" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "projects/one/.git");
+    try tmp.dir.createDirPath(testing.io, "deeper/group/two/.git");
+    try tmp.dir.createDirPath(testing.io, "profiles/someone");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "profiles/someone/NTUSER.DAT", .data = "" });
+    try tmp.dir.createDirPath(testing.io, "plain/src/lib");
+    const cases = [_]struct { sub: []const u8, want: ?lockdown.InitRefusal }{
+        .{ .sub = "projects", .want = .holds_repositories },
+        .{ .sub = "deeper", .want = .holds_repositories },
+        .{ .sub = "profiles", .want = .holds_profiles },
+        .{ .sub = "profiles/someone", .want = .holds_profiles },
+        .{ .sub = "plain", .want = null },
+    };
+    for (cases) |case| {
+        var dir = try tmp.dir.openDir(testing.io, case.sub, .{ .iterate = true });
+        defer dir.close(testing.io);
+        try testing.expectEqual(case.want, lockdown.scanRefusal(testing.io, dir));
+    }
+    var parent = try outsideRepo(gpa, &tmp);
+    defer parent.deinit();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "claude-probe.cmd", .data = "@exit /b 9\r\n" });
+    const program = try tmp.dir.realPathFileAlloc(testing.io, "claude-probe.cmd", gpa);
+    defer gpa.free(program);
+    var projects = try tmp.dir.openDir(testing.io, "projects", .{ .iterate = true });
+    defer projects.close(testing.io);
+    try testing.expectError(error.LockdownInitRefused, lockdown.launchIn(gpa, testing.io, projects, &parent, program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "projects/.git", .{}));
+    const home = try tmp.dir.realPathFileAlloc(testing.io, "plain", gpa);
+    defer gpa.free(home);
+    try parent.put("USERPROFILE", home);
+    var plain = try tmp.dir.openDir(testing.io, "plain", .{ .iterate = true });
+    defer plain.close(testing.io);
+    try testing.expectError(error.LockdownInitRefused, lockdown.launchIn(gpa, testing.io, plain, &parent, program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "plain/.git", .{}));
+    _ = parent.swapRemove("USERPROFILE");
+    try testing.expectEqual(@as(u8, 9), try lockdown.launchIn(gpa, testing.io, plain, &parent, program, "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try tmp.dir.access(testing.io, "plain/.git/HEAD", .{});
+    try testing.expect(doctor.hint(error.LockdownInitRefused) != null);
+}
+
+test "a claude on PATH only inside the working folder stays skipped, and the error names that skip" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "home/AppData/Roaming/npm");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "home/AppData/Roaming/npm/claude.cmd", .data = "@exit /b 0\r\n" });
+    const home = try tmp.dir.realPathFileAlloc(testing.io, "home", gpa);
+    defer gpa.free(home);
+    const npm = try tmp.dir.realPathFileAlloc(testing.io, "home/AppData/Roaming/npm", gpa);
+    defer gpa.free(npm);
+    const search: exe_path.Search = .{ .path = npm, .pathext = ".COM;.EXE;.BAT;.CMD", .cwd = home };
+    try testing.expectError(error.ExecutableNotFound, exe_path.resolveIn(gpa, "claude", search));
+    const planted = (try exe_path.skippedIn(gpa, "claude", search)).?;
+    defer gpa.free(planted);
+    try testing.expect(std.ascii.endsWithIgnoreCase(planted, "npm\\claude.cmd"));
+    const elsewhere = try exe_path.resolveIn(gpa, "claude", .{ .path = npm, .pathext = ".COM;.EXE;.BAT;.CMD" });
+    defer gpa.free(elsewhere);
+    try testing.expectEqualStrings(planted, elsewhere);
+    try testing.expect(try exe_path.skippedIn(gpa, "claude", .{ .path = npm, .pathext = ".CMD" }) == null);
+    try testing.expect(try exe_path.skippedIn(gpa, "C:\\x\\claude.exe", search) == null);
+    const hint = doctor.hint(error.ClaudeOnlyUnderWorkingDir).?;
+    try testing.expect(std.mem.indexOf(u8, hint, "inside the current folder") != null);
+    try testing.expect(doctor.hint(error.ClaudeNotFound) != null);
 }

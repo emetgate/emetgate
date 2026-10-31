@@ -5921,8 +5921,8 @@
     {
       "id": "RUN4-output-cap-removed",
       "file": "src/protocol/output_digest.zig",
-      "from": "    const cut = run_command.tail(bytes, max_log_lines, max_log_bytes);\n",
-      "to": "    const cut = run_command.tail(bytes, std.math.maxInt(usize), std.math.maxInt(usize));\n",
+      "from": "    return writeLogLimited(gpa, io, root_abs, id, w, max_log_lines, max_log_bytes);",
+      "to": "    return writeLogLimited(gpa, io, root_abs, id, w, std.math.maxInt(usize), std.math.maxInt(usize));",
       "kills": [
         "redteam run: a flood of output comes back as a capped digest whose full log a log call returns"
       ]
@@ -7805,8 +7805,8 @@
     {
       "id": "EP5-working-directory-entry-searched",
       "file": "src/platform/exe_path.zig",
-      "from": "        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final)) continue;",
-      "to": "        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final) and dir.len == 0) continue;",
+      "from": "        if (search.cwd) |cwd| planted = planted or inside(dir, dir_final, cwd, cwd_final);",
+      "to": "        if (search.cwd) |cwd| planted = planted or (inside(dir, dir_final, cwd, cwd_final) and dir.len == 0);",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
       ]
@@ -7814,8 +7814,8 @@
     {
       "id": "EP6-repository-entry-searched",
       "file": "src/platform/exe_path.zig",
-      "from": "        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final)) continue;",
-      "to": "        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final) and dir.len == 0) continue;",
+      "from": "        if (search.repo_root) |root| planted = planted or inside(dir, dir_final, root, root_final);",
+      "to": "        if (search.repo_root) |root| planted = planted or (inside(dir, dir_final, root, root_final) and dir.len == 0);",
       "kills": [
         "exe path: only fully qualified PATH entries outside the working directory and the repository are searched, in PATHEXT order"
       ]
@@ -8710,8 +8710,8 @@
     {
       "id": "SL13-lockdown-hook-loses-its-arguments",
       "file": "src/platform/lockdown_slash.zig",
-      "from": "    try js.write(hook_args);",
-      "to": "    try js.write(hook_args[0..1]);",
+      "from": "    try js.write(args);",
+      "to": "    try js.write(args[0..1]);",
       "kills": [
         "lockdown slash: the hook is a command in exec form that names this executable"
       ]
@@ -17034,6 +17034,15 @@
       "to": "        if (namesFlag(args.items, tool_prefix_flag)) {\n",
       "kills": [
         "lockdown gives each project emetgate server the prefix of its own name and keeps a prefix the project set"
+      ]
+    },
+    {
+      "id": "IO1-stdin-read-positionally",
+      "file": "src/platform/stdio.zig",
+      "from": "    return .initStreaming(file, io, buffer);\n",
+      "to": "    return .init(file, io, buffer);\n",
+      "kills": [
+        "a pipe reader waits for a writer that sends its bytes late instead of reading an empty pipe as the end"
       ]
     }
   ]

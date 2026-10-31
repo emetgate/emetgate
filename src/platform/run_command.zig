@@ -4,6 +4,7 @@ const shadow = @import("shadow.zig");
 const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
+const open_shell = @import("open_shell.zig");
 const test_command = @import("test_command.zig");
 const toolchain = @import("toolchain.zig");
 const receipts = @import("receipts.zig");
@@ -343,24 +344,41 @@ pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []co
     if (!isToolchainIn(io, root_abs, command)) return error.RunCommandRefused;
     const local = try localCommand(gpa, command);
     defer gpa.free(local);
+    return recorded(gpa, io, root_abs, command, limits, version, .{ .toolchain = local });
+}
+
+pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8) !RepoRun {
+    return recorded(gpa, io, root_abs, command, limits, version, .{ .open = .{ .shell = shell, .command = command } });
+}
+
+const Spawn = union(enum) {
+    toolchain: []const u8,
+    open: struct { shell: open_shell.Shell, command: []const u8 },
+};
+
+fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8, spawn: Spawn) !RepoRun {
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const before = try snapshot(arena, gpa, io, root_abs);
-    var ran: RepoRun = .{ .report = try runner.runToolchain(gpa, io, root_abs, local, limits) };
+    const started_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+    var ran: RepoRun = .{ .report = switch (spawn) {
+        .toolchain => |local| try runner.runToolchain(gpa, io, root_abs, local, limits),
+        .open => |open| try open_shell.run(gpa, io, root_abs, open.shell, open.command, limits),
+    } };
     const clean = switch (ran.report.outcome) {
         .exited => |code| code == 0,
         else => false,
     };
-    if (!clean) return ran;
-    const changes = changedSince(arena, gpa, io, root_abs, &before) catch |err| {
+    if (!clean and spawn == .toolchain) return ran;
+    const changes = changedSince(arena, gpa, io, root_abs, &before, started_ns) catch |err| {
         ran.receipt_error = err;
         return ran;
     };
     ran.changed = changes.len;
-    if (changes.len == 0) return ran;
+    if (changes.len == 0 or !clean) return ran;
     const written = receipts.write(gpa, io, root_abs, .{
         .operation = .run,
         .class = .spending,
@@ -392,15 +410,26 @@ fn snapshot(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8) 
     return seen;
 }
 
-fn changedSince(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, before: *const Seen) ![]receipts.FileChange {
+pub const mtime_slack_ns: i96 = 2 * std.time.ns_per_s;
+
+pub fn untouchedSince(mtime_ns: i96, started_ns: i96) bool {
+    return mtime_ns < started_ns - mtime_slack_ns;
+}
+
+fn changedSince(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, before: *const Seen, started_ns: i96) ![]receipts.FileChange {
     var changes: std.ArrayList(receipts.FileChange) = .empty;
     var present: std.StringHashMapUnmanaged(void) = .empty;
     for (try shadow.workingFiles(arena, io, root_abs)) |rel| {
         try present.put(arena, rel, {});
-        const now = hashAt(gpa, io, root_abs, rel) orelse continue;
+        const abs = try absOf(arena, root_abs, rel);
         const was = before.get(rel);
+        if (was == null) {
+            const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch continue;
+            if (untouchedSince(stat.mtime.nanoseconds, started_ns)) continue;
+        }
+        const now = hashAt(gpa, io, root_abs, rel) orelse continue;
         if (was) |hash| if (std.mem.eql(u8, &hash, &now)) continue;
-        try changes.append(arena, .{ .rel = rel, .before = was, .after_abs = try absOf(arena, root_abs, rel) });
+        try changes.append(arena, .{ .rel = rel, .before = was, .after_abs = abs });
     }
     for (before.keys(), before.values()) |rel, hash| {
         if (present.contains(rel)) continue;

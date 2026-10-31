@@ -9,6 +9,7 @@ const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
 const wire = @import("wire.zig");
 const run_tool = @import("run_tool.zig");
+const open_run = @import("open_run.zig");
 const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
@@ -34,6 +35,7 @@ const getString = tool_result.getString;
 
 pub const Policy = policy_mod.Policy;
 pub const parsePolicy = policy_mod.parsePolicy;
+pub const open_run_flag = policy_mod.open_run_flag;
 pub const parseTree = policy_mod.parseTree;
 pub const refusedRunEntry = policy_mod.refusedRunEntry;
 pub const RunRefusal = policy_mod.RunRefusal;
@@ -47,6 +49,20 @@ pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = f
 pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
 const budget_text = std.fmt.comptimePrint("{d}", .{read_budget.default_budget});
+
+pub const open_run_def: Tool = .{
+    .name = "emetgate_run",
+    .description = open_run.description,
+    .props = &.{
+        .{ .name = "command", .desc = open_run.command_desc },
+        .{ .name = "raw", .desc = open_run.raw_desc, .optional = true, .ty = "boolean" },
+        .{ .name = "timeout_s", .desc = open_run.timeout_desc, .optional = true, .ty = "integer" },
+    },
+};
+
+pub fn servedDef(tool: Tool, open: bool) Tool {
+    return if (open and std.mem.eql(u8, tool.name, open_run_def.name)) open_run_def else tool;
+}
 
 pub const tool_defs = [_]Tool{
     .{
@@ -361,7 +377,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
-    var reader = std.Io.File.Reader.init(stdio.stdin(), io, read_buffer);
+    var reader = stdio.stdinReader(io, read_buffer);
     const in = &reader.interface;
 
     while (true) {
@@ -419,7 +435,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id, policy.commit);
+        try writeToolsList(out, request_id, policy.commit, policy.open_run);
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -519,7 +535,7 @@ fn commits(tool: []const u8) bool {
     return false;
 }
 
-fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
+fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -527,7 +543,8 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool) !void {
     try js.beginObject();
     try js.objectField("tools");
     try js.beginArray();
-    for (tool_defs) |tool| {
+    for (tool_defs) |listed| {
+        const tool = servedDef(listed, open);
         try js.beginObject();
         try js.objectField("name");
         try js.write(tool.name);

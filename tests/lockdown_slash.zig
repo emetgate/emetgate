@@ -6,19 +6,8 @@ const testing = std.testing;
 
 const exe = "C:\\Program Files\\emet g\u{e2}te\\emetgate.exe";
 
-test "lockdown slash: the hook is a command in exec form that names this executable" {
-    const json = try lockdown_slash.settingsJson(testing.allocator, exe);
-    defer testing.allocator.free(json);
-    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
-    defer parsed.deinit();
-
-    try testing.expectEqual(@as(usize, 1), parsed.value.object.count());
-    const events = parsed.value.object.get("hooks").?.object;
-    try testing.expectEqual(@as(usize, 1), events.count());
-    const groups = events.get("UserPromptSubmit").?.array.items;
-    try testing.expectEqual(@as(usize, 1), groups.len);
-    try testing.expectEqual(@as(usize, 1), groups[0].object.count());
-    const handlers = groups[0].object.get("hooks").?.array.items;
+fn expectHandler(group: std.json.Value, sub: []const u8) !void {
+    const handlers = group.object.get("hooks").?.array.items;
     try testing.expectEqual(@as(usize, 1), handlers.len);
     const handler = handlers[0].object;
     try testing.expectEqual(@as(usize, 3), handler.count());
@@ -27,7 +16,28 @@ test "lockdown slash: the hook is a command in exec form that names this executa
     const args = handler.get("args").?.array.items;
     try testing.expectEqual(@as(usize, 2), args.len);
     try testing.expectEqualStrings("hook", args[0].string);
-    try testing.expectEqualStrings("prompt", args[1].string);
+    try testing.expectEqualStrings(sub, args[1].string);
+}
+
+test "lockdown slash: the hooks are commands in exec form that name this executable" {
+    const json = try lockdown_slash.settingsJson(testing.allocator, exe);
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.value.object.count());
+    const events = parsed.value.object.get("hooks").?.object;
+    try testing.expectEqual(@as(usize, 2), events.count());
+    const prompt_groups = events.get("UserPromptSubmit").?.array.items;
+    try testing.expectEqual(@as(usize, 1), prompt_groups.len);
+    try testing.expectEqual(@as(usize, 1), prompt_groups[0].object.count());
+    try expectHandler(prompt_groups[0], "prompt");
+
+    const tool_groups = events.get("PreToolUse").?.array.items;
+    try testing.expectEqual(@as(usize, 1), tool_groups.len);
+    try testing.expectEqual(@as(usize, 2), tool_groups[0].object.count());
+    try testing.expectEqualStrings("^mcp__.+__emetgate_run$", tool_groups[0].object.get("matcher").?.string);
+    try expectHandler(tool_groups[0], "pretool");
 }
 
 fn fileAt(dir: std.Io.Dir, sub_path: []const u8) ![]u8 {

@@ -16,6 +16,7 @@ const lockdown = emetgate.lockdown;
 const lockdown_slash = emetgate.lockdown_slash;
 const doctor = emetgate.doctor;
 const prompt_hook = emetgate.prompt_hook;
+const pretool_hook = emetgate.pretool_hook;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const rules_command = emetgate.rules_command;
@@ -42,6 +43,7 @@ const usage =
 ++ rule_command.usage("       emetgate rule ") ++
     \\       emetgate rules   (interactive checklist: pick the enforced rules with the keyboard)
     \\       emetgate hook prompt
+    \\       emetgate hook pretool
     \\       emetgate recover [--shadow-root <dir>] [--cache-max-age-days <n>] [--cache-max-mb <n>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
@@ -72,6 +74,12 @@ const usage =
     \\hook prompt is the UserPromptSubmit hook that lockdown gives claude: it reads
     \\the hook JSON on stdin and answers a prompt that starts with /rule itself, as
     \\emetgate rule would, so that prompt never reaches the model.
+    \\hook pretool is the PreToolUse hook that lockdown gives claude for emetgate_run:
+    \\it reads the hook JSON on stdin, splits the command into words and parts the way
+    \\a shell would, and asks the user before a command that deletes recursively, rewrites
+    \\or discards git history or changes, drops a database, formats a disk, shuts down,
+    \\changes permissions recursively, pipes a download into a shell or changes an
+    \\emetgate rule. It prints nothing for any other command.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
     \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
@@ -81,6 +89,10 @@ const usage =
     \\lockdown starts claude with no built-in tool and only the .mcp.json servers
     \\(--tools "" --mcp-config .mcp.json --strict-mcp-config, ENABLE_TOOL_SEARCH=false)
     \\and lets emetgate's read-only tools run without a permission prompt (--allowedTools).
+    \\Its emetgate_run runs any command in the repo root (Git Bash, else cmd) with your
+    \\rights and trims the output, labeling every cut; each command is logged with its
+    \\exit code, and hook pretool asks you before a destructive one. emetgate mcp
+    \\without lockdown keeps the allowlist (--allow-run, --test).
     \\It refuses to start unless .mcp.json has exactly one emetgate server.
     \\It also gives claude the hook above and a /rule command (--settings, --add-dir),
     \\both from files under %LOCALAPPDATA%\emetgate\lockdown, none in the project.
@@ -91,7 +103,9 @@ const usage =
     \\with neither, the server finds one before each write (package.json scripts.test,
     \\build.zig, Cargo.toml, go.mod, pyproject.toml, pytest.ini, .sln/.csproj) and,
     \\while there is none, writes land untested with status unverified_no_tests.
-    \\Outside a git repository lockdown runs git init first and says so on stderr.
+    \\Outside a git repository lockdown runs git init first and says so on stderr, after
+    \\every other check passed; it refuses instead in a drive root, a home, system or
+    \\profile folder or one that holds them, or a folder that holds other repositories.
     \\User settings and their hooks are not loaded (--setting-sources project).
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
@@ -175,6 +189,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (args.len == 1 + lockdown_slash.hook_args.len and std.mem.eql(u8, command, lockdown_slash.hook_args[0]) and std.mem.eql(u8, args[2], lockdown_slash.hook_args[1])) {
         return hookPromptCmd(init, runtime, out);
+    }
+    if (args.len == 1 + pretool_hook.hook_args.len and std.mem.eql(u8, command, pretool_hook.hook_args[0]) and std.mem.eql(u8, args[2], pretool_hook.hook_args[1])) {
+        return hookPretoolCmd(init, runtime, out);
     }
     if (std.mem.eql(u8, command, "recover")) {
         const options = parseRecover(args[2..]) orelse exitWithUsage();
@@ -597,7 +614,7 @@ fn hookPromptCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer)
 fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !void {
     const gpa = runtime.gpa;
     var buffer: [4096]u8 = undefined;
-    var reader = std.Io.File.Reader.init(stdio.stdin(), init.io, &buffer);
+    var reader = stdio.stdinReader(init.io, &buffer);
     const input = try reader.interface.allocRemaining(gpa, .limited(prompt_hook.max_input_bytes));
     defer gpa.free(input);
     const text = (try prompt_hook.ruleText(init.arena.allocator(), input)) orelse return;
@@ -605,6 +622,21 @@ fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) 
     defer if (root) |path| gpa.free(path) else |_| {};
     try prompt_hook.respond(gpa, init.io, root, text, out);
     try out.flush();
+}
+
+fn hookPretoolCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) u8 {
+    const gpa = runtime.gpa;
+    var buffer: [4096]u8 = undefined;
+    var reader = stdio.stdinReader(init.io, &buffer);
+    const input = reader.interface.allocRemaining(gpa, .limited(pretool_hook.max_input_bytes)) catch null;
+    defer if (input) |bytes| gpa.free(bytes);
+    const replied = if (input) |bytes| pretool_hook.respond(gpa, bytes, out) else pretool_hook.write(.{ .ask = pretool_hook.unreadable_reason }, out);
+    replied catch |err| {
+        std.debug.print("error: {t}\n", .{err});
+        return 1;
+    };
+    out.flush() catch return 1;
+    return 0;
 }
 
 const VerifyArgs = struct { options: verify_run.Options, json: bool };
