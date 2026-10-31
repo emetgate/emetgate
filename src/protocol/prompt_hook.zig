@@ -69,9 +69,10 @@ fn answer(gpa: Allocator, io: std.Io, root: anyerror![]const u8, text: []const u
         error.OutOfMemory => return err,
         error.UnterminatedQuote => return reason.writeAll(usage),
     };
-    if (words.len >= 1 and std.mem.eql(u8, words[0], "pick")) {
-        return rule_catalog.pick(gpa, io, try root, words[1..], reason, reason);
-    }
+    if (words.len >= 1) if (rule_catalog.verbOf(words[0])) |verb| {
+        _ = try rule_catalog.run(verb, gpa, io, root, words[1..], command ++ " ", reason, reason);
+        return;
+    };
     const request = rule_command.parse(words) orelse return reason.writeAll(usage);
     try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);
 }
