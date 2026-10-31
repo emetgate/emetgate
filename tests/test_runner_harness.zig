@@ -4,6 +4,7 @@ const runner = @import("root");
 const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
+const Io = std.Io;
 
 const expect_mutant_env = "EMETGATE_EXPECT_MUTANT";
 const mutant_probe = "runner: the active mutant is the one the runner was given";
@@ -75,6 +76,80 @@ test "runner: the queue puts the slowest known test first, an unknown one before
     try testing.expectEqualSlices(usize, &.{ 3, 6, 5, 2, 4, 0, 1 }, order);
 }
 
+test "runner: the parts of any count together hold every selected test exactly once, the same way every time" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var plan: runner.Times = .empty;
+    try runner.parseTimes(arena, "900\tpass\tb.test.three\n5\tpass\ta.test.one\n70\tpass\tc.test.six\n40\tpass\tc.test.five\n", &plan);
+    const all = [_]usize{ 0, 1, 2, 3, 4, 5, 6 };
+    for (1..9) |count| {
+        var recorded: std.ArrayList(usize) = .empty;
+        for (1..count + 1) |index| {
+            const part: runner.Shard = .{ .index = index, .count = count };
+            const mine = try runner.partition(arena, &sample, &all, &plan, part);
+            try testing.expectEqualSlices(usize, mine, try runner.partition(arena, &sample, &all, &plan, part));
+            for (mine, 0..) |i, k| {
+                if (k > 0) try testing.expect(mine[k - 1] < i);
+            }
+            try recorded.appendSlice(arena, mine);
+        }
+        try testing.expectEqual(runner.Coverage{}, try runner.coverageOf(arena, sample.len, &all, recorded.items));
+    }
+    const two = [_][]const usize{ try runner.partition(arena, &sample, &all, &plan, .{ .index = 1, .count = 2 }), try runner.partition(arena, &sample, &all, &plan, .{ .index = 2, .count = 2 }) };
+    try testing.expectEqualSlices(usize, &.{ 1, 6 }, two[0]);
+    try testing.expectEqualSlices(usize, &.{ 0, 2, 3, 4, 5 }, two[1]);
+}
+
+test "runner: part coverage names a test outside the selection, one no part ran and one two parts ran" {
+    const expected = [_]usize{ 1, 3, 5 };
+    try testing.expectEqual(runner.Coverage{}, try runner.coverageOf(testing.allocator, sample.len, &expected, &.{ 5, 1, 3 }));
+    try testing.expectEqual(runner.Coverage{ .missing = 3 }, try runner.coverageOf(testing.allocator, sample.len, &expected, &.{ 1, 5 }));
+    try testing.expectEqual(runner.Coverage{ .repeated = 5 }, try runner.coverageOf(testing.allocator, sample.len, &expected, &.{ 1, 3, 5, 5 }));
+    try testing.expectEqual(runner.Coverage{ .stray = 2 }, try runner.coverageOf(testing.allocator, sample.len, &expected, &.{ 1, 2, 3, 5 }));
+    try testing.expectEqual(runner.Coverage{ .stray = 9 }, try runner.coverageOf(testing.allocator, sample.len, &expected, &.{ 1, 3, 5, 9 }));
+}
+
+test "runner: the manifests of every part list the same selection and together ran each of its tests once" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const dir = try tmp.dir.realPathFileAlloc(testing.io, ".", arena);
+    const filters = [_][]const u8{ "runner: a shard parses", "runner: a filter keeps", "runner: shard coverage", "runner: arguments parse", "runner: shard totals" };
+    for ([_][]const u8{ "1", "2" }) |jobs| {
+        var first_all: ?[]const u8 = null;
+        var ran: std.ArrayList([]const u8) = .empty;
+        for (1..4) |index| {
+            const path = try std.fmt.allocPrint(arena, "{s}{c}part-{s}-{d}.tsv", .{ dir, std.fs.path.sep, jobs, index });
+            const result = try selfRun(arena, &.{ "--jobs", jobs, "--part", try std.fmt.allocPrint(arena, "{d}/3", .{index}), try std.fmt.allocPrint(arena, "--manifest={s}", .{path}), "--filter", filters[0], "--filter", filters[1], "--filter", filters[2], "--filter", filters[3], "--filter", filters[4] }, null);
+            errdefer std.debug.print("--jobs {s} --part {d}/3:\n{s}\n", .{ jobs, index, result.stderr });
+            try testing.expectEqual(@as(?u8, 0), exitCode(result.term));
+            const text = try Io.Dir.cwd().readFileAlloc(testing.io, path, arena, .limited(1024 * 1024));
+            var all: std.ArrayList(u8) = .empty;
+            var lines = std.mem.splitScalar(u8, text, '\n');
+            while (lines.next()) |line| {
+                if (std.mem.startsWith(u8, line, "all\t")) {
+                    try all.appendSlice(arena, line);
+                    try all.append(arena, '\n');
+                } else if (std.mem.startsWith(u8, line, "ran\t")) {
+                    try ran.append(arena, line["ran\t".len..]);
+                } else try testing.expectEqualStrings("", line);
+            }
+            if (first_all) |seen| try testing.expectEqualStrings(seen, all.items) else first_all = all.items;
+        }
+        try testing.expectEqual(@as(usize, filters.len), std.mem.count(u8, first_all.?, "\n"));
+        try testing.expectEqual(@as(usize, filters.len), ran.items.len);
+        for (ran.items) |name| {
+            try testing.expect(std.mem.indexOf(u8, first_all.?, try std.fmt.allocPrint(arena, "all\t{s}\n", .{name})) != null);
+            var times: usize = 0;
+            for (ran.items) |other| times += @intFromBool(std.mem.eql(u8, name, other));
+            try testing.expectEqual(@as(usize, 1), times);
+        }
+    }
+}
+
 test "runner: arguments parse into filters, a shard, a mutant and the slow switch" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -87,7 +162,7 @@ test "runner: arguments parse into filters, a shard, a mutant and the slow switc
     try testing.expectEqual(@as(u32, 17), options.mutant);
     try testing.expect(options.slow);
     try testing.expectEqualStrings("x.txt", options.record.?);
-    for ([_][]const []const u8{ &.{"--filter"}, &.{ "--filter", "" }, &.{ "--shard", "0/2" }, &.{ "--mutant", "x" }, &.{"--nope"}, &.{"loose"}, &.{ "--jobs", "0" }, &.{ "--jobs", "2", "--shard", "1/2" }, &.{ "--jobs", "2", "--record=x" }, &.{ "--jobs", "2", "--claim=x" }, &.{"--claim="} }) |bad| {
+    for ([_][]const []const u8{ &.{"--filter"}, &.{ "--filter", "" }, &.{ "--shard", "0/2" }, &.{ "--mutant", "x" }, &.{"--nope"}, &.{"loose"}, &.{ "--jobs", "0" }, &.{ "--jobs", "2", "--shard", "1/2" }, &.{ "--jobs", "2", "--record=x" }, &.{ "--jobs", "2", "--claim=x" }, &.{"--claim="}, &.{ "--part", "1/2", "--shard", "1/2" }, &.{ "--part", "3/2" }, &.{"--part"}, &.{"--manifest="} }) |bad| {
         try testing.expectError(error.InvalidArgs, runner.parseArgs(arena, bad));
     }
 }

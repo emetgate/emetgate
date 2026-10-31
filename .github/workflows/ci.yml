@@ -62,14 +62,15 @@ jobs:
           echo "checked $count commit(s) in ${range[*]}"
           exit $bad
 
-  test:
+  test-part:
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         optimize: [Debug, ReleaseSafe]
-    name: test (${{ matrix.optimize }})
+        part: [1, 2, 3, 4]
+    name: test part (${{ matrix.optimize }} ${{ matrix.part }}/4)
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
@@ -80,21 +81,58 @@ jobs:
           path: .zig-cache
           key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
           restore-keys: zig-cache-${{ matrix.optimize }}-
-      - run: zig build test -Doptimize=${{ matrix.optimize }} -Dtest-jobs=8 --summary all
+      - name: Part ${{ matrix.part }} of 4 of the tests, split by tests/test_times.tsv
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/parts" | Out-Null
+          zig build test -Doptimize=${{ matrix.optimize }} -Dtest-jobs=8 -Dtest-part=${{ matrix.part }}/4 "-Dtest-manifest=$env:RUNNER_TEMP/parts/part-${{ matrix.part }}.tsv" --summary all
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          New-Item -ItemType File "$env:RUNNER_TEMP/parts/part-${{ matrix.part }}.passed" | Out-Null
+      - name: Upload the part manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-parts-${{ matrix.optimize }}-${{ matrix.part }}
+          path: ${{ runner.temp }}/parts/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 3
       - name: Save the build cache and test times of main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.part == 1
         uses: actions/cache/save@v4
         with:
           path: .zig-cache
           key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
       - name: Verification page, README facts and forbidden words are up to date
-        if: matrix.optimize == 'Debug'
+        if: matrix.optimize == 'Debug' && matrix.part == 1
         shell: bash
         run: |
           python tools/verification_page.py --check
           python tools/readme_facts.py --check
           python tools/forbidden_words.py --check
           python tools/vendor_manifest.py --check
+
+  test:
+    needs: test-part
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [Debug, ReleaseSafe]
+    name: test (${{ matrix.optimize }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-parts-${{ matrix.optimize }}-*
+          path: parts
+          merge-multiple: true
+      - name: The four parts passed and together ran every selected test exactly once
+        run: |
+          mkdir -p parts
+          python3 tools/check_parts.py --count 4 parts
 
   nightly-slow:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
