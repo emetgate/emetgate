@@ -721,10 +721,19 @@ fn callCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
+        if (err == error.TargetHasUncommittedChanges) stagedFix();
         try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn stagedFix() void {
+    const prefix = tool_names.prefix();
+    const named = commit_refusal.peek() orelse return wire.setFix("the git index holds staged changes no emetgate write made on a file this commit carries; see them with {s}emetgate_git sub \"status\", unstage each with {s}emetgate_git_write args [\"restore\",\"--staged\",\"--\",\"<path>\"] (the file on disk stays), then call {s}emetgate_commit again", .{ prefix, prefix, prefix });
+    var paths = named.paths();
+    const path = paths.next() orelse "";
+    wire.setFix("the git index holds a staged copy of {s} that no emetgate write made; run {s}emetgate_git_write with args [\"restore\",\"--staged\",\"--\",\"{s}\"] (the file on disk stays as it is), then call {s}emetgate_commit again", .{ path, prefix, path, prefix });
 }
 
 fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {

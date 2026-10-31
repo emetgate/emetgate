@@ -16428,7 +16428,7 @@
     {
       "id": "SRC10-new-file-stale-stage",
       "file": "src/platform/git_commit.zig",
-      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
       "to": "",
       "kills": [
         "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"

@@ -57,6 +57,7 @@ pub const Measured = struct {
     oid: ?[]u8 = null,
     raw: ?symbol.Hash = null,
     staged: ?[]u8 = null,
+    unindexed: bool = false,
 };
 
 pub const Conversion = [32]u8;
@@ -350,8 +351,10 @@ fn surveyWith(git: Git, rels: []const []const u8, icase: bool) !Survey {
     return .{ .paths = paths, .index = index };
 }
 
-fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator, pre_written: bool) !void {
-    for (seen.paths) |path| {
+fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator, pre_written: bool, attested: []const []const symbol.Hash) !void {
+    for (seen.paths, 0..) |path, at| {
+        errdefer |err| if (pre_written and err == error.TargetHasUncommittedChanges) commit_refusal.note(&.{path}, 1);
+        const ours: []const symbol.Hash = if (at < attested.len) attested[at] else &.{};
         var stages: usize = 0;
         for (seen.index) |entry| {
             if (!std.mem.eql(u8, entry.path, path)) continue;
@@ -368,7 +371,7 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
             const head_entry = in_head orelse {
                 if (!pre_written) return error.TargetNotInHead;
                 if (in_index) |entry| {
-                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;
+                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;
                     staged = entry.oid;
                 }
                 raw = symbol.hashOf(bytes);
@@ -376,6 +379,10 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
                 continue;
             };
             const index_entry = in_index orelse return error.TargetHasUncommittedChanges;
+            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and try gateStaged(git, path, index_entry.oid, ours)) {
+                try keep(gpa, out, path, symbol.hashOf(bytes), in_head, index_entry.oid);
+                continue;
+            }
             if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode)) return error.TargetHasUncommittedChanges;
             // `pre_written` callers (emetgate commit) commit content a gate already
             // wrote into the working tree, so the working-tree copy is expected to
@@ -383,12 +390,30 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
             if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;
             raw = symbol.hashOf(bytes);
         } else if (in_head != null or in_index != null) {
-            // A gate may commit a deletion: the working-tree file is already gone
-            // while HEAD still carries it. The index must match HEAD.
+            if (pre_written and in_head != null and in_index == null) {
+                try keep(gpa, out, path, null, in_head, null);
+                if (out) |list| list.items[list.items.len - 1].unindexed = true;
+                continue;
+            }
             if (!(pre_written and in_head != null and in_index != null and std.mem.eql(u8, in_index.?.oid, in_head.?.oid))) return error.TargetHasUncommittedChanges;
         }
         try keep(gpa, out, path, raw, in_head, null);
     }
+}
+
+fn gateStaged(git: Git, path: []const u8, oid: []const u8, attested: []const symbol.Hash) !bool {
+    if (attested.len == 0) return false;
+    if (isAttested(attested, try git.needRaw(&.{ "cat-file", "blob", oid }))) return true;
+    const path_arg = try std.fmt.allocPrint(git.arena, "--path={s}", .{path});
+    return isAttested(attested, try git.needRaw(&.{ "cat-file", "--filters", path_arg, oid }));
+}
+
+fn isAttested(attested: []const symbol.Hash, bytes: []const u8) bool {
+    const digest = symbol.hashOf(bytes);
+    for (attested) |hash| {
+        if (std.mem.eql(u8, &hash, &digest)) return true;
+    }
+    return false;
 }
 
 fn storedOid(git: Git, path: []const u8, bytes: []const u8) ![]const u8 {
@@ -594,17 +619,14 @@ fn settings(git: Git) !Settings {
 }
 
 pub fn preflight(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8) !Head {
-    return preflightImpl(gpa, io, root, rels, false);
+    return preflightImpl(gpa, io, root, rels, false, &.{});
 }
 
-/// Like `preflight`, but tolerates committed paths whose working-tree copy a
-/// gate already wrote (so it differs from HEAD). The git index must still be
-/// clean against HEAD — only unstaged, gate-written content is allowed.
-pub fn preflightWritten(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8) !Head {
-    return preflightImpl(gpa, io, root, rels, true);
+pub fn preflightWritten(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8, attested: []const []const symbol.Hash) !Head {
+    return preflightImpl(gpa, io, root, rels, true, attested);
 }
 
-fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8, pre_written: bool) !Head {
+fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []const u8, pre_written: bool, attested: []const []const symbol.Hash) !Head {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -639,7 +661,7 @@ fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
         }
         measured.deinit(gpa);
     }
-    try measure(git, held.items, try surveyWith(git, rels, set.icase), &measured, gpa, pre_written);
+    try measure(git, held.items, try surveyWith(git, rels, set.icase), &measured, gpa, pre_written, attested);
 
     const oid = try gpa.dupe(u8, known.oid);
     errdefer gpa.free(oid);
@@ -891,15 +913,15 @@ pub fn stageChecked(gpa: Allocator, io: std.Io, root: []const u8, head: Head, en
             if (!std.mem.eql(u8, found.path, entry.path)) continue;
             seen += 1;
             if (found.stage != 0 or found.tag == 'S' or found.tag == 's') return error.TargetHasUncommittedChanges;
-            if (was.oid == null) {
-                const staged = was.staged orelse return error.TargetHasUncommittedChanges;
+            if (was.staged) |staged| {
                 if (!std.mem.eql(u8, found.oid, staged)) return error.TargetHasUncommittedChanges;
                 continue;
             }
+            if (was.oid == null) return error.TargetHasUncommittedChanges;
             const mode = was.mode orelse return error.TargetHasUncommittedChanges;
             if (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, found.mode, &mode)) return error.TargetHasUncommittedChanges;
         }
-        if (seen > 1 or (seen == 0) != (was.oid == null and was.staged == null)) return error.TargetHasUncommittedChanges;
+        if (seen > 1 or (seen == 0) != (was.unindexed or (was.oid == null and was.staged == null))) return error.TargetHasUncommittedChanges;
     }
     try applyEntries(private, entries);
     const digest = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
