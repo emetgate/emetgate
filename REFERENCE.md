@@ -1776,7 +1776,14 @@ every file under `tests/`. Its runner, `tools/test_runner.zig`, chooses the test
 recompile anything, and a filter that matches no test fails the run. With `--jobs` the binary
 starts itself as shards that take the tests from one queue, slowest first by the times of the
 last run kept in `.zig-cache/test-all/times.tsv`, and fails unless together they ran every
-selected test exactly once.
+selected test exactly once. `-Dtest-part=I/N` (`--part I/N`) runs only part I of N: the selected
+tests are split by the times committed in `tests/test_times.tsv`, the slowest first, each to the
+part with the least time so far, so every machine computes the same split; the CLI end-to-end
+cases run in part 1. `-Dtest-manifest=PATH` (`--manifest=PATH`) writes every selected test and
+every test the part ran. CI runs each optimize mode in four parts on four machines, and the
+`test (Debug)` and `test (ReleaseSafe)` checks fail unless `tools/check_parts.py` finds that all
+four parts passed, selected the same tests and together ran each of them exactly once. A test
+missing from `tests/test_times.tsv` counts as one second.
 `tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
 `test_root.zig`. On the development machine (Windows, Debug) the binary compiles in about 10 s
 with 0.7 GB of memory; the run takes about 20 s, and 40 s with the slow tests. The nine binaries

@@ -23,6 +23,8 @@ pub const Options = struct {
     filters: []const []const u8 = &.{},
     skips: []const []const u8 = &.{},
     shard: Shard = .{},
+    part: Shard = .{},
+    manifest: ?[]const u8 = null,
     slow: bool = false,
     mutant: u32 = 0,
     list: bool = false,
@@ -34,7 +36,7 @@ pub const Options = struct {
     jobs: usize = 1,
 };
 
-pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH] [--claim=DIR]\n";
+pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--part I/N] [--manifest=PATH] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH] [--claim=DIR]\n";
 
 pub fn parseShard(text: []const u8) error{InvalidShard}!Shard {
     const slash = std.mem.indexOfScalar(u8, text, '/') orelse return error.InvalidShard;
@@ -63,6 +65,13 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
             i += 1;
             if (i == args.len) return error.InvalidArgs;
             options.shard = parseShard(args[i]) catch return error.InvalidArgs;
+        } else if (std.mem.eql(u8, arg, "--part")) {
+            i += 1;
+            if (i == args.len) return error.InvalidArgs;
+            options.part = parseShard(args[i]) catch return error.InvalidArgs;
+        } else if (std.mem.startsWith(u8, arg, "--manifest=")) {
+            options.manifest = arg["--manifest=".len..];
+            if (options.manifest.?.len == 0) return error.InvalidArgs;
         } else if (std.mem.eql(u8, arg, "--jobs")) {
             i += 1;
             if (i == args.len) return error.InvalidArgs;
@@ -94,6 +103,7 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
         }
     }
     if (options.jobs > 1 and (options.shard.count != 1 or options.record != null or options.claim != null)) return error.InvalidArgs;
+    if (options.part.count != 1 and options.shard.count != 1) return error.InvalidArgs;
     options.filters = try filters.toOwnedSlice(gpa);
     options.skips = try skips.toOwnedSlice(gpa);
     return options;
@@ -135,20 +145,66 @@ pub const Coverage = struct {
 };
 
 pub fn coverage(gpa: std.mem.Allocator, names: []const []const u8, filters: []const []const u8, recorded: []const usize) !Coverage {
-    const seen = try gpa.alloc(u32, names.len);
+    const selection = try select(gpa, names, filters, .{});
+    defer gpa.free(selection.indices);
+    return coverageOf(gpa, names.len, selection.indices, recorded);
+}
+
+pub fn coverageOf(gpa: std.mem.Allocator, count: usize, expected: []const usize, recorded: []const usize) !Coverage {
+    const seen = try gpa.alloc(u32, count);
     defer gpa.free(seen);
+    const wanted = try gpa.alloc(bool, count);
+    defer gpa.free(wanted);
     @memset(seen, 0);
+    @memset(wanted, false);
+    for (expected) |index| wanted[index] = true;
     for (recorded) |index| {
-        if (index >= names.len or !matches(names[index], filters)) return .{ .stray = index };
+        if (index >= count or !wanted[index]) return .{ .stray = index };
         seen[index] += 1;
     }
-    for (names, 0..) |name, i| {
-        if (!matches(name, filters)) continue;
+    for (expected) |i| {
         if (seen[i] == 0) return .{ .missing = i };
         if (seen[i] > 1) return .{ .repeated = i };
     }
     return .{};
 }
+
+pub fn partition(gpa: std.mem.Allocator, names: []const []const u8, indices: []const usize, plan: *const Times, part: Shard) ![]usize {
+    if (part.count == 1) return gpa.dupe(usize, indices);
+    const Ctx = struct {
+        names: []const []const u8,
+        plan: *const Times,
+        fn cost(ctx: @This(), i: usize) u64 {
+            return ctx.plan.get(ctx.names[i]) orelse unknown_cost;
+        }
+        fn heavier(ctx: @This(), a: usize, b: usize) bool {
+            const ca = ctx.cost(a);
+            const cb = ctx.cost(b);
+            return if (ca != cb) ca > cb else a < b;
+        }
+    };
+    const ctx: Ctx = .{ .names = names, .plan = plan };
+    const order = try gpa.dupe(usize, indices);
+    defer gpa.free(order);
+    std.mem.sort(usize, order, ctx, Ctx.heavier);
+    const load = try gpa.alloc(u64, part.count);
+    defer gpa.free(load);
+    @memset(load, 0);
+    var mine: std.ArrayList(usize) = .empty;
+    errdefer mine.deinit(gpa);
+    for (order) |i| {
+        var lightest: usize = 0;
+        for (load, 0..) |l, k| {
+            if (l < load[lightest]) lightest = k;
+        }
+        load[lightest] += ctx.cost(i);
+        if (lightest == part.index - 1) try mine.append(gpa, i);
+    }
+    std.mem.sort(usize, mine.items, {}, std.sort.asc(usize));
+    return mine.toOwnedSlice(gpa);
+}
+
+const unknown_cost: u64 = 1_000_000;
 
 pub fn parseRecord(gpa: std.mem.Allocator, text: []const u8, out: *std.ArrayList(usize)) !void {
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -220,6 +276,7 @@ fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, dir: []const u8, i: usize,
     for (options.filters) |filter| argv.appendSlice(gpa, &.{ "--filter", filter }) catch oom();
     for (options.skips) |skip| argv.appendSlice(gpa, &.{ "--skip", skip }) catch oom();
     if (options.slow) argv.append(gpa, "--slow") catch oom();
+    if (options.part.count != 1) argv.appendSlice(gpa, &.{ "--part", std.fmt.allocPrint(gpa, "{d}/{d}", .{ options.part.index, options.part.count }) catch oom() }) catch oom();
     argv.append(gpa, "--verbose") catch oom();
     if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant", std.fmt.allocPrint(gpa, "{d}", .{options.mutant}) catch oom() }) catch oom();
     return argv.items;
@@ -262,7 +319,7 @@ fn printShardLog(log_text: []const u8, verbose: bool) void {
     }
 }
 
-fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []const []const u8, options: Options) u8 {
+fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []const []const u8, all: []const usize, picked: []const usize, options: Options) u8 {
     var threaded: Io.Threaded = .init(gpa, .{ .argv0 = .init(init.args), .environ = init.environ });
     defer threaded.deinit();
     const io = threaded.io();
@@ -280,8 +337,7 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
     defer cwd.deleteTree(io, dir_path) catch {};
 
     var times = loadTimes(gpa, io, cwd);
-    const selection = select(gpa, names, options.filters, .{}) catch oom();
-    const order = runOrder(gpa, names, selection.indices, &times) catch oom();
+    const order = runOrder(gpa, names, picked, &times) catch oom();
     writeQueue(io, cwd, gpa, dir_path, order) catch |err| {
         std.debug.print("error: cannot write the test queue in {s}: {t}\n", .{ dir_path, err });
         return 1;
@@ -353,13 +409,17 @@ fn runSharded(gpa: std.mem.Allocator, init: std.process.Init.Minimal, names: []c
     saveTimes(gpa, io, cwd, &times);
 
     var uncovered = true;
-    const result = coverage(gpa, names, options.filters, recorded.items) catch oom();
+    if (options.manifest) |path| writeManifest(path, names, all, recorded.items) catch |err| {
+        std.debug.print("error: cannot write the part manifest {s}: {t}\n", .{ path, err });
+        broken += 1;
+    };
+    const result = coverageOf(gpa, names.len, picked, recorded.items) catch oom();
     if (result.missing) |i| {
         std.debug.print("error: '{s}' failed: no shard ran {s}\n", .{ shard_guard, names[i] });
     } else if (result.repeated) |i| {
         std.debug.print("error: '{s}' failed: more than one shard ran {s}\n", .{ shard_guard, names[i] });
     } else if (result.stray) |i| {
-        std.debug.print("error: '{s}' failed: a shard ran test #{d}, which the filters do not select\n", .{ shard_guard, i });
+        std.debug.print("error: '{s}' failed: a shard ran test #{d}, which the filters and the part do not select\n", .{ shard_guard, i });
     } else uncovered = false;
     std.debug.print("{d}/{d} tests passed; {d} skipped; {d} failed; {d} leaked; mutant {d}; {d} shard(s)\n", .{
         sum.passed, sum.total, sum.skipped, sum.failed, sum.leaked, options.mutant, options.jobs,
@@ -387,11 +447,30 @@ pub fn parseTimes(gpa: std.mem.Allocator, text: []const u8, times: *Times) !void
     }
 }
 
-fn loadTimes(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir) Times {
+pub const plan_path = "tests/test_times.tsv";
+
+fn loadPlan(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir) Times {
     var times: Times = .empty;
+    const text = cwd.readFileAlloc(io, plan_path, gpa, .limited(16 * 1024 * 1024)) catch return times;
+    parseTimes(gpa, text, &times) catch oom();
+    return times;
+}
+
+fn loadTimes(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir) Times {
+    var times = loadPlan(gpa, io, cwd);
     const text = cwd.readFileAlloc(io, times_path, gpa, .limited(16 * 1024 * 1024)) catch return times;
     parseTimes(gpa, text, &times) catch oom();
     return times;
+}
+
+fn writeManifest(path: []const u8, names: []const []const u8, all: []const usize, ran: []const usize) !void {
+    const f = try Io.Dir.cwd().createFile(rio, path, .{});
+    defer f.close(rio);
+    var buf: [4096]u8 = undefined;
+    var w = f.writer(rio, &buf);
+    for (all) |i| try w.interface.print("all\t{s}\n", .{names[i]});
+    for (ran) |i| try w.interface.print("ran\t{s}\n", .{names[i]});
+    try w.interface.flush();
 }
 
 fn saveTimes(gpa: std.mem.Allocator, io: Io, cwd: Io.Dir, times: *const Times) void {
@@ -558,26 +637,33 @@ fn run(gpa: std.mem.Allocator, init: std.process.Init.Minimal, options: Options)
         std.debug.print("error: '{s}' failed: one shard selected {d} of {d} matching tests\n", .{ shard_guard, selection.indices.len, selection.matched });
         return 1;
     }
+    var plan = loadPlan(gpa, rio, Io.Dir.cwd());
+    const picked = partition(gpa, names, selection.indices, &plan, options.part) catch @panic("oom");
     if (options.list) {
         var buf: [4096]u8 = undefined;
         var out = Io.File.stdout().writer(rio, &buf);
-        for (selection.indices) |i| out.interface.print("{s}\n", .{names[i]}) catch {};
+        for (picked) |i| out.interface.print("{s}\n", .{names[i]}) catch {};
         out.interface.flush() catch {};
         return 0;
     }
-    if (options.jobs > 1) return runSharded(gpa, init, names, options);
+    if (options.jobs > 1) return runSharded(gpa, init, names, selection.indices, picked, options);
     if (options.claim) |dir| {
-        const order = queued(gpa, dir, selection.indices) catch |err| {
+        const order = queued(gpa, dir, picked) catch |err| {
             std.debug.print("error: cannot read the test queue in {s}: {t}\n", .{ dir, err });
             return 1;
         };
         return runTests(gpa, init, order, options);
     }
-    if (options.record) |path| writeRecord(path, selection.indices) catch |err| {
+    if (options.record) |path| writeRecord(path, picked) catch |err| {
         std.debug.print("error: cannot write shard record {s}: {t}\n", .{ path, err });
         return 1;
     };
-    return runTests(gpa, init, selection.indices, options);
+    const code = runTests(gpa, init, picked, options);
+    if (options.manifest) |path| writeManifest(path, names, selection.indices, picked) catch |err| {
+        std.debug.print("error: cannot write the part manifest {s}: {t}\n", .{ path, err });
+        return 1;
+    };
+    return code;
 }
 
 fn writeRecord(path: []const u8, indices: []const usize) !void {

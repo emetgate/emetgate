@@ -80,7 +80,10 @@ pub fn build(b: *std.Build) void {
     const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose name contains one of these strings; skips the CLI e2e cases") orelse &.{};
     const test_jobs = b.option(usize, "test-jobs", "Number of processes that split the tests of the one test binary") orelse 4;
     const run_slow = b.option(bool, "slow", "Also run the tests marked slow") orelse false;
+    const test_part = b.option([]const u8, "test-part", "Run only part I of N of the tests, as I/N, split by the times in tests/test_times.tsv; the CLI e2e cases run in part 1") orelse "1/1";
+    const test_manifest = b.option([]const u8, "test-manifest", "Write every selected test and every test this part ran to this file") orelse null;
     if (test_jobs == 0) @panic("-Dtest-jobs must be at least 1");
+    const first_part = partIsFirst(test_part) orelse @panic("-Dtest-part must be I/N with 1 <= I <= N");
     const selection: TestSelection = .{ .filters = test_filters, .slow = run_slow };
 
     const test_all = b.addTest(.{
@@ -91,7 +94,9 @@ pub fn build(b: *std.Build) void {
     b.step("test-bin", "Build the test binary into zig-out/bin/test-all").dependOn(&b.addInstallArtifact(test_all, .{}).step);
 
     const test_step = b.step("test", "Run every test from one binary in parallel shards, then the CLI end-to-end tests");
-    test_step.dependOn(&testRun(b, test_all, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}) }).step);
+    const full_run = testRun(b, test_all, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
+    if (test_manifest) |path| full_run.addArg(b.fmt("--manifest={s}", .{path}));
+    test_step.dependOn(&full_run.step);
 
     const fast_step = b.step("test-fast", "Run the engine unit tests only: no git, no sandbox, no child process");
     fast_step.dependOn(&testRun(b, test_all, .{ .filters = &.{"src.engine."} }, &.{}).step);
@@ -109,7 +114,7 @@ pub fn build(b: *std.Build) void {
 
     const e2e_step = b.step("e2e", "Run CLI end-to-end tests");
     addEndToEndTests(b, exe, e2e_step);
-    if (test_filters.len == 0) test_step.dependOn(e2e_step);
+    if (test_filters.len == 0 and first_part) test_step.dependOn(e2e_step);
 
     const mutate_tool = b.addExecutable(.{
         .name = "emetgate-mutate",
@@ -204,6 +209,14 @@ const TestSelection = struct {
     filters: []const []const u8 = &.{},
     slow: bool = false,
 };
+
+fn partIsFirst(text: []const u8) ?bool {
+    const slash = std.mem.indexOfScalar(u8, text, '/') orelse return null;
+    const index = std.fmt.parseUnsigned(usize, text[0..slash], 10) catch return null;
+    const count = std.fmt.parseUnsigned(usize, text[slash + 1 ..], 10) catch return null;
+    if (index == 0 or count == 0 or index > count) return null;
+    return index == 1;
+}
 
 fn testRun(b: *std.Build, compiled: *std.Build.Step.Compile, selection: TestSelection, extra: []const []const u8) *std.Build.Step.Run {
     const run = b.addRunArtifact(compiled);
