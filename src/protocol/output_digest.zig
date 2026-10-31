@@ -61,7 +61,7 @@ fn endsAny(text: []const u8, marks: []const []const u8) bool {
     return false;
 }
 
-fn stripAnsi(arena: Allocator, raw: []const u8) ![]const u8 {
+pub fn stripAnsi(arena: Allocator, raw: []const u8) ![]const u8 {
     var line = std.mem.trimEnd(u8, raw, "\r");
     if (std.mem.lastIndexOfScalar(u8, line, '\r')) |cr| {
         const after = line[cr + 1 ..];
