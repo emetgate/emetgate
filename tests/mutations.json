@@ -408,7 +408,7 @@
       "from": "    \"emetgate_mutate\",\n};",
       "to": "    \"emetgate_mutate\",\n    \"emetgate_try\",\n};",
       "kills": [
-        "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command",
+        "lockdown pre-allows emetgate tools that neither write to the repo nor run a command, and the run tool its hook judges",
         "every emetgate tool is either pre-allowed by lockdown or left to the permission mode"
       ]
     },
@@ -418,7 +418,7 @@
       "from": "    \"emetgate_mutate\",\n};",
       "to": "    \"emetgate_mutate\",\n    \"emetgate_run\",\n};",
       "kills": [
-        "lockdown pre-allows only emetgate tools that neither write to the repo nor run a command",
+        "lockdown pre-allows emetgate tools that neither write to the repo nor run a command, and the run tool its hook judges",
         "every emetgate tool is either pre-allowed by lockdown or left to the permission mode"
       ]
     },
@@ -8703,7 +8703,7 @@
       "from": "    try js.write(\"command\");",
       "to": "    try js.write(\"mcp_tool\");",
       "kills": [
-        "lockdown slash: the hook is a command in exec form that names this executable"
+        "lockdown slash: the hooks are commands in exec form that name this executable"
       ],
       "note": "an mcp_tool hook needs a rule-writing tool on the served surface"
     },
@@ -8713,7 +8713,7 @@
       "from": "    try js.write(args);",
       "to": "    try js.write(args[0..1]);",
       "kills": [
-        "lockdown slash: the hook is a command in exec form that names this executable"
+        "lockdown slash: the hooks are commands in exec form that name this executable"
       ]
     },
     {
