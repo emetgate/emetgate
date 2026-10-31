@@ -330,3 +330,176 @@ test "emetgate_commit: a new file staged with other content than its run receipt
     defer result.deinit(testing.allocator);
     return error.TestUnexpectedResult;
 }
+
+const toValue = @import("commit_batch.zig").toValue;
+
+const Sequence = struct {
+    case: Case,
+
+    fn init(self: *Sequence) !void {
+        try self.case.init();
+    }
+
+    fn deinit(self: *Sequence) void {
+        self.case.deinit();
+    }
+
+    fn arena(self: *Sequence) std.mem.Allocator {
+        return self.case.arena();
+    }
+
+    fn abs(self: *Sequence, rel: []const u8) ![]const u8 {
+        return self.case.repo.abs(self.arena(), rel);
+    }
+
+    fn call(self: *Sequence, tool: []const u8, args: anytype) !std.json.Value {
+        var event: telemetry.Event = .{ .tool = tool };
+        const result = try handlers.callTool(testing.allocator, testing.io, self.case.runtime, tool, try toValue(self.arena(), args), &event, .{ .root = self.case.repo.root_abs, .test_command = green });
+        defer testing.allocator.free(result.text);
+        const text = try self.arena().dupe(u8, result.text);
+        const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+        return std.json.parseFromSliceLeaky(std.json.Value, self.arena(), text[0..end], .{});
+    }
+
+    fn write(self: *Sequence, tool: []const u8, args: anytype) !void {
+        const reply = try self.call(tool, args);
+        errdefer std.debug.print("{s}: {f}\n", .{ tool, std.json.fmt(reply, .{}) });
+        try testing.expect(!std.mem.eql(u8, reply.object.get("status").?.string, "error"));
+    }
+
+    fn fileHash(self: *Sequence, rel: []const u8) ![]const u8 {
+        const text = try self.case.repo.read(rel);
+        defer testing.allocator.free(text);
+        return self.arena().dupe(u8, &symbol.formatHash(symbol.fileHash(text)));
+    }
+
+    fn git(self: *Sequence, argv: []const []const u8) ![]const u8 {
+        return (try receipts.git(self.arena(), testing.io, self.case.repo.root_abs, argv)) orelse error.GitCommandFailed;
+    }
+
+    fn commitAll(self: *Sequence, tree: []const u8) !void {
+        const reply = try self.call("emetgate_commit", .{ .message = "feat: one commit" });
+        errdefer std.debug.print("emetgate_commit: {f}\n", .{std.json.fmt(reply, .{})});
+        try testing.expectEqualStrings("committed", reply.object.get("status").?.string);
+        try testing.expectEqualStrings("", try self.git(&.{ "status", "--porcelain", "--untracked-files=all" }));
+        try testing.expectEqualStrings(tree, try self.git(&.{ "ls-tree", "-r", "--name-only", "HEAD" }));
+    }
+};
+
+test "emetgate_commit: a batch that creates files, then two edits of one of them, commit as one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_try_batch", .{ .edits = .{
+        .{ .file = "notes/plan.txt", .hash = "absent", .content = "plan\n" },
+        .{ .file = "notes/cli.txt", .hash = "absent", .content = "assert one\nassert two\n" },
+    } });
+    try seq.write("emetgate_edit", .{ .file = "notes/cli.txt", .old_string = "assert one", .new_string = "assert uno" });
+    try seq.write("emetgate_edit", .{ .file = "notes/cli.txt", .old_string = "assert two", .new_string = "assert dos" });
+    try seq.commitAll(".gitignore\nnotes/cli.txt\nnotes/plan.txt\nsrc/math.ts\nsrc/util.ts\n");
+    try testing.expectEqualStrings("assert uno\nassert dos\n", try seq.git(&.{ "show", "HEAD:notes/cli.txt" }));
+}
+
+test "emetgate_commit: files created one by one with emetgate_write, one edited after, commit as one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "notes/a.txt", .content = "a\n" });
+    try seq.write("emetgate_write", .{ .file = "notes/b.txt", .content = "b one\n" });
+    try seq.write("emetgate_edit", .{ .file = "notes/b.txt", .old_string = "b one", .new_string = "b two" });
+    try seq.commitAll(".gitignore\nnotes/a.txt\nnotes/b.txt\nsrc/math.ts\nsrc/util.ts\n");
+}
+
+test "emetgate_commit: create, modify, modify again commits the last content" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "notes/c.txt", .content = "one\n" });
+    try seq.write("emetgate_write", .{ .file = "notes/c.txt", .content = "two\n" });
+    try seq.write("emetgate_edit", .{ .file = "notes/c.txt", .old_string = "two", .new_string = "three" });
+    try seq.commitAll(".gitignore\nnotes/c.txt\nsrc/math.ts\nsrc/util.ts\n");
+    try testing.expectEqualStrings("three\n", try seq.git(&.{ "show", "HEAD:notes/c.txt" }));
+}
+
+test "emetgate_commit: create, move, modify commits the file at its new place" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "src/d.ts", .content = "export const d = 1;\n" });
+    try seq.write("emetgate_move_file", .{ .from = try seq.abs("src/d.ts"), .to = try seq.abs("lib/d.ts"), .from_hash = try seq.fileHash("src/d.ts") });
+    try seq.write("emetgate_edit", .{ .file = "lib/d.ts", .old_string = "d = 1", .new_string = "d = 2" });
+    try seq.commitAll(".gitignore\nlib/d.ts\nsrc/math.ts\nsrc/util.ts\n");
+    try testing.expectEqualStrings("export const d = 2;\n", try seq.git(&.{ "show", "HEAD:lib/d.ts" }));
+}
+
+test "emetgate_commit: a tracked file moved, then modified, commits as the move" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_move_file", .{ .from = try seq.abs("src/util.ts"), .to = try seq.abs("lib/util.ts"), .from_hash = try seq.fileHash("src/util.ts") });
+    try seq.write("emetgate_edit", .{ .file = "lib/util.ts", .old_string = "x + x", .new_string = "2 * x" });
+    try seq.commitAll(".gitignore\nlib/util.ts\nsrc/math.ts\n");
+}
+
+test "emetgate_commit: a batch with two edits of a created file, then a batch deleting files, commit as one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "notes/e.txt", .content = "first\nsecond\n" });
+    try seq.write("emetgate_try_batch", .{ .edits = .{
+        .{ .file = try seq.abs("notes/e.txt"), .old_string = "first", .new_string = "1st" },
+        .{ .file = try seq.abs("notes/e.txt"), .old_string = "second", .new_string = "2nd" },
+        .{ .file = "notes/gone.txt", .hash = "absent", .content = "gone\n" },
+    } });
+    try seq.write("emetgate_try_batch", .{ .edits = .{
+        .{ .file = try seq.abs("notes/gone.txt"), .op = "delete", .hash = try seq.fileHash("notes/gone.txt") },
+        .{ .file = try seq.abs("src/util.ts"), .op = "delete", .hash = try seq.fileHash("src/util.ts") },
+    } });
+    try seq.commitAll(".gitignore\nnotes/e.txt\nsrc/math.ts\n");
+    try testing.expectEqualStrings("1st\n2nd\n", try seq.git(&.{ "show", "HEAD:notes/e.txt" }));
+}
+
+test "emetgate_commit: a created file staged by hand with other content is refused with a one-step fix" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "notes/f.txt", .content = "gated\n" });
+    try seq.case.repo.write("notes/f.txt", "by hand\n");
+    _ = try seq.git(&.{ "add", "--", "notes/f.txt" });
+    try seq.case.repo.write("notes/f.txt", "gated\n");
+    const before = try seq.arena().dupe(u8, try seq.case.head());
+
+    const refused = try seq.call("emetgate_commit", .{ .message = "feat: one commit" });
+    errdefer std.debug.print("emetgate_commit: {f}\n", .{std.json.fmt(refused, .{})});
+    try testing.expectEqualStrings("TargetHasUncommittedChanges", refused.object.get("error").?.string);
+    const paths = refused.object.get("paths") orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("notes/f.txt", paths.array.items[0].string);
+    const fix = (refused.object.get("fix") orelse return error.TestUnexpectedResult).string;
+    try testing.expect(std.mem.indexOf(u8, fix, "[\"restore\",\"--staged\",\"--\",\"notes/f.txt\"]") != null);
+    try testing.expectEqualStrings(before, try seq.case.head());
+    try testing.expect(std.mem.indexOf(u8, try seq.git(&.{ "diff", "--cached" }), "+by hand") != null);
+
+    _ = try seq.git(&.{ "restore", "--staged", "--", "notes/f.txt" });
+    try seq.commitAll(".gitignore\nnotes/f.txt\nsrc/math.ts\nsrc/util.ts\n");
+}
+
+test "emetgate_commit: a created file edited by hand after its gated writes is still refused as drift" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var seq: Sequence = undefined;
+    try seq.init();
+    defer seq.deinit();
+    try seq.write("emetgate_write", .{ .file = "notes/g.txt", .content = "gated\n" });
+    try seq.write("emetgate_edit", .{ .file = "notes/g.txt", .old_string = "gated", .new_string = "gated twice" });
+    try seq.case.repo.write("notes/g.txt", "by hand\n");
+    const before = try seq.arena().dupe(u8, try seq.case.head());
+    const refused = try seq.call("emetgate_commit", .{ .message = "feat: one commit" });
+    try testing.expectEqualStrings("UncertifiedChanges", refused.object.get("error").?.string);
+    try testing.expectEqualStrings(before, try seq.case.head());
+}
