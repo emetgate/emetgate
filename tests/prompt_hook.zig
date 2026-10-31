@@ -387,7 +387,7 @@ test "prompt hook: a /rule the grammar does not define answers with the usage an
     var repo = try Repo.init();
     defer repo.deinit();
 
-    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce]\n/rule list [--all] [--json]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n/rule forget <id>\n/rule pick [<numbers> [<path>]]   (pick rules from a catalog; /rule pick alone lists it)";
+    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce]\n/rule list [--all] [--json]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n/rule forget <id>\n/rule pick [<numbers> [in <path>]]   (pick rules from a catalog; pick alone lists it)\n/rule show <number>   (what a catalog rule checks)";
     const prompts = [_][]const u8{ "/rule", "/rule adopt x", "/rule add", "/rule add \"open", "/rule add t --check", "/rule forget a b", "/rule add no networkidle" };
     for (prompts) |prompt| {
         errdefer std.debug.print("prompt: {s}\n", .{prompt});
@@ -404,4 +404,56 @@ test "prompt hook: outside a repository a /rule prompt is still stopped, with th
     const reply = (try replyTo(error.NotAGitRepository, input)).?;
     defer reply.deinit();
     try testing.expectEqualStrings("error: NotAGitRepository", reply.reason());
+}
+
+test "prompt hook: /rule pick answers one short line, and /rule pick then marks what it enforces" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    const before = try say(&repo, "/rule pick");
+    defer before.deinit();
+    try testing.expect(!before.has("*"));
+    try testing.expect(std.mem.startsWith(u8, before.reason(), "/rule pick <numbers> [in <path>]"));
+
+    const picked = try say(&repo, "/rule pick 1 19 26");
+    defer picked.deinit();
+    try testing.expectEqualStrings("enforcing 3 rules: 1 no console.log, 19 no new comments, 26 no Co-authored-by", picked.reason());
+
+    const scoped = try say(&repo, "/rule pick 16 30 src/core in app/");
+    defer scoped.deinit();
+    try testing.expectEqualStrings("enforcing 2 rules: 16 no Console.WriteLine in app/, 30 freeze a path in src/core", scoped.reason());
+
+    const after = try say(&repo, "/rule pick");
+    defer after.deinit();
+    try testing.expect(after.has("  1 no console.log *"));
+    try testing.expect(after.has("19 no new comments *"));
+    try testing.expect(after.has("26 no Co-authored-by *"));
+    try testing.expect(after.has("30 freeze a path (needs a path: /rule pick 30 <path>) *"));
+    try testing.expect(after.has("\n\n* = already enforced here    /rule show N = what rule N checks"));
+    try testing.expectEqual(@as(usize, 6), std.mem.count(u8, after.reason(), "*"));
+    for (after.raw) |c| try testing.expect(c < 0x80);
+}
+
+test "prompt hook: /rule show N names the rule and its check, and a bad N names the range" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+
+    const thirty = try say(&repo, "/rule show 30");
+    defer thirty.deinit();
+    try testing.expectEqualStrings("30 freeze a path\napplies to: every language, the path you give: /rule pick 30 <path>\nchecks: frozen", thirty.reason());
+
+    const out_of_range = try say(&repo, "/rule show 31");
+    defer out_of_range.deinit();
+    try testing.expectEqualStrings("show 31: no such rule; give a number from 1 to 30", out_of_range.reason());
+    try repo.expectLedgerUntouched();
+}
+
+test "prompt hook: outside a repository /rule pick still lists the catalog with no marks" {
+    const input = try hookInput("/rule pick");
+    defer testing.allocator.free(input);
+    const reply = (try replyTo(error.NotAGitRepository, input)).?;
+    defer reply.deinit();
+    try testing.expect(std.mem.startsWith(u8, reply.reason(), "/rule pick <numbers> [in <path>]"));
+    try testing.expect(!reply.has("*"));
+    try testing.expect(!reply.has("error"));
 }
