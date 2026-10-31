@@ -204,8 +204,8 @@
     {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (line_start != null or line_end != null) {\n        return renderRange(",
-      "to": "    if (!raw and (line_start != null or line_end != null)) {\n        return renderRange(",
+      "from": "    if (options.line_start != null or options.line_end != null) {\n        return renderRange(",
+      "to": "    if (!options.raw and (options.line_start != null or options.line_end != null)) {\n        return renderRange(",
       "kills": [
         "read_file applies a line range to a raw read of a source file",
         "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
@@ -5013,8 +5013,8 @@
     {
       "id": "R1-mirror-hash-compare-skipped",
       "file": "src/protocol/mirror.zig",
-      "from": "if (std.mem.eql(u8, &old, &hash)) return .unchanged;",
-      "to": "if (!std.mem.eql(u8, &old, &hash)) return .unchanged;",
+      "from": "if (std.mem.eql(u8, &old.hash, &hash) and sameFileHash(old.file_hash, file_hash)) return old.call;",
+      "to": "if (!std.mem.eql(u8, &old.hash, &hash) and sameFileHash(old.file_hash, file_hash)) return old.call;",
       "kills": [
         "an enabled mirror reports unchanged for a repeated identical hash",
         "an enabled mirror reports changed once the hash moves, and remembers the new one"
@@ -5033,7 +5033,7 @@
     {
       "id": "R3-mirror-disabled-remembers-anyway",
       "file": "src/protocol/mirror.zig",
-      "from": "if (!self.enabled) return .changed;",
+      "from": "if (!self.enabled) return null;",
       "to": "",
       "kills": [
         "a disabled mirror always reports changed and remembers nothing"
@@ -5042,7 +5042,7 @@
     {
       "id": "R4-mirror-stale-hash-not-updated",
       "file": "src/protocol/mirror.zig",
-      "from": "slot.* = hash;",
+      "from": "slot.* = entry;",
       "to": "slot.* = slot.*;",
       "kills": [
         "with --mirror, a changed symbol body is reported again in full with its new hash"
@@ -13650,8 +13650,8 @@
     {
       "id": "RD3-truncated-read-covers-the-file",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
-      "to": "    try read_cache.recordWhole(gpa, mirror, file, symbol.fileHash(bytes));",
+      "from": "    if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, file_hash);",
+      "to": "    try read_cache.recordWhole(gpa, mirror, file, file_hash);",
       "kills": [
         "a truncated read_file does not cover a later line range read"
       ]
@@ -13659,8 +13659,8 @@
     {
       "id": "RD4-range-ignores-whole-read",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), force)) {",
-      "to": "    if (try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(bytes), true)) {",
+      "from": "    if (try read_cache.wholeSince(gpa, mirror, file, file_hash, force)) |since| {",
+      "to": "    if (try read_cache.wholeSince(gpa, mirror, file, file_hash, true)) |since| {",
       "kills": [
         "after a whole read_file, reads of its symbols and lines come back unchanged until the file changes or force is set"
       ]
@@ -13695,8 +13695,8 @@
     {
       "id": "RD8-force-does-not-bypass-whole-read",
       "file": "src/protocol/read_cache.zig",
-      "from": "    if (force or !m.enabled) return false;",
-      "to": "    if ((force and false) or !m.enabled) return false;",
+      "from": "    if (force or !m.enabled) return null;",
+      "to": "    if ((force and false) or !m.enabled) return null;",
       "kills": [
         "a whole read covers later reads of the same file only while its hash holds"
       ]
@@ -16428,7 +16428,7 @@
     {
       "id": "SRC10-new-file-stale-stage",
       "file": "src/platform/git_commit.zig",
-      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
       "to": "",
       "kills": [
         "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"

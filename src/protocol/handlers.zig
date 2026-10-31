@@ -77,6 +77,7 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     _ = test_command_mod.takeLate();
     test_debt.drop();
+    if (policy.mirror) |m| m.tick();
     defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
@@ -138,7 +139,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_edit")) return edit_tool.callEdit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write")) return edit_tool.callWrite(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }));
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }, policy.raw_code));
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
@@ -266,11 +267,11 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     const snapshot = loaded.snapshot;
     const whole = snapshot.source.len <= outline.threshold;
     const file_hash = symbol.fileHash(snapshot.source);
-    if (whole and try read_cache.coversWhole(gpa, mirror, file, file_hash, force)) {
+    if (whole) if (try read_cache.wholeSince(gpa, mirror, file, file_hash, force)) |since| {
         event.chars_emetgate = 0;
         event.chars_fullfile = snapshot.source.len;
-        return read_cache.writeCovered(w, file, null, file_hash);
-    }
+        return read_cache.writeCoveredSince(w, file, null, file_hash, since);
+    };
     const docs: ?doc_fold.Folded = if (whole) try doc_fold.fold(gpa, snapshot.profile, snapshot.tree, 0, @intCast(snapshot.source.len)) else null;
     defer if (docs) |d| d.deinit(gpa);
     const text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
@@ -279,10 +280,10 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     if (mirror) |m| {
         const key = try std.fmt.allocPrint(gpa, "skeleton:{s}", .{file});
         defer gpa.free(key);
-        if (try m.check(key, hash, force) == .unchanged) {
+        if (try m.seen(key, hash, file_hash, force)) |since| {
             event.chars_emetgate = 0;
             event.chars_fullfile = snapshot.source.len;
-            return wire.writeUnchanged(w, file, null, hash, file_hash);
+            return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
         }
     }
     const adopted = try rules.adoptedFor(gpa, io, place.root, place.rel);
@@ -724,10 +725,19 @@ fn callCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
+        if (err == error.TargetHasUncommittedChanges) stagedFix();
         try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
         break :blk true;
     };
     return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+fn stagedFix() void {
+    const prefix = tool_names.prefix();
+    const named = commit_refusal.peek() orelse return wire.setFix("the git index holds staged changes no emetgate write made on a file this commit carries; see them with {s}emetgate_git sub \"status\", unstage each with {s}emetgate_git_write args [\"restore\",\"--staged\",\"--\",\"<path>\"] (the file on disk stays), then call {s}emetgate_commit again", .{ prefix, prefix, prefix });
+    var paths = named.paths();
+    const path = paths.next() orelse "";
+    wire.setFix("the git index holds a staged copy of {s} that no emetgate write made; run {s}emetgate_git_write with args [\"restore\",\"--staged\",\"--\",\"{s}\"] (the file on disk stays as it is), then call {s}emetgate_commit again", .{ path, prefix, path, prefix });
 }
 
 fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {

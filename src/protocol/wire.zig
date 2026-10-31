@@ -431,7 +431,13 @@ pub fn writeFileHash(js: *std.json.Stringify, file_hash: symbol.Hash) !void {
     try js.write(hex[0..]);
 }
 
+pub const unchanged_hint = "same text as already sent this session; if it is no longer in your context, pass force:true to get it again";
+
 pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash, file_hash: ?symbol.Hash) !void {
+    return writeUnchangedSince(writer, file, unit, hash, file_hash, null);
+}
+
+pub fn writeUnchangedSince(writer: *Writer, file: []const u8, unit: ?[]const u8, hash: symbol.Hash, file_hash: ?symbol.Hash, since: ?u32) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -446,8 +452,12 @@ pub fn writeUnchanged(writer: *Writer, file: []const u8, unit: ?[]const u8, hash
     try js.objectField("hash");
     try js.write(hex[0..]);
     if (file_hash) |fh| try writeFileHash(&js, fh);
+    if (since) |call| {
+        try js.objectField("since_call");
+        try js.write(call);
+    }
     try js.objectField("hint");
-    try js.write("already sent unchanged this session; pass force:true to get the full content again");
+    try js.write(unchanged_hint);
     try js.endObject();
     try writer.writeByte('\n');
 }
