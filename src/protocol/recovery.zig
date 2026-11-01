@@ -5,6 +5,7 @@ const node_cas = @import("../engine/node_cas.zig");
 const repo = @import("../platform/repo.zig");
 const wire = @import("wire.zig");
 const tool_result = @import("tool_result.zig");
+const registry = @import("../engine/lang/registry.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -74,7 +75,16 @@ pub fn afterSymbolEdit(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]c
     symbolHint(gpa, io, runtime, root, "", file, sym, given, body, err);
 }
 
+fn bracedFile(file: []const u8) bool {
+    const profile = registry.forPath(file) orelse return true;
+    return profile.braces;
+}
+
 fn symbolHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, label: []const u8, file: []const u8, sym: []const u8, given: []const u8, body: []const u8, err: anyerror) void {
+    if (err == error.AmbiguousSymbol) {
+        _ = ambiguity(gpa, io, runtime, root, label, file, sym);
+        return;
+    }
     if (err == error.HashMismatch) {
         _ = staleSymbol(gpa, io, runtime, root, label, file, sym, given);
         return;
@@ -82,9 +92,44 @@ fn symbolHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     if (err != error.BodyEscape and err != error.MutationSyntaxInvalid) return;
     var what_buf: [160]u8 = undefined;
     const what = std.fmt.bufPrint(&what_buf, "the body of {s}", .{sym}) catch "the body";
-    if (unbalanced(label, what, body)) return;
+    if (bracedFile(file) and unbalanced(label, what, body)) return;
     if (err != error.BodyEscape or std.mem.eql(u8, given, symbol.absent_text)) return;
-    wire.setFix("{s}the body of {s} must be only its block, from its opening brace to its closing brace; anything before or after it reaches outside the symbol", .{ label, sym });
+    const wording = if (registry.forPath(file)) |profile| profile.body_wording else "its block, from its opening brace to its closing brace";
+    wire.setFix("{s}the body of {s} must be only {s}; anything before or after it reaches outside the symbol", .{ label, sym, wording });
+}
+
+pub fn ambiguity(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, label: []const u8, file: []const u8, sym: []const u8) bool {
+    const place = repo.jail(gpa, io, root, file) catch return false;
+    defer place.deinit(gpa);
+    const snapshot = Snapshot.load(runtime, io, .cwd(), place.abs) catch return false;
+    defer snapshot.destroy();
+    const table = snapshot.symbols() catch return false;
+    const ref = symbol.Ref.parse(gpa, sym) catch return false;
+    defer ref.deinit(gpa);
+    const found = table.candidates(gpa, ref) catch return false;
+    defer gpa.free(found);
+    if (found.len < 2) return false;
+    var buffer: [640]u8 = undefined;
+    wire.setFix("{s}", .{candidateList(&buffer, label, sym, found)});
+    return true;
+}
+
+fn candidateList(buffer: []u8, label: []const u8, sym: []const u8, found: []const symbol.Candidate) []const u8 {
+    var writer: std.Io.Writer = .fixed(buffer);
+    var identical = true;
+    for (found[1..]) |candidate| identical = identical and candidate.ref.eql(found[0].ref);
+    const reserve = 160;
+    writer.print("{s}{s} matches:", .{ label, sym }) catch return buffer[0..writer.end];
+    var shown: usize = 0;
+    for (found) |candidate| {
+        if (writer.end + reserve > buffer.len) break;
+        writer.print("{s} {f} (line {d})", .{ if (shown == 0) "" else ",", candidate.ref, candidate.line }) catch break;
+        shown += 1;
+    }
+    if (shown < found.len) writer.print(", and {d} more", .{found.len - shown}) catch {};
+    const advice = if (identical) "; these have the same ref, so edit one by its node (ids from emetgate_read_symbol line_start, line_end, nodes:true)" else "; send one of these refs";
+    writer.writeAll(advice) catch {};
+    return buffer[0..writer.end];
 }
 
 const Pair = struct { node: []const u8, text: []const u8, label: []const u8 };
@@ -116,7 +161,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
         for (pairs) |pair| {
             var what_buf: [96]u8 = undefined;
             const what = std.fmt.bufPrint(&what_buf, "{s}the text for node {s}", .{ pair.label, pair.node }) catch "the text";
-            if (unbalanced(label, what, pair.text)) return;
+            if (bracedFile(file) and unbalanced(label, what, pair.text)) return;
         }
         return;
     }
@@ -145,7 +190,7 @@ fn nodeHint(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, la
 pub fn afterBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, items: []const Value, err: anyerror) void {
     if (err == error.FileExists or err == error.HashMismatch) if (wholeFileHint(gpa, io, root, items)) return;
     if (err == error.FileExists) if (absentSectionHint(items)) return;
-    if (err != error.HashMismatch and err != error.MissingFileHash and err != error.BodyEscape and err != error.MutationSyntaxInvalid) return;
+    if (err != error.HashMismatch and err != error.MissingFileHash and err != error.BodyEscape and err != error.MutationSyntaxInvalid and err != error.AmbiguousSymbol) return;
     for (items, 0..) |item, i| {
         var label_buf: [24]u8 = undefined;
         const label = std.fmt.bufPrint(&label_buf, "edits[{d}]: ", .{i}) catch "";

@@ -47,7 +47,7 @@ The design follows LCF-style theorem provers, where an untrusted component may s
 
 **Content addressing.** Every symbol is identified by a reference (`Class.method`, `add`) and a 128-bit hash of its current content. A proposal must name the hash it was based on. If the file changed in the meantime, the hash no longer matches and the proposal is rejected. The model cannot overwrite code it has not seen.
 
-**AST-verified mutation.** A change replaces exactly one function body. The new body is spliced into the source by byte range and the whole file is re-parsed with tree-sitter. The kernel then checks that the result parses cleanly, that the body did not break out of its braces, that it is not an empty or placeholder body, and that every byte outside the target span is untouched.
+**AST-verified mutation.** A change replaces exactly one function body. The new body is spliced into the source by byte range and the whole file is re-parsed with tree-sitter. The kernel then checks that the result parses cleanly, that the body did not break out of its symbol, that it is not an empty or placeholder body, and that every byte outside the target span is untouched.
 
 **Boundedness.** Before running anything, the kernel computes whether the change can affect code beyond the symbol itself. The analysis is a positive, closed-world count: a change is `BOUNDED` only when every way it could escape has been ruled out, and the verdict carries its provenance. Anything the analysis cannot account for is `UNBOUNDED`.
 
@@ -614,8 +614,8 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used |
 | `emetgate_evidence` | The full code of up to 6 names. A name defined in several files returns every definition; `file.name` picks the definition in that file; an accessor is found by its bare name. A name that is not a symbol is reported with the closest symbols, and names past the limit are listed |
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
-| `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
-| `emetgate_read_symbol` | The source of one symbol, several symbols at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
+| `emetgate_skeleton` | Signatures and structure without bodies, a C# `=>` body shortened like a block, plus every adopted rule that covers the file (read-only) |
+| `emetgate_read_symbol` | The source of one symbol, declaration or statement, several at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
 | `emetgate_mutate` | Verify a proposed body structurally and return the result without writing |
 | `emetgate_try` | Verify, gate and commit a proposed body, or new text for one or more syntax nodes addressed by their hash |
 | `emetgate_try_batch` | Several proposals as one unit |
@@ -858,7 +858,8 @@ A 284-session measurement found that read tokens (`Read` plus shell `cat`/`sed`)
 about 57% of all tool-result tokens, three quarters of them a whole file, with a median
 of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
 
-- **Three levels for a source file of a registered language (TypeScript, JavaScript):**
+- **Three levels for a source file of a registered language (TypeScript, JavaScript,
+  Python, C#):**
   signatures (`emetgate_symbols`: ref, hash, line) → structure (`emetgate_skeleton`:
   every signature, bodies elided) → body (`emetgate_read_symbol`: one symbol, several at
   once, or a line range widened to the symbols it overlaps, each with its own hash). A
@@ -867,6 +868,42 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   `line_start`/`line_end` return just those lines. A range that runs past the end of the
   file comes back with `status: partial` and the line the file ends at; an inverted range
   is `InvalidLineRange` and one that starts after the last line is `LineOutOfRange`.
+- **Refs.** `emetgate_symbols` lists the ref of every member. Each one reads through
+  `emetgate_read_symbol` and writes through `emetgate_try` with the same ref and hash:
+
+  | Member | Python | C# |
+  |---|---|---|
+  | method, constructor | `A.f`, `A.__init__` | `Box.Add`, `Box.Box` |
+  | static method | `A.make@static` | `Box.Empty@static` |
+  | property | `A.size@get`, `A.size@set`, `A.size@delete` | `Box.Area@get`, `Box.Area@set` |
+  | event accessor | | `Box.Changed@add`, `Box.Changed@remove` |
+  | indexer | | `Box.this@get`, `Box.this@set` |
+  | operator, conversion | | `Box.operator+@static`, `Box.operator int@static` |
+  | destructor | | `Box.~Box` |
+  | explicit interface member | | `Box.IComparable.CompareTo` |
+  | overload | `A.f(int)` | `Box.Add(int)`, `Box.this(string)@get` |
+
+  An overload gets its parameter types in the ref only when a name would otherwise be
+  shared. A Python `@overload` stub is keyed; the implementation stays `A.f`, as a
+  TypeScript implementation does. A C# method with no overload answers to both `C.F` and
+  `C.F(int)`; once a second overload joins, `C.F` is ambiguous. Overloads that differ only
+  in generics or in `params` stay apart as well (`C.F<T>(List<T>)`, `C.F(params int[])`).
+
+  Python and C# also take a short ref: a namespace prefix, an outer class, `@static` and
+  the accessor can be left off where exactly one member fits, so `Box.Add(int)`,
+  `Empty` and `Box.Area` reach `Shop.Box.Add(int)`, `Shop.Box.Empty@static` and
+  `Shop.Box.Area@get`. A ref that fits several members is `AmbiguousSymbol`, and its `fix`
+  lists each one with its line (`C.F matches: C.F(int) (line 3), C.F(string) (line 4);
+  send one of these refs`). Two members with the same signature, as `#if` branches can
+  have, are listed the same way and have no ref of their own. TypeScript and JavaScript
+  ask for the whole ref.
+
+  A C# property with an accessor list is a declaration under its bare name: `C.P` is the
+  whole `int P { get; set; }`, and `C.P@get` is one accessor. A body in a `=>` or a block
+  can be sent back in either form.
+- **Docs.** The doc of a Python symbol is its docstring, which wins over a comment above
+  the `def` or `class`; the doc of a C# symbol is the text of the `<summary>` of its `///`
+  comment, without the XML. TypeScript and JavaScript keep the JSDoc or comment above.
 - **Read budget for long bodies.** A body longer than the read budget (8,192 characters,
   `emetgate mcp --read-budget <chars>` to change it) comes back with `status: partial`:
   the signature, an outline of its nested blocks (`if`, `for`, `try`, inner functions, each
@@ -1624,8 +1661,8 @@ On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, 
 | TypeScript | `.ts` | tree-sitter-typescript (typescript dialect) | full OOP conformance suite: classes, accessors, decorators |
 | TSX | `.tsx` | tree-sitter-typescript (tsx dialect) | same profile shape as TypeScript, plus JSX |
 | JavaScript | `.js`, `.mjs`, `.cjs`, `.jsx` | tree-sitter-javascript | JSX is parsed by the same grammar, no separate profile |
-| Python | `.py`, `.pyi` | tree-sitter-python | cross-reference facts and `emetgate_rename` |
-| C# | `.cs` | tree-sitter-c-sharp | cross-reference facts and `emetgate_rename` |
+| Python | `.py`, `.pyi` | tree-sitter-python | cross-reference facts and `emetgate_rename`; overload stubs, deleters and short refs (see Reader) |
+| C# | `.cs` | tree-sitter-c-sharp | cross-reference facts and `emetgate_rename`; every member kind, overloads and short refs (see Reader) |
 | Zig | `.zig` | tree-sitter-zig | top-level `fn` only; see the limits below |
 
 Zig does not share the class/getter/setter shape the generic conformance suite in

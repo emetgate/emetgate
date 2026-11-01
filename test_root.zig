@@ -319,6 +319,7 @@ test {
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/lang/python.zig");
     _ = @import("tests/lang/csharp_graph.zig");
+    _ = @import("tests/lang/member_refs.zig");
     _ = @import("tests/rename_facts.zig");
     _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/lang/zig/compat.zig");

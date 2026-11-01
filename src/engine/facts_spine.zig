@@ -122,11 +122,16 @@ pub const Frame = struct {
     signature_last: u32,
 };
 
+fn expressionBody(holder: ts.Node) ?ts.Node {
+    const value = holder.childByField("value") orelse return null;
+    return if (std.mem.eql(u8, value.kind(), "arrow_expression_clause")) value else null;
+}
+
 pub fn frameOf(tree: ts.Tree, lines: Lines, span: facts.Span) Frame {
     const first = lines.lineAt(span.start);
     const last = lines.lineAt(if (span.end > span.start) span.end - 1 else span.start);
     const holder = covering(tree.root(), span);
-    const body = holder.childByField("body");
+    const body = holder.childByField("body") orelse expressionBody(holder);
     const signature_end = if (body) |b| lines.lineAt(b.startByte()) else first;
     return .{ .holder = holder, .first = first, .last = last, .signature_last = @min(signature_end, last) };
 }

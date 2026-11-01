@@ -88,34 +88,51 @@ pub const profile: Profile = .{
     .literal_values = literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{},
+    .body_wording = "its indented statements, without the def line",
+    .braces = false,
+    .short_refs = true,
+    .parameterKey = parameterKey,
     .rename = &python_rename.grammar,
     .modules = &python_rename.modules,
     .declarations = python_rename.declarations,
     .facts = &python_facts.python,
 };
 
-const Decorated = enum { staticmethod, classmethod, property, setter };
+const Decorated = enum { staticmethod, classmethod, property, setter, deleter, getter, overload };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
     _ = self;
     _ = kind;
     const wrapper = node.parent() orelse return .{};
-    const owner = wrapper.parent() orelse return .{};
-    const class = owner.parent() orelse return .{};
-    if (!std.mem.eql(u8, owner.kind(), "block") or !std.mem.eql(u8, class.kind(), "class_definition")) return .{};
-    var traits: MemberTraits = .{};
+    const decorated = std.mem.eql(u8, wrapper.kind(), "decorated_definition");
+    const owner = if (decorated) wrapper.parent() else wrapper;
+    const class = if (owner) |o| o.parent() else null;
+    const in_class = if (class) |c| std.mem.eql(u8, owner.?.kind(), "block") and std.mem.eql(u8, c.kind(), "class_definition") else false;
+    var traits: MemberTraits = .{ .is_member = in_class };
+    if (in_class) if (node.childByField("name")) |name| {
+        traits.is_constructor = std.mem.eql(u8, tree.text(name), "__init__");
+    };
+    if (!decorated) return traits;
     var i: u32 = 0;
     while (wrapper.namedChild(i)) |decorator| : (i += 1) {
         if (!std.mem.eql(u8, decorator.kind(), "decorator")) continue;
         const expression = decorator.namedChild(0) orelse continue;
-        switch (decoratedAs(tree, expression) orelse continue) {
+        const decoration = decoratedAs(tree, expression) orelse continue;
+        if (decoration == .overload) {
+            traits.overload_stub = true;
+            continue;
+        }
+        if (!in_class) continue;
+        switch (decoration) {
             .staticmethod => {
                 traits.is_static = true;
                 traits.receiver = false;
             },
             .classmethod => traits.is_static = true,
-            .property => traits.accessor = .get,
+            .property, .getter => traits.accessor = .get,
             .setter => traits.accessor = .set,
+            .deleter => traits.accessor = .delete,
+            .overload => unreachable,
         }
     }
     return traits;
@@ -127,11 +144,46 @@ fn decoratedAs(tree: ts.Tree, expression: ts.Node) ?Decorated {
         if (std.mem.eql(u8, name, "staticmethod")) return .staticmethod;
         if (std.mem.eql(u8, name, "classmethod")) return .classmethod;
         if (std.mem.eql(u8, name, "property")) return .property;
+        if (std.mem.eql(u8, name, "overload")) return .overload;
         return null;
     }
     const attribute = expression.childByField("attribute") orelse return null;
     const name = tree.text(attribute);
-    return if (std.mem.eql(u8, name, "setter")) .setter else null;
+    if (std.mem.eql(u8, name, "setter")) return .setter;
+    if (std.mem.eql(u8, name, "deleter")) return .deleter;
+    if (std.mem.eql(u8, name, "getter")) return .getter;
+    if (std.mem.eql(u8, name, "overload")) return .overload;
+    return null;
+}
+
+fn parameterKey(arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node, full: bool) std.mem.Allocator.Error!?[]const u8 {
+    if (!std.mem.eql(u8, node.kind(), "function_definition")) return null;
+    const parameters = node.childByField("parameters") orelse return null;
+    var key: std.ArrayList(u8) = .empty;
+    try key.append(arena, '(');
+    var first = true;
+    var i: u32 = 0;
+    while (parameters.namedChild(i)) |parameter| : (i += 1) {
+        if (std.mem.eql(u8, parameter.kind(), "comment")) continue;
+        if (i == 0 and isReceiver(tree, parameter)) continue;
+        if (!first) try key.append(arena, ',');
+        first = false;
+        try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(if (full) parameter else parameterIdentity(parameter))));
+    }
+    try key.append(arena, ')');
+    return key.items;
+}
+
+fn isReceiver(tree: ts.Tree, parameter: ts.Node) bool {
+    if (!std.mem.eql(u8, parameter.kind(), "identifier")) return false;
+    const name = tree.text(parameter);
+    return std.mem.eql(u8, name, "self") or std.mem.eql(u8, name, "cls");
+}
+
+fn parameterIdentity(parameter: ts.Node) ts.Node {
+    if (parameter.childByField("type")) |annotation| return annotation;
+    if (std.mem.eql(u8, parameter.kind(), "default_parameter")) return parameter.childByField("name") orelse parameter;
+    return parameter;
 }
 
 const testing = std.testing;
@@ -239,11 +291,11 @@ test "python profile reads staticmethod, classmethod, property and setter decora
     const tree = try parser.parse(sample);
     defer tree.deinit();
 
-    try testing.expectEqual(MemberTraits{}, try traitsOf(tree, "greet"));
-    try testing.expectEqual(MemberTraits{ .is_static = true, .receiver = false }, try traitsOf(tree, "make"));
-    try testing.expectEqual(MemberTraits{ .is_static = true }, try traitsOf(tree, "build"));
-    try testing.expectEqual(MemberTraits{ .accessor = .get }, try traitsOf(tree, "size"));
-    try testing.expectEqual(MemberTraits{ .accessor = .set }, try traitsOf(tree, "resize"));
+    try testing.expectEqual(MemberTraits{ .is_member = true }, try traitsOf(tree, "greet"));
+    try testing.expectEqual(MemberTraits{ .is_static = true, .receiver = false, .is_member = true }, try traitsOf(tree, "make"));
+    try testing.expectEqual(MemberTraits{ .is_static = true, .is_member = true }, try traitsOf(tree, "build"));
+    try testing.expectEqual(MemberTraits{ .accessor = .get, .is_member = true }, try traitsOf(tree, "size"));
+    try testing.expectEqual(MemberTraits{ .accessor = .set, .is_member = true }, try traitsOf(tree, "resize"));
     try testing.expectEqual(MemberTraits{}, try traitsOf(tree, "loose"));
 }
 
