@@ -12,6 +12,7 @@ const where_mod = @import("where.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
 const commit_message = @import("commit_message.zig");
+const rule_catalog = @import("../protocol/rule_catalog.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
 const Allocator = std.mem.Allocator;
@@ -36,6 +37,7 @@ pub const Rule = struct {
     id: []const u8,
     check: []const u8,
     where: ?[]const u8 = null,
+    lang: rule_catalog.Lang = .universal,
 };
 
 pub const Enforced = struct {
@@ -88,7 +90,7 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     for (recall.decisions) |decision| {
         if (decision.status != .active or !decision.enforce) continue;
         const check = decision.check orelse continue;
-        try list.append(gpa, .{ .id = decision.id, .check = check, .where = decision.where });
+        try list.append(gpa, .{ .id = decision.id, .check = check, .where = decision.where, .lang = rule_catalog.langOf(decision.text, check) });
     }
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
@@ -421,7 +423,7 @@ fn evaluateKept(gpa: Allocator, file: []const u8, profile: *const Profile, tree:
     defer if (parser) |p| p.deinit();
 
     for (rules) |rule| {
-        if (isMessage(rule) or isFrozen(rule)) continue;
+        if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(profile.name)) continue;
         var old_texts: std.ArrayList([]const u8) = .empty;
         defer old_texts.deinit(gpa);
         if (isAdded(rule)) {
@@ -929,6 +931,17 @@ fn evaluateSource(source: []const u8, span: Span, rules: []const Rule) !?Report 
     const t = try test_util.TestTree.init(source);
     defer t.deinit();
     return reportOf(try evaluate(testing.allocator, "src/a.ts", test_util.language, t.tree, span, rules));
+}
+
+test "a rule runs only on the language its catalog entry names" {
+    const source = "function f() { debugger; }\n";
+    const whole: Span = .{ .start = 0, .end = source.len };
+    try testing.expect((try evaluateSource(source, whole, &.{.{ .id = "a", .check = "forbid:debugger", .lang = .python }})) == null);
+    try testing.expect((try evaluateSource(source, whole, &.{.{ .id = "a", .check = "forbid:debugger", .lang = .csharp }})) == null);
+    const found = (try evaluateSource(source, whole, &.{.{ .id = "a", .check = "forbid:debugger", .lang = .js_ts }})).?;
+    defer found.deinit(testing.allocator);
+    const universal = (try evaluateSource(source, whole, &.{.{ .id = "a", .check = "forbid:debugger" }})).?;
+    defer universal.deinit(testing.allocator);
 }
 
 test "a violation's text is cut to 256 bytes on a character boundary, its position still spans the node" {

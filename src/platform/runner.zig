@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
 const boundedness = @import("../engine/boundedness.zig");
 const shadow = @import("shadow.zig");
+const diagnostics = @import("../protocol/diagnostics.zig");
 const gate_tree = @import("gate_tree.zig");
 const shadow_root = @import("shadow_root.zig");
 const cache_gc = @import("cache_gc.zig");
@@ -132,12 +133,24 @@ pub fn runStages(gpa: Allocator, io: std.Io, cwd: []const u8, typecheck_command:
     defer gpa.free(cache);
     if (typecheck_command) |typecheck| {
         const checked = try runCommandWith(gpa, io, cwd, typecheck, limits, cache);
-        if (!checked.passed()) return .{ .typecheck = checked };
+        if (!checked.passed()) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };
         checked.deinit(gpa);
     }
-    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);
+    var report = try withoutGateDir(gpa, try runCommandWith(gpa, io, cwd, test_command, limits, cache), cwd);
     report.no_tests = test_outcome.noTests(report);
     return .{ .tests = report };
+}
+
+fn withoutGateDir(gpa: Allocator, report: sandbox.Report, dir: []const u8) !sandbox.Report {
+    errdefer report.deinit(gpa);
+    const stdout = try diagnostics.withoutDir(gpa, report.stdout, dir);
+    errdefer gpa.free(stdout);
+    const stderr = try diagnostics.withoutDir(gpa, report.stderr, dir);
+    report.deinit(gpa);
+    var clean = report;
+    clean.stdout = stdout;
+    clean.stderr = stderr;
+    return clean;
 }
 
 pub fn cacheDir(gpa: Allocator, cwd: []const u8) ![]u8 {

@@ -5,6 +5,7 @@ const runner = @import("runner.zig");
 const test_outcome = @import("test_outcome.zig");
 const output_digest = @import("../protocol/output_digest.zig");
 const failure_text = @import("../protocol/failure_text.zig");
+const diagnostics = @import("../protocol/diagnostics.zig");
 const test_results = @import("test_results.zig");
 const test_debt = @import("test_debt.zig");
 const test_command_mod = @import("test_command.zig");
@@ -96,6 +97,7 @@ pub fn noNewFailures(after: Failures, before: Failures) bool {
     for (after.keys) |key| {
         while (i < before.keys.len and before.keys[i] < key) i += 1;
         if (i == before.keys.len or before.keys[i] != key) return false;
+        i += 1;
     }
     return true;
 }
@@ -190,13 +192,21 @@ pub const Gate = struct {
 };
 
 fn reporterFor(gpa: Allocator, gate_dir: []const u8, command: []const u8) !?test_results.Reporter {
-    if (!test_command_mod.chosen(command)) return null;
     return test_results.Reporter.of(gpa, gate_dir, command);
 }
 
 fn runGate(gpa: Allocator, io: std.Io, gate: Gate, reporter: ?test_results.Reporter) !runner.ShadowRun {
     if (reporter) |r| r.clear(io);
-    return runner.runStages(gpa, io, gate.gate_dir, gate.typecheck_command, if (reporter) |r| r.command else gate.test_command, gate.limits);
+    const ran = try runner.runStages(gpa, io, gate.gate_dir, gate.typecheck_command, if (reporter) |r| r.command else gate.test_command, gate.limits);
+    const r = reporter orelse return ran;
+    switch (ran) {
+        .tests => |report| if (r.refused(report)) {
+            report.deinit(gpa);
+            return runner.runStages(gpa, io, gate.gate_dir, null, gate.test_command, gate.limits);
+        },
+        else => {},
+    }
+    return ran;
 }
 
 fn collected(gpa: Allocator, io: std.Io, reporter: ?test_results.Reporter, ran: runner.ShadowRun) !?test_results.Results {
@@ -231,9 +241,96 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
     const reporter = try reporterFor(gpa, gate.gate_dir, gate.test_command);
     defer if (reporter) |r| r.deinit(gpa);
     const after = try runGate(gpa, io, gate, reporter);
-    const stage: Stage, const report = switch (after) {
-        .typecheck => |r| .{ .typecheck, r },
-        .tests => |r| .{ .tests, r },
+    const checked = switch (after) {
+        .typecheck => |report| report,
+        else => return judgeTests(gpa, io, workspace, changes, gate, reporter, after),
+    };
+    errdefer checked.deinit(gpa);
+    if (!comparable(checked)) return after;
+    const key = try treeKey(gpa, io, gate.root, gate.typecheck_command, gate.test_command);
+    const before = lookup(key) orelse try measure(gpa, io, workspace, changes, gate, key, reporter);
+    if (!try typecheckAlreadyFailing(gpa, gate, checked, before)) return after;
+
+    var rest = gate;
+    rest.typecheck_command = null;
+    const ran = try judgeTests(gpa, io, workspace, changes, rest, reporter, try runGate(gpa, io, rest, reporter));
+    errdefer switch (ran) {
+        .typecheck, .tests => |report| report.deinit(gpa),
+        else => {},
+    };
+    const landed = switch (ran) {
+        .tests => |report| report.passed(),
+        else => false,
+    };
+    if (landed) {
+        if (gate.note) |n| {
+            if (!n.failing and !n.unverified and !n.debt) try noteExisting(gpa, n, .typecheck, checked);
+        }
+    }
+    checked.deinit(gpa);
+    return ran;
+}
+
+fn typecheckAlreadyFailing(gpa: Allocator, gate: Gate, report: sandbox.Report, before: Failures) !bool {
+    const keys = try failingKeys(gpa, .typecheck, report);
+    defer gpa.free(keys);
+    if (noNewFailures(.{ .stage = .typecheck, .keys = keys }, before)) return true;
+    if (before.stage != .typecheck or !test_command_mod.typecheckDetected(gate.typecheck_command)) return false;
+    return !try namesDiagnostics(gpa, report);
+}
+
+fn namesDiagnostics(gpa: Allocator, report: sandbox.Report) !bool {
+    for ([_][]const u8{ report.stdout, report.stderr }) |text| {
+        const found = try diagnostics.parse(gpa, text);
+        defer gpa.free(found);
+        if (found.len != 0) return true;
+    }
+    return false;
+}
+
+fn failingKeys(gpa: Allocator, stage: Stage, report: sandbox.Report) ![]u64 {
+    if (stage == .tests) return output_digest.failureKeys(gpa, report.stdout, report.stderr);
+    var keys: std.ArrayList(u64) = .empty;
+    errdefer keys.deinit(gpa);
+    var line: std.ArrayList(u8) = .empty;
+    defer line.deinit(gpa);
+    for ([_][]const u8{ report.stdout, report.stderr }) |text| {
+        const found = try diagnostics.parse(gpa, text);
+        defer gpa.free(found);
+        for (found) |d| {
+            line.clearRetainingCapacity();
+            try line.appendSlice(gpa, d.file);
+            try line.append(gpa, 0);
+            try line.appendSlice(gpa, d.message);
+            try keys.append(gpa, output_digest.failureKey(line.items));
+        }
+    }
+    if (keys.items.len == 0) return output_digest.failureKeys(gpa, report.stdout, report.stderr);
+    std.mem.sort(u64, keys.items, {}, std.sort.asc(u64));
+    return keys.toOwnedSlice(gpa);
+}
+
+fn noteExisting(gpa: Allocator, n: *Note, stage: Stage, report: sandbox.Report) !void {
+    if (test_outcome.envError(report)) |reason| {
+        n.unverified = true;
+        n.keep(unverified_prefix);
+        n.append(reason);
+        return;
+    }
+    n.failing = true;
+    try n.keepFailures(gpa, if (stage == .typecheck) .typecheck else .tests, report, &.{});
+    if (n.failures().len != 0) {
+        n.keep(same_failures);
+        return;
+    }
+    const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
+    defer gpa.free(digest.text);
+    n.keep(digest.text);
+}
+
+fn judgeTests(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Change, gate: Gate, reporter: ?test_results.Reporter, after: runner.ShadowRun) !runner.ShadowRun {
+    const report = switch (after) {
+        .tests => |r| r,
         else => return after,
     };
     errdefer report.deinit(gpa);
@@ -253,27 +350,11 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
     if (now) |results| {
         if (before.cases) |cases| return judged(gpa, io, changes, gate, report, cases, results.cases);
     }
-    const now_keys = try output_digest.failureKeys(gpa, report.stdout, report.stderr);
+    const now_keys = try failingKeys(gpa, .tests, report);
     defer gpa.free(now_keys);
-    if (!noNewFailures(.{ .stage = stage, .keys = now_keys }, before)) return after;
+    if (!noNewFailures(.{ .stage = .tests, .keys = now_keys }, before)) return after;
 
-    if (gate.note) |n| {
-        if (test_outcome.envError(report)) |reason| {
-            n.unverified = true;
-            n.keep(unverified_prefix);
-            n.append(reason);
-        } else {
-            n.failing = true;
-            try n.keepFailures(gpa, if (stage == .typecheck) .typecheck else .tests, report, &.{});
-            if (n.failures().len != 0) {
-                n.keep(same_failures);
-            } else {
-                const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
-                defer gpa.free(digest.text);
-                n.keep(digest.text);
-            }
-        }
-    }
+    if (gate.note) |n| try noteExisting(gpa, n, .tests, report);
     var accepted = report;
     accepted.outcome = .{ .exited = 0 };
     accepted.no_tests = false;
@@ -337,7 +418,7 @@ fn measure(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
     defer report.deinit(gpa);
     const results = if (stage == .tests) try collected(std.heap.page_allocator, io, reporter, base) else null;
     if (report.passed() or !comparable(report)) return remember(key, null, &.{}, results);
-    const keys = try output_digest.failureKeys(gpa, report.stdout, report.stderr);
+    const keys = try failingKeys(gpa, stage, report);
     defer gpa.free(keys);
     return remember(key, stage, keys, results);
 }
@@ -362,6 +443,7 @@ test "an edit is accepted only when its failures were already failing before it,
     try testing.expect(noNewFailures(.{ .stage = .tests, .keys = &.{ 3, 9 } }, before));
     try testing.expect(noNewFailures(.{ .stage = .tests, .keys = &.{ 3, 7, 9 } }, before));
     try testing.expect(!noNewFailures(.{ .stage = .tests, .keys = &.{ 3, 8 } }, before));
+    try testing.expect(!noNewFailures(.{ .stage = .tests, .keys = &.{ 3, 3 } }, before));
     try testing.expect(!noNewFailures(.{ .stage = .typecheck, .keys = &.{3} }, before));
     try testing.expect(!noNewFailures(.{ .stage = .tests, .keys = &.{} }, before));
     try testing.expect(!noNewFailures(.{ .stage = .tests, .keys = &.{3} }, .{ .stage = null, .keys = &.{} }));

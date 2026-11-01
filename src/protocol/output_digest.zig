@@ -266,7 +266,7 @@ pub fn failureKeys(gpa: Allocator, stdout: []const u8, stderr: []const u8) ![]u6
     return keys.toOwnedSlice(gpa);
 }
 
-fn failureKey(text: []const u8) u64 {
+pub fn failureKey(text: []const u8) u64 {
     var hasher = std.hash.Wyhash.init(0);
     var digits = false;
     for (text) |byte| {

@@ -507,8 +507,10 @@ fn declarationOf(profile: *const Profile, function: Function) Extent {
     const site = bindingSite(profile, function.node);
     const own = site orelse function.node;
     var statement: ?ts.Node = null;
-    if (own.parent()) |parent| {
-        if (isOneOf(parent.kind(), profile.declaration_statements)) statement = parent;
+    var above = own.parent();
+    while (above) |parent| : (above = parent.parent()) {
+        if (!isOneOf(parent.kind(), profile.declaration_statements)) break;
+        statement = parent;
     }
     var outer = statement orelse own;
     if (outer.parent()) |parent| {
@@ -528,6 +530,7 @@ fn declaratorCount(profile: *const Profile, statement: ts.Node) u32 {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
         if (std.mem.eql(u8, profile.declarator, child.kind())) count += 1;
+        if (isOneOf(child.kind(), profile.declaration_statements)) count += declaratorCount(profile, child);
     }
     return count;
 }
@@ -536,6 +539,7 @@ fn firstDeclaratorStart(profile: *const Profile, statement: ts.Node) u32 {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
         if (std.mem.eql(u8, profile.declarator, child.kind())) return child.startByte();
+        if (isOneOf(child.kind(), profile.declaration_statements)) return firstDeclaratorStart(profile, child);
     }
     return statement.startByte();
 }
