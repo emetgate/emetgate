@@ -185,6 +185,7 @@ pub const Modules = struct {
     aliased_import: []const u8 = "",
     wildcard_import: []const u8 = "",
     dotted_name: []const u8 = "",
+    type_declarations: []const []const u8 = &.{},
 };
 
 pub const DeclarationKind = enum { class, variable, interface, type_alias, enumeration, field, enum_member };
@@ -428,6 +429,8 @@ pub const Profile = struct {
     bodyless_terminator: ?[]const u8,
     empty_body: []const u8,
     expression_statement: []const u8,
+    loud_statement: ?*const fn (statement: ts.Node) bool = null,
+    eager_parameters: bool = false,
     prose_strings: []const []const u8,
     directives: []const []const u8,
     literal_values: LiteralValues,

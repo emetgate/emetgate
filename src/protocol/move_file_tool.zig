@@ -126,6 +126,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
                 .users = outcome.plan.users,
                 .rewritten = outcome.plan.rewritten,
                 .files = files,
+                .note = outcome.plan.note,
             }, note);
             try recordMoveFile(gpa, io, place.root, place.rel, outcome.plan, test_command, typecheck_command, event.trace.test_ms, w, if (commit) |*made| made else null);
             try receipt_note.commit(gpa, io, place.root, commit, w);

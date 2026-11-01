@@ -14,6 +14,9 @@ const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const runner = @import("runner.zig");
 const paths = @import("module_paths.zig");
+const py = @import("py_modules.zig");
+const py_file_move = @import("py_file_move.zig");
+const cs = @import("cs_modules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -28,7 +31,7 @@ pub const Request = struct {
     interface_change: bool = false,
 };
 
-pub const Resolver = enum { language_service, text };
+pub const Resolver = enum { language_service, text, module_graph };
 
 pub const Fault = enum { skip_user, skip_own_import };
 pub var injected_fault: ?Fault = null;
@@ -61,8 +64,10 @@ pub const Plan = struct {
     users: usize,
     rewritten: usize,
     interface_change: bool,
+    note: ?[]const u8 = null,
 
     pub fn deinit(self: Plan, gpa: Allocator) void {
+        if (self.note) |n| gpa.free(n);
         for (self.prepared) |p| p.deinit(gpa);
         for (self.edits) |e| {
             gpa.free(e.file_abs);
@@ -272,6 +277,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const moved = try loadSnapshot(w, request.from_abs, null);
     try opened.append(arena, moved);
     if (!std.mem.eql(u8, &symbol.fileHash(moved.source), &request.from_hash)) return error.HashMismatch;
+    if (paths.isPythonPath(request.from_abs)) return planPython(w, request, moved, &opened);
+    if (paths.isCsharpPath(request.from_abs)) return planCsharp(w, request, moved, &opened);
 
     const interface_change = try publicPath(w, request.from_abs);
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
@@ -389,6 +396,98 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     return result;
 }
 
+fn planPython(w: Work, request: Request, moved: *Snapshot, opened: *std.ArrayList(*Snapshot)) !Plan {
+    const cx: py.Cx = .{ .arena = w.arena, .io = w.io, .runtime = w.runtime, .root = w.root };
+    const planned = try py_file_move.plan(cx, request.from_abs, request.to_abs, moved, opened);
+    var found = planned.result;
+    if (faulted(.skip_user) and found.changes.len > 1) found.changes = found.changes[0 .. found.changes.len - 1];
+    if (found.interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
+    var files: std.ArrayList(FileEdits) = .empty;
+    for (found.changes) |change| {
+        var edits: FileEdits = .{ .abs = change.abs, .snapshot = change.snapshot };
+        for (change.edits.items) |e| try edits.rewrites.append(w.arena, .{ .file = change.abs, .start = e.start, .end = e.end, .text = e.text, .resolved = "" });
+        try files.append(w.arena, edits);
+    }
+    var afters: std.ArrayList(*Snapshot) = .empty;
+    defer for (afters.items) |s| s.destroy();
+    try graphAfters(w, request, files.items, &afters, false);
+    try py_file_move.prove(cx, request.from_abs, request.to_abs, opened, planned.all, found.changes, afters.items);
+    return finishGraph(w, request, files.items, &afters, opened, .{ .resolver = .module_graph, .fallback = null, .users = found.users, .rewritten = found.rewritten, .interface_change = found.interface_change, .note = found.note });
+}
+
+fn planCsharp(w: Work, request: Request, moved: *Snapshot, opened: *std.ArrayList(*Snapshot)) !Plan {
+    if (!paths.isCsharpPath(request.to_abs)) return error.UnsupportedLanguage;
+    const cx: cs.Cx = .{ .arena = w.arena, .io = w.io, .runtime = w.runtime, .root = w.root };
+    var found = try cs.planFile(cx, request.from_abs, request.to_abs, moved, opened);
+    if (faulted(.skip_user) and found.changes.len > 1) found.changes = found.changes[0 .. found.changes.len - 1];
+    if (found.users != 0 and !request.interface_change) return error.InterfaceChangeNeedsApproval;
+    var files: std.ArrayList(FileEdits) = .empty;
+    for (found.changes) |change| {
+        var edits: FileEdits = .{ .abs = change.abs, .snapshot = change.snapshot };
+        for (change.edits.items) |e| try edits.rewrites.append(w.arena, .{ .file = change.abs, .start = e.start, .end = e.end, .text = e.text, .resolved = "" });
+        try files.append(w.arena, edits);
+    }
+    var afters: std.ArrayList(*Snapshot) = .empty;
+    defer for (afters.items) |s| s.destroy();
+    try graphAfters(w, request, files.items, &afters, found.container_changes);
+    try cs.proveFile(cx, found, request.from_abs, request.to_abs, afters.items);
+    return finishGraph(w, request, files.items, &afters, opened, .{ .resolver = .module_graph, .fallback = null, .users = found.users, .rewritten = found.rewritten, .interface_change = found.users != 0, .note = found.note });
+}
+
+fn graphAfters(w: Work, request: Request, files: []FileEdits, afters: *std.ArrayList(*Snapshot), container_changes: bool) !void {
+    for (files, 0..) |f, i| {
+        const text = try applyRewrites(w.arena, f.snapshot.source, f.rewrites.items);
+        const where = if (i == 0) request.to_abs else f.abs;
+        const snapshot = loadSnapshot(w, where, text) catch |err| switch (err) {
+            error.SourceHasErrors => return error.MutationSyntaxInvalid,
+            else => |e| return e,
+        };
+        try afters.append(w.arena, snapshot);
+        try proveOnlyRewritten(f.snapshot, snapshot, f.rewrites.items, container_changes);
+    }
+}
+
+fn finishGraph(w: Work, request: Request, files: []const FileEdits, afters: *std.ArrayList(*Snapshot), opened: *std.ArrayList(*Snapshot), summary: Summary) !Plan {
+    const created = try missingDirs(w, request.to_abs);
+    const result = try build(w.gpa, w.root, request, files, afters.items, created, summary, afters);
+    for (result.prepared) |p| {
+        const base = p.base orelse continue;
+        for (opened.items, 0..) |held, i| {
+            if (held != base) continue;
+            _ = opened.swapRemove(i);
+            break;
+        }
+    }
+    return result;
+}
+
+fn touched(start: u32, end: u32, rewrites: anytype) bool {
+    for (rewrites) |r| {
+        if (r.start < end and start < r.end) return true;
+        if (r.start == r.end and start <= r.start and r.start < end) return true;
+    }
+    return false;
+}
+
+fn sameRef(a: symbol.Ref, b: symbol.Ref, container_changes: bool) bool {
+    if (!container_changes) return a.eql(b);
+    return std.mem.eql(u8, a.name, b.name);
+}
+
+pub fn proveOnlyRewritten(before: *Snapshot, after: *Snapshot, rewrites: anytype, container_changes: bool) !void {
+    const a = try before.symbols();
+    const b = after.symbols() catch return error.MutationSyntaxInvalid;
+    if (a.symbols.len != b.symbols.len or a.declarations.len != b.declarations.len) return error.BodyChanged;
+    for (a.symbols, b.symbols) |x, y| {
+        if (!sameRef(x.ref, y.ref, container_changes)) return error.BodyChanged;
+        if (!std.mem.eql(u8, &x.hash, &y.hash) and !touched(x.declaration.start, x.declaration.end, rewrites)) return error.BodyChanged;
+    }
+    for (a.declarations, b.declarations) |x, y| {
+        if (!sameRef(x.ref, y.ref, container_changes)) return error.BodyChanged;
+        if (!std.mem.eql(u8, &x.hash, &y.hash) and !touched(x.declaration.start, x.declaration.end, rewrites)) return error.BodyChanged;
+    }
+}
+
 fn rewriteHoles(gpa: Allocator, rewrites: []const Rewrite) ![]symbol.Hole {
     const holes = try gpa.alloc(symbol.Hole, rewrites.len);
     var shift: i64 = 0;
@@ -452,6 +551,7 @@ const Summary = struct {
     users: usize,
     rewritten: usize,
     interface_change: bool,
+    note: ?[]const u8 = null,
 };
 
 fn build(gpa: Allocator, root: []const u8, request: Request, files: []const FileEdits, afters: []const *Snapshot, created: []const []u8, summary: Summary, owned: *std.ArrayList(*Snapshot)) !Plan {
@@ -486,6 +586,7 @@ fn build(gpa: Allocator, root: []const u8, request: Request, files: []const File
         errdefer gpa.free(abs);
         const move_source: ?[]const u8 = if (moved) try gpa.dupe(u8, request.from_abs) else null;
         errdefer if (move_source) |m| gpa.free(m);
+        std.mem.sort(Rewrite, f.rewrites.items, {}, lessRewrite);
         const holes = try rewriteHoles(gpa, f.rewrites.items);
         const base = symbol.hashOf(f.snapshot.source);
         prepared[i] = .{
@@ -501,8 +602,10 @@ fn build(gpa: Allocator, root: []const u8, request: Request, files: []const File
         edits[i] = .{ .file_abs = abs, .ref_text = "", .expected_hash = .{ .present = base }, .move_source = move_source };
         built = i + 1;
     }
+    const note: ?[]const u8 = if (summary.note) |n| try gpa.dupe(u8, n) else null;
     owned.clearRetainingCapacity();
     return .{
+        .note = note,
         .prepared = prepared,
         .edits = edits,
         .created_dirs = dirs,

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2642**
-- Mutations declared in `tests/mutations.json`: **1786**
-  - killed: **1737**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2702**
+- Mutations declared in `tests/mutations.json`: **1790**
+  - killed: **1741**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1126 mutation(s).
+1130 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1889,6 +1889,10 @@ python tools/verification_page.py --check
 | `CE8-hook-records-nothing` | `src/protocol/context_epoch.zig` | `try record(gpa, io, file, input);` -> `_ = io;     _ = input;` | context epoch: the hook writes the file the environment names and writes nothin... | killed |
 | `CE9-settings-omit-the-session-hook` | `src/platform/lockdown_slash.zig` | `exe_abs, &session_args);` -> `exe_abs, &pretool_args);` | lockdown slash: the hooks are commands in exec form that name this executable | killed |
 | `CE12-served-policy-never-watches` | `src/protocol/server.zig` | `self.policy.context = if (policy.mirror_trusted or options.envi...` -> `self.policy.context = null;` | context epoch: a served policy watches the epoch unless --mirror trusts it or n... | killed |
+| `PY1-trailing-dot-import-is-a-module` | `src/platform/py_modules.zig` | `if (name.len == 0) return arena.dupe(u8, spec);` -> `` | python move: importers of every form follow a function to its new module | killed |
+| `PY2-attribute-assignment-runs-at-import` | `src/engine/lang/python/profile.zig` | `return !std.mem.eql(u8, left.kind(), "identifier");` -> `return std.mem.eql(u8, left.kind(), "");` | python move: code that runs at import needs order_change | killed |
+| `PY3-default-argument-runs-at-import` | `src/engine/lang/python/profile.zig` | `.eager_parameters = true,` -> `` | python move: code that runs at import needs order_change | killed |
+| `CS1-a-mention-must-resolve-the-same` | `src/platform/cs_modules.zig` | `if (!expected.eql(now)) return if (now == .ns or now == .ambigu...` -> `if (!expected.eql(now) and false) return error.IncompleteMove;` | csharp move_file: a using that would make another name ambiguous is refused | killed |
 
 ## What this system does not prove
 

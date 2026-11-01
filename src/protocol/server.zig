@@ -97,7 +97,7 @@ pub const tool_defs = [_]Tool{
         .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; docs fold, bodies over " ++ budget_text ++ " chars too, unless detail:\"full\". nodes:true adds node ids for emetgate_try.",
         .props = &.{
             .{ .name = "file", .desc = "" },
-            .{ .name = "symbol", .desc = "ref, e.g. Class.method or add", .optional = true },
+            .{ .name = "symbol", .desc = "e.g. Class.method or add", .optional = true },
             .{ .name = "symbols", .desc = "", .optional = true, .ty = "array" },
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
@@ -123,7 +123,7 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_rename",
         .description = "Renames a symbol and its references, gated; other files or exports need interface_change:true.",
         .props = &.{
-            .{ .name = "file", .desc = "TS, JS, Python or C# file declaring it" },
+            .{ .name = "file", .desc = "file declaring it" },
             .{ .name = "symbol", .desc = "" },
             .{ .name = "hash", .desc = "" },
             .{ .name = "new_name", .desc = "" },
@@ -133,19 +133,20 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_move",
-        .description = "Moves a top-level declaration to target_file, rewriting imports, gated. Exports need interface_change:true, side effects order_change:true.",
+        .description = "Moves a declaration, C# type or static C# member (target_type) to target_file, gated. Exports need interface_change:true, side effects order_change:true.",
         .props = &.{
-            .{ .name = "file", .desc = "TS or JS file declaring it" },
+            .{ .name = "file", .desc = "file declaring it" },
             .{ .name = "symbol", .desc = "" },
             .{ .name = "hash", .desc = "" },
             .{ .name = "target_file", .desc = "" },
+            .{ .name = "target_type", .desc = "C#: receiving type", .optional = true },
             .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "order_change", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_move_file",
-        .description = "Moves a TS/JS file, rewriting relative imports, gated; one named in package.json or tsconfig paths needs interface_change:true.",
+        .description = "Moves a source file, rewriting importers, gated; one named in project config needs interface_change:true.",
         .props = &.{
             .{ .name = "from", .desc = "" },
             .{ .name = "to", .desc = "must not exist" },
@@ -201,7 +202,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_scan",
-        .description = "Lists up to 100 violations of one check in tracked files.",
+        .description = "Lists up to 100 violations of one check.",
         .props = &.{
             .{ .name = "check", .desc = "e.g. forbid:networkidle" },
             .{ .name = "where", .desc = "file, dir/ or file#symbol", .optional = true },
@@ -240,7 +241,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_run",
         .description = run_tool.description,
-        .props = &.{.{ .name = "command", .desc = "one allowlist entry, verbatim", .optional = true }},
+        .props = &.{.{ .name = "command", .desc = "allowlist entry, verbatim", .optional = true }},
     },
     .{
         .name = "emetgate_edit",
@@ -533,7 +534,7 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
 }
 
 pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
-const commit_prop: Prop = .{ .name = "message", .desc = "commit message for this change" };
+const commit_prop: Prop = .{ .name = "message", .desc = "commit message" };
 
 fn commits(tool: []const u8) bool {
     for (commit_tools) |name| {

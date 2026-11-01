@@ -38,7 +38,7 @@ pub fn inspect(snapshot: *const Snapshot, slot: Span) Local {
     const statement = statementAt(snapshot.profile, root, slot) orelse return .{ .parses = !root.hasError(), .no_top_level_effect = false, .exported = false };
     return .{
         .parses = !root.hasError(),
-        .no_top_level_effect = !std.mem.eql(u8, statement.kind(), snapshot.profile.expression_statement) and !hasEffect(snapshot.profile, statement),
+        .no_top_level_effect = !statementHasEffect(snapshot.profile, statement),
         .exported = isExportWrapper(snapshot.profile, statement.kind()),
     };
 }
@@ -75,17 +75,35 @@ fn deferred(profile: *const Profile, kind: []const u8) bool {
     return function != .static_block;
 }
 
+fn signatureHasEffect(profile: *const Profile, function: ts.Node) bool {
+    if (!profile.eager_parameters) return false;
+    var i: u32 = 0;
+    while (function.child(i)) |child| : (i += 1) {
+        const field = function.fieldNameForChild(i) orelse "";
+        if (std.mem.eql(u8, field, "body")) continue;
+        if (hasEffect(profile, child)) return true;
+    }
+    return false;
+}
+
 fn hasEffect(profile: *const Profile, node: ts.Node) bool {
     if (isEffect(profile, node.kind())) return true;
     var i: u32 = 0;
     while (node.child(i)) |child| : (i += 1) {
-        if (deferred(profile, child.kind())) continue;
+        if (deferred(profile, child.kind())) {
+            if (signatureHasEffect(profile, child)) return true;
+            continue;
+        }
         if (hasEffect(profile, child)) return true;
     }
     return false;
 }
 
 pub fn statementHasEffect(profile: *const Profile, statement: ts.Node) bool {
+    if (profile.loud_statement) |loud| {
+        if (loud(statement)) return true;
+    }
+    if (deferred(profile, statement.kind())) return signatureHasEffect(profile, statement);
     return std.mem.eql(u8, statement.kind(), profile.expression_statement) or hasEffect(profile, statement);
 }
 
@@ -121,6 +139,12 @@ test "symmetry: a plain function declaration has no top-level effect" {
     try testing.expect(local.parses);
     try testing.expect(local.no_top_level_effect);
     try testing.expect(local.exported);
+}
+
+test "symmetry: a function that is not exported runs nothing where it is declared" {
+    const local = try inspectSource("function helper(a: number): number { return g(a); }\n", 0);
+    try testing.expect(local.parses);
+    try testing.expect(local.no_top_level_effect);
 }
 
 test "symmetry: a call, a new or an assignment in a top-level initializer is an effect" {

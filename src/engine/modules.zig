@@ -3,6 +3,7 @@ const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const scope = @import("scope.zig");
 const symmetry = @import("symmetry.zig");
+const facts = @import("facts.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 const test_util = @import("test_util.zig");
@@ -39,6 +40,10 @@ pub const Import = struct {
     namespace_start: u32 = 0,
     named: []const Named = &.{},
     scoped: bool = false,
+    spec_kind: facts.SpecKind = .static,
+    spec_scope: []const u8 = "",
+    global: bool = false,
+    spec_start: u32 = 0,
 };
 
 fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
@@ -92,6 +97,7 @@ fn namedList(arena: Allocator, snapshot: *const Snapshot, m: *const Modules, lis
 pub fn imports(arena: Allocator, snapshot: *const Snapshot) ![]Import {
     const m = snapshot.profile.modules orelse return error.UnsupportedLanguage;
     if (m.from_statement != null) return pythonImports(arena, snapshot, m);
+    if (m.type_declarations.len != 0) return (try csharpModule(arena, snapshot)).imports;
     var out: std.ArrayList(Import) = .empty;
     const root = snapshot.tree.root();
     var i: u32 = 0;
@@ -219,6 +225,89 @@ fn pythonImports(arena: Allocator, snapshot: *const Snapshot, m: *const Modules)
     }
     return out.items;
 }
+
+pub const CsharpModule = struct {
+    imports: []Import,
+    declared: []facts.Declared,
+};
+
+pub fn csharpModule(arena: Allocator, snapshot: *const Snapshot) !CsharpModule {
+    var walk: CsharpWalk = .{ .arena = arena, .snapshot = snapshot, .profile = snapshot.profile, .m = snapshot.profile.modules.? };
+    try walk.visit(snapshot.tree.root(), "");
+    return .{ .imports = walk.imports.items, .declared = walk.declared.items };
+}
+
+const CsharpWalk = struct {
+    arena: Allocator,
+    snapshot: *const Snapshot,
+    profile: *const Profile,
+    m: *const Modules,
+    imports: std.ArrayList(Import) = .empty,
+    declared: std.ArrayList(facts.Declared) = .empty,
+
+    fn joined(self: *CsharpWalk, outer: []const u8, name: []const u8) ![]const u8 {
+        if (outer.len == 0) return self.arena.dupe(u8, name);
+        return std.fmt.allocPrint(self.arena, "{s}.{s}", .{ outer, name });
+    }
+
+    fn visit(self: *CsharpWalk, holder: ts.Node, enclosing: []const u8) Allocator.Error!void {
+        const f = self.profile.facts.?;
+        var current = enclosing;
+        var i: u32 = 0;
+        while (holder.namedChild(i)) |child| : (i += 1) {
+            const kind = child.kind();
+            if (std.mem.eql(u8, kind, self.m.import_statement)) {
+                try self.using(child, current);
+            } else if (oneOf(kind, f.namespaces)) {
+                const name = child.childByField("name") orelse continue;
+                const full = try self.joined(enclosing, self.snapshot.tree.text(name));
+                try self.declared.append(self.arena, .{ .namespace = full, .name = "" });
+                if (child.childByField("body")) |body| try self.visit(body, full);
+            } else if (oneOf(kind, self.profile.file_scoped_containers)) {
+                const name = child.childByField("name") orelse continue;
+                current = try self.joined(enclosing, self.snapshot.tree.text(name));
+                try self.declared.append(self.arena, .{ .namespace = current, .name = "" });
+            } else if (oneOf(kind, self.m.type_declarations)) {
+                try self.declareType(child, current, "");
+            }
+        }
+    }
+
+    fn declareType(self: *CsharpWalk, node: ts.Node, namespace: []const u8, outer: []const u8) Allocator.Error!void {
+        const name = node.childByField("name") orelse return;
+        const full = try self.joined(outer, self.snapshot.tree.text(name));
+        try self.declared.append(self.arena, .{ .namespace = namespace, .name = full });
+        const body = node.childByField("body") orelse return;
+        var i: u32 = 0;
+        while (body.namedChild(i)) |child| : (i += 1) {
+            if (oneOf(child.kind(), self.m.type_declarations)) try self.declareType(child, namespace, full);
+        }
+    }
+
+    fn using(self: *CsharpWalk, directive: ts.Node, enclosing: []const u8) Allocator.Error!void {
+        const count = directive.namedChildCount();
+        if (count == 0) return;
+        const target = directive.namedChild(count - 1).?;
+        var entry: Import = .{
+            .statement = span(directive),
+            .spec = self.snapshot.tree.text(target),
+            .form = .bare,
+            .type_only = false,
+            .scoped = enclosing.len != 0,
+            .spec_kind = if (hasToken(directive, &.{"static"})) .using_static else .using,
+            .spec_scope = enclosing,
+            .global = hasToken(directive, &.{"global"}),
+            .spec_start = target.startByte(),
+        };
+        if (directive.childByField("name")) |alias| {
+            entry.form = .import;
+            entry.namespace = self.snapshot.tree.text(alias);
+            entry.namespace_start = alias.startByte();
+            entry.spec_kind = .using_alias;
+        }
+        try self.imports.append(self.arena, entry);
+    }
+};
 
 pub const DynamicSpec = struct {
     literal: ?[]const u8,
@@ -366,6 +455,32 @@ test "modules: a call or an expression at module level is an effect, declaration
     const statement = try test_util.snapshotOf(runtime, "console.log(1);\n");
     defer statement.destroy();
     try testing.expect(hasModuleEffects(statement));
+}
+
+fn pythonEffects(runtime: *@import("runtime.zig").Runtime, text: []const u8) !bool {
+    const owned = try runtime.gpa.dupe(u8, text);
+    const snapshot = try Snapshot.fromSource(runtime, @import("lang/registry.zig").forPath("a.py").?, owned);
+    defer snapshot.destroy();
+    return hasModuleEffects(snapshot);
+}
+
+test "modules: a python docstring, name binding and function are quiet, code that runs at import is not" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expect(!try pythonEffects(runtime, "\"\"\"Doc.\"\"\"\n\nimport os\n\nLIMIT = 3\n\ndef f():\n    return os.getcwd()\n\nclass C:\n    def m(self):\n        return print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "import os\n\nos.limit = 3\n"));
+    try testing.expect(try pythonEffects(runtime, "table = {}\ntable[0] = 3\n"));
+    try testing.expect(try pythonEffects(runtime, "LIMIT = print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "def f(x=print(1)):\n    return x\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    def m(self, x=print(1)):\n        return x\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    x = print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "@wrap\ndef f():\n    return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "total = 0\ntotal += 1\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    table[0] = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "assert True\n"));
+    try testing.expect(!try pythonEffects(runtime, "class P:\n    ...\n"));
+    try testing.expect(!try pythonEffects(runtime, "class P:\n    \"\"\"Doc.\"\"\"\n    size: int = 1\n"));
 }
 
 test "modules: the free names of a declaration are its imports, other declarations and globals, not its locals" {

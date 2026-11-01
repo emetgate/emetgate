@@ -29,7 +29,7 @@ const inert_sites = [_]BinderSite{
 };
 
 pub const modules: profile_mod.Modules = .{
-    .import_statement = "__csharp_no_import__",
+    .import_statement = "using_directive",
     .export_statement = "__csharp_no_export__",
     .source_field = "__csharp_no_source__",
     .declaration_field = "declaration",
@@ -44,6 +44,7 @@ pub const modules: profile_mod.Modules = .{
     .type_keywords = &.{},
     .default_keyword = "__csharp_no_default__",
     .star_token = "*",
+    .type_declarations = &.{ "class_declaration", "struct_declaration", "record_declaration", "interface_declaration", "enum_declaration", "delegate_declaration" },
 };
 
 pub const grammar: Rename = .{

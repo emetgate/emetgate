@@ -24,6 +24,7 @@ const Arguments = struct {
     symbol: []const u8,
     hash: []const u8,
     target: []const u8,
+    target_type: ?[]const u8,
     interface_change: bool,
     order_change: bool,
 };
@@ -34,6 +35,7 @@ pub fn callMove(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
         .symbol = try tool_result.requireString(args, "symbol"),
         .hash = try tool_result.requireString(args, "hash"),
         .target = try tool_result.requireString(args, "target_file"),
+        .target_type = tool_result.getString(args.?, "target_type"),
         .interface_change = tool_result.getBool(args.?, "interface_change") orelse false,
         .order_change = tool_result.getBool(args.?, "order_change") orelse false,
     };
@@ -92,7 +94,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
     const typecheck_command = try runner.resolveTypecheckCommand(gpa, io, place.abs, policy_mod.trustedTypecheckCommand(policy), policy.allow_repo_config);
     defer if (typecheck_command) |command| gpa.free(command);
     const outcome = try move_batch.tryMove(gpa, io, runtime, .{
-        .request = .{ .file_abs = place.abs, .ref_text = a.symbol, .expected_hash = hash, .target_abs = target.abs, .interface_change = a.interface_change, .order_change = a.order_change },
+        .request = .{ .file_abs = place.abs, .ref_text = a.symbol, .expected_hash = hash, .target_abs = target.abs, .target_type = a.target_type, .interface_change = a.interface_change, .order_change = a.order_change },
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,

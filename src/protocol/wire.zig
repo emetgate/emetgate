@@ -930,6 +930,7 @@ pub const FileMoveSummary = struct {
     users: usize,
     rewritten: usize,
     files: []const MovedFile,
+    note: ?[]const u8 = null,
 };
 
 pub fn writeFileMoveCommitted(writer: *Writer, summary: FileMoveSummary, note: ?ShadowNote) !void {
@@ -957,6 +958,10 @@ pub fn writeFileMoveCommitted(writer: *Writer, summary: FileMoveSummary, note: ?
     try js.write(summary.users);
     try js.objectField("imports_rewritten");
     try js.write(summary.rewritten);
+    if (summary.note) |text| {
+        try js.objectField("note");
+        try js.write(text);
+    }
     try js.objectField("files");
     try js.beginArray();
     for (summary.files) |file| {
@@ -1429,7 +1434,29 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "InvalidCommit", "commit is HEAD or a hash, optionally with ^ or ~N, e.g. HEAD~1 or abc1234^; a branch or tag name goes through args" },
     .{ "InvalidCount", "count is a positive integer" },
     .{ "SameFile", "the target is the source file; pick another target file" },
-    .{ "NotTopLevel", "only top-level declarations can be moved" },
+    .{ "NotTopLevel", "only top-level declarations can be moved; in C#, a top-level type, or a static member with target_type" },
+    .{ "MoveUnresolved", "no language service proved every reference: start one, or move the symbol with emetgate_try_batch so the gate checks each file" },
+    .{ "FileMoveUnresolved", "no language service proved every importer: start one, or move the file with emetgate_try_batch so the gate checks each file" },
+    .{ "PyImportUnprovable", "this import statement cannot be rewritten safely (a comment inside it, or several statements on its line): put it on its own line, then retry" },
+    .{ "PyRootStillUsed", "`import a.b` also binds `a` and the file still uses `a` for something else: write `import a` next to it, then retry" },
+    .{ "PyNameCapture", "the new path would change what an existing name or import means: rename the conflicting name or pick another target" },
+    .{ "PyTargetNotImportable", "no import path reaches the target: every directory on the way must be a valid identifier under the repo root, src or the importer's own script root" },
+    .{ "PyAmbiguousModule", "this import resolves to the moved module from more than one root: remove the duplicate module or use a relative import, then retry" },
+    .{ "PyChainThroughPackage", "the module is reached as an attribute of its package (`import pkg` then `pkg.mod`): import the module explicitly, then retry" },
+    .{ "PyStubCompanion", "a .py and .pyi pair must stay together: move the stub with emetgate_try_batch along with the module, or delete it first" },
+    .{ "PyInitWithSiblings", "moving a package __init__ alone splits the package: move the modules out first, or move the directory with emetgate_try_batch" },
+    .{ "PyModuleDunder", "the symbol reads a module attribute such as __name__ or __file__, which would change in the target module: pass the value in, then retry" },
+    .{ "PyGlobalState", "the symbol shares a module global that is rebound, and a copy imported elsewhere would go stale: reach it through its module first, then retry" },
+    .{ "PyFutureMismatch", "the source and target have different `from __future__` imports, which change how the symbol compiles: make them equal, then retry" },
+    .{ "CsNamespaceAlias", "a `using X = Namespace` alias names the namespace that changes: remove the alias or leave the type in its namespace, then retry" },
+    .{ "CsAmbiguousType", "the new namespace would make this type name ambiguous or shadow another: qualify the uses or pick another target, then retry" },
+    .{ "CsCompileInclude", "the .csproj lists this file in an explicit Compile item: update the project file with emetgate_write_doc after the move, or use emetgate_try_batch for both together" },
+    .{ "CsPartialType", "a partial type is declared in several files and they must share a namespace: move the parts together with emetgate_try_batch" },
+    .{ "CsFileScopedType", "a `file` type is only visible inside its own file: remove the modifier first, then retry" },
+    .{ "CsTargetNamespace", "the target has several namespaces, or a different global namespace layout, so the type has no single place: pick another target" },
+    .{ "MoveNeedsTargetType", "name the receiving type with target_type: the target file has more than one type or none" },
+    .{ "MoveMemberDependency", "the member uses other members of its own type without qualifying them, or is reached through a derived type or `using static`: qualify those uses or make it an instance of the target type first" },
+    .{ "MoveNotStatic", "only static or const members can move between types: an instance member depends on its object, so refactor with emetgate_try_batch" },
     .{ "ExportDefault", "a default export cannot be moved; move it by hand with emetgate_try_batch" },
     .{ "SharedStatement", "the declaration shares a statement with others; split it first, then move" },
     .{ "MoveNeedsExport", "the moved symbol is used by its old file; export it there or move by hand" },
@@ -1651,10 +1678,11 @@ pub fn exitCode(err: anyerror) u8 {
         error.RenameOutsideRepo => 44,
         error.ResolutionMismatch, error.MergedDeclaration => 42,
         error.SameFile, error.NotTopLevel, error.ExportDefault, error.SharedStatement, error.LocalExportClause, error.MoveNeedsExport, error.SourceDependencyNotExported, error.UnsupportedImport, error.UnresolvedImport => 45,
-        error.TargetNameTaken, error.TargetCapture, error.TargetAliasUse => 46,
+        error.TargetNameTaken, error.TargetCapture, error.TargetAliasUse, error.PyNameCapture, error.CsAmbiguousType => 46,
+        error.PyTargetNotImportable, error.PyStubCompanion, error.PyInitWithSiblings, error.PyModuleDunder, error.PyGlobalState, error.PyFutureMismatch, error.CsPartialType, error.CsFileScopedType, error.CsTargetNamespace, error.CsCompileInclude, error.MoveNeedsTargetType, error.MoveMemberDependency, error.MoveNotStatic => 45,
         error.ImportCycle => 47,
         error.ModuleSideEffect, error.DeclaredSideEffect => 48,
-        error.ReExported, error.NamespaceImportUse, error.UnhandledReference, error.MoveUnresolved => 49,
+        error.ReExported, error.NamespaceImportUse, error.UnhandledReference, error.MoveUnresolved, error.PyChainThroughPackage, error.PyRootStillUsed, error.PyImportUnprovable, error.PyAmbiguousModule, error.CsNamespaceAlias => 49,
         error.ContentHashMismatch, error.BodyChanged, error.IncompleteMove, error.MovedImportBroken => 50,
         error.NoClobber, error.CaseOnlyRename => 51,
         error.DynamicPathUse, error.FileMoveUnresolved, error.ServiceMismatch => 52,

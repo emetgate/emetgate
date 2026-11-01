@@ -114,12 +114,19 @@ pub const Ref = struct {
     static: bool = false,
 };
 
-pub const SpecKind = enum(u8) { static, dynamic };
+pub const SpecKind = enum(u8) { static, dynamic, submodule, using, using_static, using_alias };
 
 pub const Spec = struct {
     text: []const u8,
     line: u32,
     kind: SpecKind,
+    scope: []const u8 = "",
+    global: bool = false,
+};
+
+pub const Declared = struct {
+    namespace: []const u8,
+    name: []const u8,
 };
 
 pub const namespace_name = "*";
@@ -245,6 +252,7 @@ pub const FileFacts = struct {
     parse_errors: bool,
     outline: []const Outline = &.{},
     tests: []const TestBlock = &.{},
+    namespaces: []const Declared = &.{},
     map: MapFacts = .{},
 };
 
@@ -280,6 +288,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
     for (from.specs, specs) |s, *slot| {
         slot.* = s;
         slot.text = try c.str(s.text);
+        slot.scope = try c.str(s.scope);
     }
     const bindings = try arena.alloc(Binding, from.bindings.len);
     for (from.bindings, bindings) |b, *slot| {
@@ -311,6 +320,11 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
     for (from.tests, tests) |t, *slot| {
         slot.* = t;
         slot.title = try c.str(t.title);
+    }
+    const namespaces = try arena.alloc(Declared, from.namespaces.len);
+    for (from.namespaces, namespaces) |n, *slot| {
+        slot.namespace = try c.str(n.namespace);
+        slot.name = try c.str(n.name);
     }
     const map_entries = try arena.alloc(MapEntry, from.map.entries.len);
     for (from.map.entries, map_entries) |m, *slot| {
@@ -351,6 +365,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         .parse_errors = from.parse_errors,
         .outline = try arena.dupe(Outline, from.outline),
         .tests = tests,
+        .namespaces = namespaces,
         .map = .{ .test_content = from.map.test_content, .entries = map_entries, .groups = map_groups, .mounts = map_mounts },
     };
 }
