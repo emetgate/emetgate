@@ -43,6 +43,7 @@ pub const Policy = struct {
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
     commit: bool = false,
+    open_run: bool = false,
     shadow_tree: ?shadow.TreeMode = null,
     shadow_private: [max_private][]const u8 = undefined,
     shadow_private_len: usize = 0,
@@ -63,6 +64,7 @@ pub const Policy = struct {
 };
 
 pub const max_private = 32;
+pub const open_run_flag = "--open-run";
 
 pub fn parseTree(text: []const u8) ?shadow.TreeMode {
     if (std.mem.eql(u8, text, "kept")) return .kept;
@@ -118,6 +120,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--commit")) {
             if (policy.commit) return null;
             policy.commit = true;
+        } else if (std.mem.eql(u8, arg, open_run_flag)) {
+            if (policy.open_run) return null;
+            policy.open_run = true;
         } else if (std.mem.eql(u8, arg, "--tool-prefix")) {
             if (policy.tool_prefix.len != 0 or i + 1 >= args.len) return null;
             i += 1;

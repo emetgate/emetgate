@@ -16,6 +16,8 @@ pub const Event = struct {
     label: []const u8 = "ok",
     file: ?[]const u8 = null,
     symbol: ?[]const u8 = null,
+    command: ?[]const u8 = null,
+    exit_code: ?i64 = null,
     outcome: Outcome = .ok,
     result: ?[]const u8 = null,
     reason: ?[]const u8 = null,
@@ -116,6 +118,12 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
     try js.write(event.file);
     try js.objectField("symbol");
     try js.write(event.symbol);
+    if (event.command) |command| {
+        try js.objectField("command");
+        try js.write(command);
+        try js.objectField("exit_code");
+        try js.write(event.exit_code);
+    }
     try js.objectField("class");
     try js.write(event.trace.class);
     try js.objectField("confidence");

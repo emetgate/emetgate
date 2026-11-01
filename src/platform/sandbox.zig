@@ -58,6 +58,7 @@ pub const Command = struct {
     backend: Backend = .low_integrity,
     temp: ?[]const u8 = null,
     env: []const EnvVar = &.{},
+    verbatim_tail: ?[]const u8 = null,
 };
 
 const ntstatus_error_floor: u32 = 0xC0000000;
@@ -368,7 +369,7 @@ fn spawnRestricted(gpa: Allocator, backend: SpawnBackend, command: Command, stdi
     const arena = arena_state.allocator();
 
     const program = try resolveProgram(arena, command.cwd, command.argv[0]);
-    const command_line = try commandLine(arena, command.argv);
+    const command_line = try commandLine(arena, command.argv, command.verbatim_tail);
     const cwd = try std.unicode.wtf8ToWtf16LeAllocZ(arena, command.cwd);
     const environment: ?*anyopaque = @ptrCast((try commandEnvironment(arena, command)).ptr);
 
@@ -671,7 +672,7 @@ fn existingFile(arena: Allocator, path: []const u8) ?[:0]u16 {
     return wide;
 }
 
-fn commandLine(arena: Allocator, argv: []const []const u8) ![:0]u16 {
+fn commandLine(arena: Allocator, argv: []const []const u8, verbatim_tail: ?[]const u8) ![:0]u16 {
     var buf: std.ArrayList(u8) = .empty;
     const arg0 = argv[0];
     var needs_quotes = arg0.len == 0;
@@ -708,6 +709,11 @@ fn commandLine(arena: Allocator, argv: []const []const u8) ![:0]u16 {
         };
         try buf.appendNTimes(arena, '\\', backslashes * 2);
         try buf.append(arena, '"');
+    }
+    if (verbatim_tail) |tail| {
+        if (std.mem.indexOfScalar(u8, tail, 0) != null) return error.FileNotFound;
+        try buf.append(arena, ' ');
+        try buf.appendSlice(arena, tail);
     }
     return std.unicode.wtf8ToWtf16LeAllocZ(arena, buf.items);
 }

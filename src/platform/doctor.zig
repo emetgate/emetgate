@@ -120,6 +120,8 @@ pub fn codePageCheck(code_page: u32) Check {
 pub fn hint(err: anyerror) ?[]const u8 {
     return switch (err) {
         error.ClaudeNotFound => "claude (Claude Code) is not on PATH; install it with: " ++ claude_install ++ "  then open a new terminal",
+        error.ClaudeOnlyUnderWorkingDir => "claude is on PATH only in a folder inside the current folder (npm puts it in %APPDATA%\npm, inside your home), and lockdown runs no program from there so a planted claude cannot start; cd into a project folder and run lockdown again",
+        error.LockdownInitRefused => "this folder is not a git repository, and lockdown runs git init only in a project folder, not in a drive root, your home or a folder holding it, or a folder that holds user profiles or other repositories; cd into a project folder (or run git init there yourself) and run lockdown again",
         error.ClaudeTerminated => "claude exited abnormally; run `claude` alone to see why, then `emetgate doctor`",
         error.GitNotFound => "git is not on PATH; install it with: " ++ git_install ++ "  then open a new terminal",
         error.NotInRepo => "this folder is not inside a git repository; cd into your project or run: git init",
@@ -187,6 +189,10 @@ fn selfCheck(arena: Allocator, probe: Probe) Check {
 
 fn appendClaude(arena: Allocator, io: std.Io, probe: Probe, checks: *std.ArrayList(Check)) !void {
     const claude = exe_path.resolve(arena, probe.claude, null) catch {
+        if (try exe_path.skipped(arena, probe.claude, null)) |planted| {
+            try checks.append(arena, .{ .name = "claude", .status = .fail, .detail = try std.fmt.allocPrint(arena, "skipped {s}: its PATH folder lies inside the current folder, and lockdown runs no program from there", .{planted}), .fix = "cd into a project folder and run emetgate doctor again" });
+            return;
+        }
         try checks.append(arena, .{ .name = "claude", .status = .fail, .detail = "claude (Claude Code CLI) is not on PATH", .fix = claude_install });
         return;
     };

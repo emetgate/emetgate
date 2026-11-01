@@ -415,6 +415,10 @@ pub fn storeLog(gpa: Allocator, io: std.Io, root_abs: []const u8, report: sandbo
 }
 
 pub fn writeLog(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, w: *std.Io.Writer) !bool {
+    return writeLogLimited(gpa, io, root_abs, id, w, max_log_lines, max_log_bytes);
+}
+
+pub fn writeLogLimited(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, w: *std.Io.Writer, lines: usize, bytes_cap: usize) !bool {
     const path = try logPath(gpa, root_abs, id);
     defer gpa.free(path);
     var js: std.json.Stringify = .{ .writer = w };
@@ -431,7 +435,7 @@ pub fn writeLog(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8
         return true;
     };
     defer gpa.free(bytes);
-    const cut = run_command.tail(bytes, max_log_lines, max_log_bytes);
+    const cut = run_command.tail(bytes, lines, bytes_cap);
     try js.beginObject();
     try js.objectField("status");
     try js.write("log");
