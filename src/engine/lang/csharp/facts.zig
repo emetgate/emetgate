@@ -44,6 +44,7 @@ pub const csharp: Facts = .{
     .test_file_infixes = &.{ ".Tests.", ".Test." },
     .test_dirs = &.{},
     .doc_directives = &doc_directives,
+    .xml_docs = true,
     .member = "member_access_expression",
     .object_field = "expression",
     .property_field = "name",

@@ -323,6 +323,10 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     if (symbols) |list| {
         renderSymbolBodies(gpa, io, runtime, root, file, list, force, nodes, reading, mirror, tree_cache, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
+            if (err == error.AmbiguousSymbol) for (list) |item| switch (item) {
+                .string => |text| if (recovery.ambiguity(gpa, io, runtime, root, "", file, text)) break,
+                else => {},
+            };
             return failure(gpa, &buffer, err, event);
         };
         return success(gpa, &buffer);
@@ -331,6 +335,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     event.symbol = sym;
     renderSymbolBody(gpa, io, runtime, root, file, sym, force, nodes, reading, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
+        if (err == error.AmbiguousSymbol) _ = recovery.ambiguity(gpa, io, runtime, root, "", file, sym);
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
@@ -357,9 +362,9 @@ fn mirrorKey(gpa: Allocator, file: []const u8, sym: []const u8, folded: bool) ![
     return std.fmt.allocPrint(gpa, "{s}:{s}#{s}", .{ if (folded) "folded" else "symbol", file, sym });
 }
 
-fn signatureOf(snapshot: *const Snapshot, found: *const symbol.Symbol) []const u8 {
-    const start = found.declaration.start;
-    const body_start = found.body.startByte();
+fn signatureOf(snapshot: *const Snapshot, found: symbol.Item) []const u8 {
+    const start = found.span.start;
+    const body_start = (found.body orelse return "").startByte();
     if (body_start <= start) return "";
     return std.mem.trim(u8, snapshot.source[start..body_start], " \t\r\n");
 }
@@ -369,6 +374,11 @@ fn firstLineOf(text: []const u8) []const u8 {
     return std.mem.trim(u8, text[0..end], " \t\r\n");
 }
 
+fn shownSpan(found: symbol.Item) symbol.Span {
+    const body = found.body orelse return found.span;
+    return .{ .start = body.startByte(), .end = body.endByte() };
+}
+
 fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, sym: []const u8, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
@@ -376,11 +386,12 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     const table = try snapshot.symbols();
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
-    const found = try table.resolve(ref);
+    const found = try table.item(ref);
     event.hash = found.hash;
-    const docs = if (nodes) null else try reading.foldDocs(gpa, snapshot, found.body.startByte(), found.body.endByte());
+    const shown = shownSpan(found);
+    const docs = if (nodes) null else try reading.foldDocs(gpa, snapshot, shown.start, shown.end);
     defer if (docs) |d| d.deinit(gpa);
-    const body = if (docs) |d| d.text else snapshot.tree.text(found.body);
+    const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
     const folds = !nodes and reading.folds(body.len);
     if (!nodes and try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force)) {
         event.chars_emetgate = 0;
@@ -398,7 +409,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     };
     event.chars_fullfile = snapshot.source.len;
     if (nodes) {
-        const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.declaration);
+        const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
         defer gpa.free(annotated);
         event.chars_emetgate = annotated.len;
         return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
@@ -406,7 +417,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     if (folds) {
         const lines = try read_budget.Lines.init(gpa, snapshot.source);
         defer lines.deinit(gpa);
-        const view = try read_budget.fold(gpa, snapshot.source, lines, found.body, reading.budget);
+        const view = try read_budget.fold(gpa, snapshot.source, lines, found.body orelse found.node, reading.budget);
         defer view.deinit(gpa);
         event.chars_emetgate = view.text.len;
         return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
@@ -443,18 +454,19 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         };
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
-        const found = try table.resolve(ref);
+        const found = try table.item(ref);
+        const shown = shownSpan(found);
         if (nodes) {
-            const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.declaration);
+            const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
             entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
             annotated = i + 1;
             chars += text.len;
             continue;
         }
         try folded_docs.ensureUnusedCapacity(gpa, 1);
-        const docs = try reading.foldDocs(gpa, snapshot, found.body.startByte(), found.body.endByte());
+        const docs = try reading.foldDocs(gpa, snapshot, shown.start, shown.end);
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
-        const body = if (docs) |d| d.text else snapshot.tree.text(found.body);
+        const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
         const folds = reading.folds(body.len);
         var unchanged = covered;
         if (!covered) if (mirror) |m| {
@@ -467,7 +479,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         if (unchanged) continue;
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
-            const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body, reading.budget);
+            const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body orelse found.node, reading.budget);
             entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
             chars += view.text.len;
             continue;
@@ -591,8 +603,9 @@ fn renderMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     defer base.destroy();
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     if (expected == .present) {
-        const target = try (try base.symbols()).resolve(ref);
-        event.chars_sr = target.body.endByte() - target.body.startByte() + body.len;
+        const target = try (try base.symbols()).item(ref);
+        const shown = shownSpan(target);
+        event.chars_sr = shown.end - shown.start + body.len;
     }
     const applied = try cas.propose(base, ref, expected, body);
     defer applied.snapshot.destroy();

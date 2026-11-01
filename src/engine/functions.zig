@@ -18,8 +18,10 @@ pub const Function = struct {
 };
 
 pub fn classify(profile: *const Profile, node: ts.Node) ?Function {
-    const kind = profile.functionKind(node.kind()) orelse return null;
-    const body = node.childByField("body") orelse return null;
+    const entry = profile.functionNode(node.kind()) orelse return null;
+    const kind = entry.kind;
+    const body = node.childByField(entry.body_field) orelse return null;
+    if (entry.body_only) |only| if (!std.mem.eql(u8, only, body.kind())) return null;
     return .{
         .node = node,
         .kind = kind,
@@ -31,16 +33,24 @@ pub fn classify(profile: *const Profile, node: ts.Node) ?Function {
 
 fn resolveName(profile: *const Profile, node: ts.Node, kind: FunctionKind) ?ts.Node {
     if (profile.functionName(node.kind())) |named| {
-        const field = named.field orelse return null;
+        const field = named.field orelse return if (named.token) |token| childOfKind(node, token) else null;
         var owner = node;
         for (0..named.owner_depth) |_| owner = owner.parent() orelse return null;
-        return owner.childByField(field);
+        return owner.childByField(field) orelse if (named.token) |token| childOfKind(owner, token) else null;
     }
     const own = node.childByField("name");
     return switch (kind) {
         .declaration, .generator_declaration, .method => own,
         else => bindingName(profile, node) orelse own,
     };
+}
+
+pub fn childOfKind(node: ts.Node, kind: []const u8) ?ts.Node {
+    var i: u32 = 0;
+    while (node.child(i)) |child| : (i += 1) {
+        if (std.mem.eql(u8, child.kind(), kind)) return child;
+    }
+    return null;
 }
 
 pub fn bindingSite(profile: *const Profile, node: ts.Node) ?ts.Node {
