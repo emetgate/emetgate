@@ -69,10 +69,30 @@ pub const LiteralValues = struct {
     substitution: []const u8,
     quoted_key_content: []const u8 = "",
     bare_pair_key: bool = true,
-    named_argument: []const u8 = "",
+    named_arguments: []const []const u8 = &.{},
     named_argument_name_field: []const u8 = "",
     named_argument_value_field: []const u8 = "",
+    pair_parent: []const u8 = "",
+    equals_pairs: []const []const u8 = &.{},
+    entry_pair: []const u8 = "",
+    indexed_key: []const u8 = "",
+    negation_unary: []const u8 = "",
 };
+
+pub const ImportForms = struct {
+    calls: []const []const u8 = &.{},
+    dotted: bool = false,
+    directive: []const u8 = "",
+};
+
+pub fn calleeIsOneOf(callee: []const u8, names: []const []const u8) bool {
+    for (names) |name| {
+        if (name.len != 0 and name[0] == '.') {
+            if (std.mem.endsWith(u8, callee, name)) return true;
+        } else if (std.mem.eql(u8, callee, name)) return true;
+    }
+    return false;
+}
 
 pub const Namespace = enum {
     value,
@@ -430,6 +450,11 @@ pub const Profile = struct {
     declarations: Declarations = .{},
     facts: ?*const Facts = null,
     map: ?*const MapTable = null,
+    import_forms: ImportForms = .{},
+    docstrings: bool = false,
+    definition_wrappers: []const []const u8 = &.{},
+    commented_definitions: []const []const u8 = &.{},
+    uncommented_definitions: []const []const u8 = &.{},
 
     pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;

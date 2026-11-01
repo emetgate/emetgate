@@ -63,21 +63,7 @@ const markers = [_]Marker{
     .{ .file = "go.mod", .command = "go test ./..." },
 };
 
-threadlocal var chosen_buffer: [640]u8 = undefined;
-threadlocal var chosen_len: usize = 0;
-
-pub fn chosen(command: []const u8) bool {
-    return chosen_len != 0 and std.mem.eql(u8, command, chosen_buffer[0..chosen_len]);
-}
-
 pub fn detectIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
-    const found = (try detectRaw(gpa, io, root_abs)) orelse return null;
-    chosen_len = if (found.len <= chosen_buffer.len) found.len else 0;
-    @memcpy(chosen_buffer[0..chosen_len], found[0..chosen_len]);
-    return found;
-}
-
-fn detectRaw(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]const u8 {
     var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return null;
     defer dir.close(io);
     if (try packageTestScript(gpa, io, dir)) return "npm test";
@@ -270,22 +256,26 @@ pub fn mentionsPytest(bytes: []const u8) bool {
 }
 
 fn hasPytest(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {
+    return hasPackage(gpa, io, dir, "pytest");
+}
+
+fn hasPackage(gpa: Allocator, io: std.Io, dir: std.Io.Dir, package: []const u8) !bool {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     if (venvOf(io, dir)) |venv| {
         const site = try std.fmt.allocPrint(arena, "{s}\\Lib\\site-packages", .{venv});
-        if (siteHasPytest(arena, io, dir, site)) return true;
+        if (siteHas(arena, io, dir, site, package)) return true;
         const home = (try systemSiteHome(arena, io, dir, venv)) orelse return false;
-        return interpreterHasPytest(arena, io, home);
+        return interpreterHas(arena, io, home, package);
     }
     const home = (try pathInterpreter(arena, io)) orelse return false;
-    return interpreterHasPytest(arena, io, home);
+    return interpreterHas(arena, io, home, package);
 }
 
-fn siteHasPytest(arena: Allocator, io: std.Io, dir: std.Io.Dir, site: []const u8) bool {
-    for ([_][]const u8{ "pytest", "pytest.py" }) |name| {
-        const path = std.fmt.allocPrint(arena, "{s}\\{s}", .{ site, name }) catch return false;
+fn siteHas(arena: Allocator, io: std.Io, dir: std.Io.Dir, site: []const u8, package: []const u8) bool {
+    for ([_][]const u8{ "", ".py" }) |tail| {
+        const path = std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ site, package, tail }) catch return false;
         if (dir.access(io, path, .{})) |_| return true else |_| {}
     }
     return false;
@@ -325,10 +315,11 @@ fn pathInterpreter(arena: Allocator, io: std.Io) !?[]const u8 {
     return null;
 }
 
-fn interpreterHasPytest(arena: Allocator, io: std.Io, home: []const u8) bool {
+fn interpreterHas(arena: Allocator, io: std.Io, home: []const u8, package: []const u8) bool {
     var dir = std.Io.Dir.openDirAbsolute(io, home, .{ .iterate = true }) catch return false;
     defer dir.close(io);
-    if (siteHasPytest(arena, io, dir, "Lib\\site-packages")) return true;
+    if (siteHas(arena, io, dir, "Lib\\site-packages", package)) return true;
+    if (dir.access(io, "..\\pyvenv.cfg", .{})) |_| return siteHas(arena, io, dir, "..\\Lib\\site-packages", package) else |_| {}
     const appdata = (sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("APPDATA")) catch return false) orelse return false;
     var it = dir.iterate();
     while (it.next(io) catch null) |entry| {
@@ -337,7 +328,7 @@ fn interpreterHasPytest(arena: Allocator, io: std.Io, home: []const u8) bool {
         var user = std.Io.Dir.openDirAbsolute(io, appdata, .{}) catch return false;
         defer user.close(io);
         const site = std.fmt.allocPrint(arena, "Python\\Python{s}\\site-packages", .{version}) catch return false;
-        return siteHasPytest(arena, io, user, site);
+        return siteHas(arena, io, user, site, package);
     }
     return false;
 }
@@ -414,14 +405,135 @@ fn packageTestScript(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {
 }
 
 pub fn resolveTypecheckCommand(gpa: Allocator, io: std.Io, file_abs: []const u8, given: []const u8, allow_repo_config: bool) !?[]u8 {
-    if (given.len != 0) return try gpa.dupe(u8, given);
-    if (!allow_repo_config) return null;
+    found_typecheck_len = 0;
+    const detecting = detects(given);
+    if (given.len != 0 and !detecting) return try gpa.dupe(u8, given);
+    if (!allow_repo_config and !detecting) return null;
 
     const root = try repo.toplevelOf(gpa, io, file_abs);
     defer gpa.free(root);
-    const repo_path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, config_file });
-    defer gpa.free(repo_path);
-    return readConfigCommand(gpa, io, repo_path, .typecheck_cmd);
+    if (allow_repo_config) {
+        const repo_path = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, config_file });
+        defer gpa.free(repo_path);
+        if (try readConfigCommand(gpa, io, repo_path, .typecheck_cmd)) |command| return command;
+    }
+    if (!detecting) return null;
+    const found = (try detectTypecheckIn(gpa, io, root)) orelse return null;
+    found_typecheck_len = if (found.len <= found_typecheck.len) found.len else 0;
+    @memcpy(found_typecheck[0..found_typecheck_len], found[0..found_typecheck_len]);
+    return found;
+}
+
+threadlocal var found_typecheck: [640]u8 = undefined;
+threadlocal var found_typecheck_len: usize = 0;
+
+pub fn typecheckDetected(command: ?[]const u8) bool {
+    const given = command orelse return false;
+    return found_typecheck_len != 0 and std.mem.eql(u8, given, found_typecheck[0..found_typecheck_len]);
+}
+
+pub fn detectTypecheckIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]u8 {
+    var dir = std.Io.Dir.openDirAbsolute(io, root_abs, .{ .iterate = true }) catch return null;
+    defer dir.close(io);
+    if (try mypyCommand(gpa, io, dir)) |command| return command;
+    if (try pyrightCommand(gpa, io, dir)) |command| return command;
+    return dotnetBuild(gpa, io, dir);
+}
+
+pub fn configSection(bytes: []const u8, header: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, bytes, '\n');
+    while (lines.next()) |raw| {
+        if (!std.mem.eql(u8, std.mem.trim(u8, raw, " \t\r"), header)) continue;
+        const start = lines.index orelse bytes.len;
+        while (lines.next()) |line| {
+            if (line.len != 0 and line[0] == '[') return bytes[start .. lines.index.? - line.len - 1];
+        }
+        return bytes[start..];
+    }
+    return null;
+}
+
+pub fn sectionSets(section: []const u8, key: []const u8) bool {
+    var lines = std.mem.tokenizeAny(u8, section, "\r\n");
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t");
+        if (!std.mem.startsWith(u8, line, key)) continue;
+        if (std.mem.startsWith(u8, std.mem.trimStart(u8, line[key.len..], " \t"), "=")) return true;
+    }
+    return false;
+}
+
+const ConfigSection = struct { file: []const u8, header: []const u8 };
+
+const mypy_configs = [_]ConfigSection{
+    .{ .file = "mypy.ini", .header = "[mypy]" },
+    .{ .file = ".mypy.ini", .header = "[mypy]" },
+    .{ .file = "pyproject.toml", .header = "[tool.mypy]" },
+    .{ .file = "setup.cfg", .header = "[mypy]" },
+};
+
+fn mypyCommand(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {
+    for (mypy_configs) |config| {
+        const bytes = dir.readFileAlloc(io, config.file, gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        defer gpa.free(bytes);
+        const section = configSection(bytes, config.header) orelse continue;
+        if (!try hasPackage(gpa, io, dir, "mypy")) return null;
+        const run = if (sectionSets(section, "files")) "-m mypy" else "-m mypy .";
+        return try gpa.dupe(u8, pythonCommand(io, dir, run));
+    }
+    return null;
+}
+
+fn pyrightConfigured(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !bool {
+    if (dir.access(io, "pyrightconfig.json", .{})) |_| return true else |_| {}
+    const bytes = dir.readFileAlloc(io, "pyproject.toml", gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return false,
+    };
+    defer gpa.free(bytes);
+    return configSection(bytes, "[tool.pyright]") != null;
+}
+
+fn pyrightCommand(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {
+    if (!try pyrightConfigured(gpa, io, dir)) return null;
+    for (venv_dirs) |venv| {
+        var buffer: [32]u8 = undefined;
+        const exe = try std.fmt.bufPrint(&buffer, "{s}\\Scripts\\pyright.exe", .{venv});
+        if (dir.access(io, exe, .{})) |_| return try std.fmt.allocPrint(gpa, "{s}\\Scripts\\pyright", .{venv}) else |_| {}
+    }
+    if (dir.access(io, "node_modules\\.bin\\pyright.cmd", .{})) |_| return try gpa.dupe(u8, "node_modules\\.bin\\pyright") else |_| {}
+    if (try onPath(gpa, io, &.{ "pyright.exe", "pyright.cmd" })) return try gpa.dupe(u8, "pyright");
+    return null;
+}
+
+fn dotnetBuild(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {
+    var roots: usize = 0;
+    var it = dir.iterate();
+    while (it.next(io) catch null) |entry| {
+        if (entry.kind == .file and isDotnetRoot(entry.name)) roots += 1;
+    }
+    if (roots != 1 or !try onPath(gpa, io, &.{"dotnet.exe"})) return null;
+    return try gpa.dupe(u8, "dotnet build");
+}
+
+fn onPath(gpa: Allocator, io: std.Io, names: []const []const u8) !bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const path = path_override orelse (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH"))) orelse return false;
+    var entries = std.mem.tokenizeScalar(u8, path, ';');
+    while (entries.next()) |raw| {
+        const entry = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
+        if (entry.len == 0 or !std.fs.path.isAbsolute(entry)) continue;
+        for (names) |name| {
+            const exe = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ entry, name });
+            if (std.Io.Dir.cwd().access(io, exe, .{})) |_| return true else |_| {}
+        }
+    }
+    return false;
 }
 
 const ConfigField = enum { test_cmd, typecheck_cmd };

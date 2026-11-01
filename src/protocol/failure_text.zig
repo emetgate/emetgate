@@ -527,7 +527,8 @@ fn located(line: []const u8) ?[]const u8 {
 
 const excluded_errors = [_][]const u8{ "error: could not compile", "error: aborting due to", "error: the following", "error: Recipe", "error: script ", "error: process didn't exit", "error: test failed", "error: build failed", "error: Command failed" };
 
-fn compileHeader(line: []const u8, stage: Stage) bool {
+fn compileHeader(raw: []const u8, stage: Stage) bool {
+    const line = if (std.mem.indexOf(u8, raw, " - error: ") != null) trimLeft(raw) else raw;
     if (line.len == 0 or line[0] == ' ' or line[0] == '\t') return false;
     if (startsAny(line, &excluded_errors)) return false;
     if (std.mem.startsWith(u8, line, "Traceback (most recent call last)")) return true;

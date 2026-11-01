@@ -1077,7 +1077,7 @@
     {
       "id": "T1-typecheck-failure-ignored",
       "file": "src/platform/runner.zig",
-      "from": "        if (!checked.passed()) return .{ .typecheck = checked };\n",
+      "from": "        if (!checked.passed()) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };\n",
       "to": "",
       "kills": [
         "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
@@ -1244,8 +1244,8 @@
     {
       "id": "R3-checks-use-strict-exemption-removed",
       "file": "src/engine/checks.zig",
-      "from": "    return !isDirective(profile, tree, node);",
-      "to": "    return !isDirective(profile, tree, node) or true;",
+      "from": "return !isDirective(profile, tree, node) and !isDocstring(profile, tree, node);",
+      "to": "return !isDocstring(profile, tree, node);",
       "kills": [
         "no_comment allows a use strict directive only in the directive prologue"
       ]
@@ -1274,8 +1274,8 @@
     {
       "id": "R6-checks-span-boundary-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
-      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
+      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (isShebang(tree, node)) continue;",
+      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (isShebang(tree, node)) continue;",
       "kills": [
         "no_comment ignores comments outside the span",
         "no_comment flags a comment inside the span even when others sit outside it"
@@ -2519,8 +2519,8 @@
     {
       "id": "SP20-ledger-rule-drops-where",
       "file": "src/platform/rules.zig",
-      "from": ", .where = decision.where, .text = decision.text });",
-      "to": ", .text = decision.text });",
+      "from": ".check = check, .where = decision.where, .text",
+      "to": ".check = check, .text",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
@@ -2691,8 +2691,8 @@
     {
       "id": "NL1-literal-option-name-ignored",
       "file": "src/engine/checks.zig",
-      "from": "keyName(shape, tree, key), name)) continue;",
-      "to": "keyName(shape, tree, key), name) and false) continue;",
+      "from": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) continue;",
+      "to": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and false) continue;",
       "kills": [
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal matches a quoted key but not a computed one",
@@ -2708,8 +2708,8 @@
     {
       "id": "NL2-literal-value-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (!isLiteral(shape, tree, value)) continue;",
-      "to": "if (!isLiteral(shape, tree, value) and false) continue;",
+      "from": "if (!isLiteral(shape, tree, pair.value)) continue;",
+      "to": "if (!isLiteral(shape, tree, pair.value) and false) continue;",
       "kills": [
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
@@ -2739,8 +2739,8 @@
     {
       "id": "NL4-literal-pair-outside-span-reported",
       "file": "src/engine/checks.zig",
-      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        const fields = literalFields(shape, node)",
-      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        const fields = literalFields(shape, node)",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        if (isOneOf(node.kind(), shape.equals_pairs)) {",
+      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        if (isOneOf(node.kind(), shape.equals_pairs)) {",
       "kills": [
         "no_literal reports only pairs inside the span",
         "scope: a no_literal rule scoped to one symbol reports only its literal options"
@@ -2832,8 +2832,8 @@
     {
       "id": "NL10-literal-quoted-key-escape-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (key.namedChildCount() != 1) return \"\";",
-      "to": "if (key.namedChildCount() == 0) return \"\";",
+      "from": "if (key.namedChildCount() != 1) return \"\";\n    return tree.text(key.namedChild(0).?);",
+      "to": "if (key.namedChildCount() == 0) return \"\";\n    return tree.text(key.namedChild(0).?);",
       "kills": [
         "no_literal matches a quoted key but not a computed one"
       ],
@@ -2886,8 +2886,8 @@
     {
       "id": "NL14-literal-pair-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (isKind(node, shape.pair)) return .{ .key",
-      "to": "if (true) return .{ .key",
+      "from": "if (isKind(node, shape.pair)) {\n        if (shape.pair_parent",
+      "to": "if (true) {\n        if (shape.pair_parent",
       "filter": [
         "no_literal"
       ],
@@ -3370,8 +3370,8 @@
     {
       "id": "CR10-typecheck-stage-swallows-crash",
       "file": "src/platform/runner.zig",
-      "from": "if (!checked.passed()) return .{ .typecheck = checked };",
-      "to": "if (!checked.passed() and checked.outcome != .crashed) return .{ .typecheck = checked };",
+      "from": "if (!checked.passed()) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };",
+      "to": "if (!checked.passed() and checked.outcome != .crashed) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };",
       "kills": [
         "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
         "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched"
@@ -9500,8 +9500,8 @@
     {
       "id": "MR1-message-rule-reaches-the-code-gate",
       "file": "src/platform/rules.zig",
-      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
-      "to": "        if (isFrozen(rule)) continue;\n",
+      "from": "        if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
+      "to": "        if (isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
       "kills": [
         "a message rule is kept out of the code gate, which would otherwise fail closed on it"
       ],
@@ -10516,8 +10516,8 @@
     {
       "id": "FZ7-frozen-rule-run-as-a-tree-check",
       "file": "src/platform/rules.zig",
-      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
-      "to": "        if (isMessage(rule)) continue;\n",
+      "from": "        if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
+      "to": "        if (isMessage(rule) or !rule.lang.covers(profile.name)) continue;\n",
       "kills": [
         "frozen: the code rules that read a tree take a frozen rule as nothing to check"
       ]
@@ -12857,8 +12857,8 @@
     {
       "id": "PY-NL2-keyword-argument-ignored",
       "file": "src/engine/checks.zig",
-      "from": "    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
-      "to": "    if (false and shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "from": "if (isOneOf(node.kind(), shape.named_arguments)) {\n        return .{ .key = node.childByField",
+      "to": "if (false and isOneOf(node.kind(), shape.named_arguments)) {\n        return .{ .key = node.childByField",
       "kills": [
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ]
@@ -12866,7 +12866,7 @@
     {
       "id": "PY-NL3-bare-dict-key-taken-as-option-name",
       "file": "src/engine/checks.zig",
-      "from": "        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;\n",
+      "from": "        if (!pair.bare_key and !isKind(pair.key, shape.quoted_key)) continue;\n",
       "to": "",
       "kills": [
         "python: no_literal leaves computed, named, interpolated and differently named values alone"
@@ -12974,8 +12974,8 @@
     {
       "id": "PY-FI1-python-import-shape-ignored",
       "file": "src/engine/checks.zig",
-      "from": "        if (m.from_statement) |from_statement| {\n",
-      "to": "        if (@as(?[]const u8, null)) |from_statement| {\n",
+      "from": "} else if (m.from_statement) |from_statement| {",
+      "to": "} else if (@as(?[]const u8, null)) |from_statement| {",
       "kills": [
         "python presets flag the construct itself and not a name, string or comment that mentions it"
       ]
@@ -14668,8 +14668,8 @@
     {
       "id": "NT4-no-tests-not-recorded-by-gate",
       "file": "src/platform/runner.zig",
-      "from": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = test_outcome.noTests(report);\n",
-      "to": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = false;\n",
+      "from": "    var report = try withoutGateDir(gpa, try runCommandWith(gpa, io, cwd, test_command, limits, cache), cwd);\n    report.no_tests = test_outcome.noTests(report);\n",
+      "to": "    var report = try withoutGateDir(gpa, try runCommandWith(gpa, io, cwd, test_command, limits, cache), cwd);\n    report.no_tests = false;\n",
       "kills": [
         "a gated test run that collected no tests passes with a note instead of failing the write"
       ]
@@ -15765,8 +15765,8 @@
     {
       "id": "L5I-venv-pytest-unseen",
       "file": "src/platform/test_command.zig",
-      "from": "        if (siteHasPytest(arena, io, dir, site)) return true;\n",
-      "to": "        _ = site;\n",
+      "from": "        if (siteHas(arena, io, dir, site, package)) return true;\n        const home = (try systemSiteHome",
+      "to": "        _ = .{ site, package };\n        const home = (try systemSiteHome",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -16338,8 +16338,8 @@
     {
       "id": "SCR10-env-error-taken-as-failing-baseline",
       "file": "src/platform/baseline.zig",
-      "from": "        if (test_outcome.envError(report)) |reason| {",
-      "to": "        if (@as(?[]const u8, null)) |reason| {",
+      "from": "    if (test_outcome.envError(report)) |reason| {",
+      "to": "    if (@as(?[]const u8, null)) |reason| {",
       "kills": [
         "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
       ]

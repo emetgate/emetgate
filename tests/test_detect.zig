@@ -70,6 +70,78 @@ test "test detection: a dotnet solution, or the one test project in a subfolder,
     try expectDetected(null, &.{.{ "a/b/c/Deep.Tests.csproj", "" }});
 }
 
+fn typecheckWith(files: []const [2][]const u8, on_path: []const []const u8) !?[]u8 {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    for (files) |file| {
+        if (std.fs.path.dirnamePosix(file[0])) |parent| try tmp.dir.createDirPath(testing.io, parent);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = file[0], .data = file[1] });
+    }
+    try tmp.dir.createDirPath(testing.io, "tools");
+    for (on_path) |name| {
+        const sub = try std.fmt.allocPrint(gpa, "tools/{s}", .{name});
+        defer gpa.free(sub);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = sub, .data = "" });
+    }
+    const tools = try tmp.dir.realPathFileAlloc(testing.io, "tools", gpa);
+    defer gpa.free(tools);
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
+    defer gpa.free(root);
+    test_command.path_override = tools;
+    defer test_command.path_override = null;
+    return test_command.detectTypecheckIn(gpa, testing.io, root);
+}
+
+fn expectTypecheck(want: ?[]const u8, files: []const [2][]const u8, on_path: []const []const u8) !void {
+    const got = try typecheckWith(files, on_path);
+    defer if (got) |command| gpa.free(command);
+    if (want) |command| {
+        try testing.expectEqualStrings(command, got orelse return error.TestExpectedCommand);
+    } else try testing.expect(got == null);
+}
+
+const venv_python: [2][]const u8 = .{ ".venv/Scripts/python.exe", "" };
+const venv_mypy: [2][]const u8 = .{ ".venv/Lib/site-packages/mypy/__init__.py", "" };
+
+test "typecheck detection: mypy needs both its configuration and its package" {
+    try expectTypecheck(".venv\\Scripts\\python -m mypy .", &.{ .{ "mypy.ini", "[mypy]\nstrict = True\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(".venv\\Scripts\\python -m mypy .", &.{ .{ ".mypy.ini", "[mypy]\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(".venv\\Scripts\\python -m mypy .", &.{ .{ "setup.cfg", "[flake8]\nfiles = x\n[mypy]\nstrict = True\n[other]\nfiles = y\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(".venv\\Scripts\\python -m mypy", &.{ .{ "pyproject.toml", "[tool.mypy]\nfiles = [\"src\"]\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(null, &.{ .{ "mypy.ini", "[mypy]\n" }, venv_python }, &.{});
+    try expectTypecheck(null, &.{ .{ "mypy.ini", "[mypy]\n" }, venv_python }, &.{"python.exe"});
+    try expectTypecheck(null, &.{ .{ "pyproject.toml", "[tool.black]\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(null, &.{ .{ "setup.cfg", "[flake8]\n" }, venv_python, venv_mypy }, &.{});
+    try expectTypecheck(null, &.{ venv_python, venv_mypy }, &.{});
+}
+
+test "typecheck detection: an activated virtual environment on PATH counts with the packages it holds" {
+    try expectTypecheck("python -m mypy .", &.{ .{ "mypy.ini", "[mypy]\n" }, .{ "pyvenv.cfg", "" }, .{ "Lib/site-packages/mypy/__init__.py", "" } }, &.{"python.exe"});
+    try expectTypecheck(null, &.{ .{ "mypy.ini", "[mypy]\n" }, .{ "pyvenv.cfg", "" } }, &.{"python.exe"});
+    try expectTypecheck(null, &.{ .{ "mypy.ini", "[mypy]\n" }, .{ "Lib/site-packages/mypy/__init__.py", "" } }, &.{"python.exe"});
+}
+
+test "typecheck detection: pyright needs both its configuration and a program to run" {
+    try expectTypecheck("node_modules\\.bin\\pyright", &.{ .{ "pyrightconfig.json", "{}" }, .{ "node_modules/.bin/pyright.cmd", "" } }, &.{});
+    try expectTypecheck(".venv\\Scripts\\pyright", &.{ .{ "pyproject.toml", "[tool.pyright]\nstrict = []\n" }, .{ ".venv/Scripts/pyright.exe", "" } }, &.{});
+    try expectTypecheck("pyright", &.{.{ "pyrightconfig.json", "{}" }}, &.{"pyright.cmd"});
+    try expectTypecheck(null, &.{.{ "pyrightconfig.json", "{}" }}, &.{});
+    try expectTypecheck(null, &.{.{ "node_modules/.bin/pyright.cmd", "" }}, &.{});
+}
+
+test "typecheck detection: dotnet build needs one project at the root and dotnet on PATH" {
+    try expectTypecheck("dotnet build", &.{.{ "App.csproj", "" }}, &.{"dotnet.exe"});
+    try expectTypecheck("dotnet build", &.{.{ "App.sln", "" }}, &.{"dotnet.exe"});
+    try expectTypecheck(null, &.{.{ "App.csproj", "" }}, &.{});
+    try expectTypecheck(null, &.{ .{ "App.sln", "" }, .{ "App.csproj", "" } }, &.{"dotnet.exe"});
+    try expectTypecheck(null, &.{.{ "src/App/App.csproj", "" }}, &.{"dotnet.exe"});
+}
+
+test "typecheck detection: an empty project and a project of another language name nothing" {
+    try expectTypecheck(null, &.{}, &.{ "dotnet.exe", "pyright.cmd", "python.exe" });
+    try expectTypecheck(null, &.{.{ "package.json", "{}" }}, &.{ "dotnet.exe", "pyright.cmd", "python.exe" });
+}
+
 test "test detection: a package test script wins over the other markers" {
     try expectDetected("npm test", &.{ .{ "build.zig", "" }, .{ "package.json", "{\"scripts\":{\"test\":\"node --test\"}}" } });
 }

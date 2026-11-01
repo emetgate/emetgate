@@ -767,7 +767,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .runtime = runtime,
-        .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = trustedTypecheckCommand(policy), .allow_repo_config = policy.allow_repo_config },
+        .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = policy.typecheck_command orelse "", .allow_repo_config = policy.allow_repo_config },
     });
     defer result.deinit(gpa);
     var js: std.json.Stringify = .{ .writer = w };
