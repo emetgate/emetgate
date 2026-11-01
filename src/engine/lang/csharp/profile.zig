@@ -29,11 +29,17 @@ const function_nodes = [_]FunctionNode{
     .{ .node = "lambda_expression", .kind = .arrow },
 };
 
+const value_bodied = [_]FunctionNode{
+    .{ .node = "property_declaration", .kind = .method, .body_field = "value", .body_only = "arrow_expression_clause", .skeleton = " { get; }" },
+    .{ .node = "indexer_declaration", .kind = .method, .body_field = "value", .body_only = "arrow_expression_clause", .skeleton = " { get; }" },
+};
+
 const function_names = [_]FunctionName{
-    .{ .node = "accessor_declaration", .owner_depth = 2, .field = "name" },
-    .{ .node = "operator_declaration", .field = null },
-    .{ .node = "conversion_operator_declaration", .field = null },
-    .{ .node = "destructor_declaration", .field = null },
+    .{ .node = "accessor_declaration", .owner_depth = 2, .field = "name", .token = "this" },
+    .{ .node = "operator_declaration", .field = "operator" },
+    .{ .node = "conversion_operator_declaration", .field = "type" },
+    .{ .node = "destructor_declaration", .field = "name" },
+    .{ .node = "indexer_declaration", .field = null, .token = "this" },
 };
 
 const containers = [_]Container{
@@ -97,6 +103,13 @@ pub const profile: Profile = .{
     .literal_values = never_matching_literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{ "public", "protected", "internal" },
+    .expression_body = "arrow_expression_clause",
+    .value_bodied = &value_bodied,
+    .body_wording = "its block or its => expression, as emetgate_read_symbol returned it",
+    .short_refs = true,
+    .memberLabel = memberLabel,
+    .memberQualifier = memberQualifier,
+    .parameterKey = parameterKey,
     .modifier = "modifier",
     .function_names = &function_names,
     .file_scoped_containers = &.{"file_scoped_namespace_declaration"},
@@ -113,6 +126,9 @@ fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: Functi
         const owner = (node.parent() orelse return .{}).parent() orelse return .{};
         return .{ .accessor = accessorOf(node), .is_static = hasStaticModifier(tree, owner) };
     }
+    if (isKind(node, "property_declaration") or isKind(node, "indexer_declaration")) {
+        return .{ .accessor = .get, .is_static = hasStaticModifier(tree, node) };
+    }
     return .{
         .is_constructor = isKind(node, "constructor_declaration"),
         .is_static = hasStaticModifier(tree, node),
@@ -123,7 +139,111 @@ fn accessorOf(node: ts.Node) Accessor {
     const name = node.childByField("name") orelse return .none;
     if (isKind(name, "get")) return .get;
     if (isKind(name, "set") or isKind(name, "init")) return .set;
+    if (isKind(name, "add")) return .add;
+    if (isKind(name, "remove")) return .remove;
     return .none;
+}
+
+fn memberOwner(node: ts.Node) ts.Node {
+    if (!isKind(node, "accessor_declaration")) return node;
+    return (node.parent() orelse return node).parent() orelse node;
+}
+
+fn memberLabel(arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node) std.mem.Allocator.Error!?[]const u8 {
+    if (isKind(node, "operator_declaration")) {
+        const operator = node.childByField("operator") orelse return null;
+        return try std.fmt.allocPrint(arena, "operator{s}{s}", .{ if (std.ascii.isAlphabetic(tree.text(operator)[0])) " " else "", tree.text(operator) });
+    }
+    if (isKind(node, "conversion_operator_declaration")) {
+        const target = node.childByField("type") orelse return null;
+        return try std.fmt.allocPrint(arena, "operator {s}", .{try profile_mod.compactSpelling(arena, tree.text(target))});
+    }
+    if (isKind(node, "destructor_declaration")) {
+        const name = node.childByField("name") orelse return null;
+        return try std.fmt.allocPrint(arena, "~{s}", .{tree.text(name)});
+    }
+    if (isKind(node, "indexer_declaration")) return "this";
+    return null;
+}
+
+fn memberQualifier(node: ts.Node) ?ts.Node {
+    const owner = memberOwner(node);
+    var i: u32 = 0;
+    while (owner.namedChild(i)) |child| : (i += 1) {
+        if (isKind(child, "explicit_interface_specifier")) return child.namedChild(0);
+    }
+    return null;
+}
+
+fn parameterKey(arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node, full: bool) std.mem.Allocator.Error!?[]const u8 {
+    const owner = memberOwner(node);
+    var key: std.ArrayList(u8) = .empty;
+    if (owner.childByField("type_parameters")) |generics| try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(generics)));
+    const parameters = owner.childByField("parameters") orelse parameterListOf(owner);
+    if (parameters == null or isTypeDeclaration(owner)) return if (key.items.len != 0) key.items else null;
+    try key.append(arena, '(');
+    var first = true;
+    var i: u32 = 0;
+    while (parameters.?.child(i)) |parameter| : (i += 1) {
+        const is_array = isKind(parameter, "params");
+        if (!is_array and !isKind(parameter, "parameter")) continue;
+        if (!first) try key.append(arena, ',');
+        first = false;
+        if (is_array) {
+            try appendParameterArray(arena, tree, parameters.?, i, full, &key);
+        } else if (full) {
+            try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(parameter)));
+        } else {
+            try appendParameterType(arena, tree, parameter, &key);
+        }
+    }
+    try key.append(arena, ')');
+    return key.items;
+}
+
+fn appendParameterArray(arena: std.mem.Allocator, tree: ts.Tree, list: ts.Node, at: u32, full: bool, key: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+    try key.appendSlice(arena, "params ");
+    const shape = list.child(at + 1) orelse return;
+    try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(shape)));
+    if (!full) return;
+    const name = list.child(at + 2) orelse return;
+    try key.append(arena, ' ');
+    try key.appendSlice(arena, tree.text(name));
+}
+
+fn parameterListOf(owner: ts.Node) ?ts.Node {
+    var i: u32 = 0;
+    while (owner.namedChild(i)) |child| : (i += 1) {
+        if (isKind(child, "bracketed_parameter_list") or isKind(child, "parameter_list")) return child;
+    }
+    return null;
+}
+
+fn isTypeDeclaration(owner: ts.Node) bool {
+    for ([_][]const u8{ "class_declaration", "struct_declaration", "interface_declaration", "record_declaration", "enum_declaration", "delegate_declaration" }) |kind| {
+        if (isKind(owner, kind)) return true;
+    }
+    return false;
+}
+
+fn appendParameterType(arena: std.mem.Allocator, tree: ts.Tree, parameter: ts.Node, key: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+    var i: u32 = 0;
+    while (parameter.child(i)) |child| : (i += 1) {
+        if (!isKind(child, "modifier") and !isModifierWord(child.kind())) continue;
+        const word = tree.text(child);
+        if (std.mem.eql(u8, word, "this")) continue;
+        try key.appendSlice(arena, word);
+        try key.append(arena, ' ');
+    }
+    const shape = parameter.childByField("type") orelse parameter;
+    try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(shape)));
+}
+
+fn isModifierWord(kind: []const u8) bool {
+    for ([_][]const u8{ "ref", "out", "in", "params", "scoped", "readonly" }) |word| {
+        if (std.mem.eql(u8, word, kind)) return true;
+    }
+    return false;
 }
 
 fn isKind(node: ts.Node, name: []const u8) bool {
