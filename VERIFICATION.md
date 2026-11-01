@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2535**
-- Mutations declared in `tests/mutations.json`: **1781**
-  - killed: **1732**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2540**
+- Mutations declared in `tests/mutations.json`: **1782**
+  - killed: **1733**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -452,7 +452,7 @@ python tools/verification_page.py --check
 | `P1b-new-file-placed-over-whatever-is-at-the-path` | `src/platform/disk.zig` | `if (crashBetweenMoves()) return error.Crashed;         self.rep...` -> `if (crashBetweenMoves()) return error.Crashed;         self.rep...` | journal base: a file created at the path between the two moves is kept, the wri...; commi... | killed |
 | `P1c-backup-removed-though-its-bytes-are-in-no-commit` | `src/platform/disk.zig` | `if (err == error.PathAlreadyExists and self.base_in_history) {` -> `if (err == error.PathAlreadyExists) {` | journal base: a file created at the path between the two moves is kept, the wri... | killed |
 | `P1d-backup-of-committed-bytes-left-behind` | `src/platform/disk.zig` | `if (err == error.PathAlreadyExists and self.base_in_history) {` -> `if (false and err == error.PathAlreadyExists and self.base_in_h...` | commit window: a file created at the path between the two moves is kept, the co... | killed |
-| `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (true) return guard.renameReplacing(gpa, target_abs);     co...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
+| `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (new_hash == null or new_hash != null) return guard.renameRe...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
 | `P1j-next-call-skips-the-journal` | `src/platform/disk.zig` | `var report: RecoverReport = .{};     try recoverJournaled(gpa, ...` -> `const report: RecoverReport = .{};     if (false) try recoverJo...` | commit window: a crash between the two moves of the file write recovers to the ... | killed |
 | `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
 | `SP1-final-name-not-taken-for-a-resolved-path` | `src/platform/repo.zig` | `const final = try finalOf(gpa, opened);     defer gpa.free(fina...` -> `return gpa.dupeZ(u8, opened);` | equivalent: open_nowait.realPath already returns GetFinalPathNameByHandleW's DOS name wit... | equivalent |
@@ -711,7 +711,7 @@ python tools/verification_page.py --check
 
 ### Mutation testing tool itself
 
-40 mutation(s).
+41 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -725,7 +725,8 @@ python tools/verification_page.py --check
 | `MR3-legacy-record-kept` | `tools/mutate/core.zig` | `try work.deleteFile(io, legacy_manifest);` -> `try work.access(io, legacy_manifest, .{});` | harness: a recovery record left by an older run on another branch is dropped wi... | killed |
 | `RN1-shard-selection-off-by-one` | `tools/test_runner.zig` | `return ordinal % shard.count == shard.index - 1;` -> `return ordinal % shard.count == shard.index;` | shards: every selected test runs in exactly one shard | killed |
 | `RN2-empty-filter-passes` | `tools/test_runner.zig` | `if (options.filters.len != 0 and selection.matched == 0) {` -> `if (false) {` | runner: a filter that matches no test fails the run instead of passing it empty | killed |
-| `RN3-a-shard-left-out` | `tools/test_runner.zig` | `const shards = gpa.alloc(ShardRun, options.jobs) catch oom();` -> `const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom(...` | runner: --jobs runs every selected test once across its shards | killed |
+| `RN3-queue-left-after-every-shard-crashed` | `tools/test_runner.zig` | `if (!crashed or remaining == 0 or remaining >= left) break;` -> `if (true) break;` | runner: tests left in the queue still run after every shard crashed, and each c... | killed |
+| `RN15-crashing-shard-loses-its-record` | `tools/test_runner.zig` | `if (record_file != null) recordClaim(&record_writer.interface, ...` -> `if (false) recordClaim(&record_writer.interface, index) catch \...` | runner: tests left in the queue still run after every shard crashed, and each c... | killed |
 | `RN4-coverage-ignores-a-missing-test` | `tools/test_runner.zig` | `if (seen[i] == 0) return .{ .missing = i };` -> `if (seen[i] == 0) continue;` | runner: shard coverage names a test no shard ran, one two shards ran and a stra... | killed |
 | `RN5-mutant-never-set` | `tools/test_runner.zig` | `emetgate_mutant = options.mutant;` -> `emetgate_mutant = 0;` | runner: --mutant sets the global that the schemata dispatch reads; runner: a failing test... | killed |
 | `RN6-mutant-not-passed-to-shards` | `tools/test_runner.zig` | `if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant"` -> `if (false) argv.appendSlice(gpa, &.{ "--mutant"` | runner: a failing test in one shard fails the --jobs run and the mutant reaches... | killed |

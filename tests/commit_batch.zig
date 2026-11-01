@@ -120,7 +120,7 @@ pub const Env = struct {
     pub fn expectOneCommit(self: *Env, reply: Reply, before: []const u8, changed: []const u8, receipted: []const []const u8) !void {
         errdefer std.debug.print("{s}\n", .{reply.text});
         try testing.expect(!reply.is_error);
-        const commit = (try reply.field(self.arena(), "commit")).?.string;
+        const commit = ((try reply.field(self.arena(), "commit")) orelse return error.ReplyHasNoCommit).string;
         try testing.expect((try reply.field(self.arena(), "receipt_attach_error")) == null);
         try testing.expectEqualStrings(commit, try self.head());
         try testing.expectEqualStrings(before, try self.git(&.{ "rev-parse", "HEAD^" }));
