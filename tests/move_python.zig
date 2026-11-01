@@ -355,6 +355,22 @@ test "python move: a cut between two declarations leaves one gap" {
     try expectFile(&case, "pkg/cart.py", "def keep():\n    return 1\n\n\ndef last():\n    return 3\n");
 }
 
+test "python move: a dataclass, a property and guarded blocks are no module effect" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "pkg/__init__.py", .text = "" },
+        .{ .rel = "pkg/cart.py", .text = "from dataclasses import dataclass\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\n\n\n@dataclass\nclass Point:\n    x: int = 1\n\n    @property\n    def double(self):\n        return self.x * 2\n\n\ndef area():\n    return 4\n\n\ndef keep():\n    return area() + 1\n\n\nif __name__ == \"__main__\":\n    print(keep())\n" },
+        .{ .rel = "pkg/shop.py", .text = "try:\n    import json\nexcept ImportError:\n    json = None\n\n\ndef other():\n    return 3\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try moveSymbol(&case, "pkg/cart.py", "area", "pkg/shop.py", true, false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectHas(&case, "pkg/shop.py", "def area():\n    return 4\n");
+    try expectHas(&case, "pkg/cart.py", "@dataclass\nclass Point:");
+}
+
 test "python move: code that runs at import needs order_change" {
     try refuseOrder("def make():\n    return 1\n\n@wrap\ndef other():\n    return 2\n", "make");
     try refuseOrder("def make():\n    return 1\n\ntotal = 0\ntotal += 1\n", "make");
@@ -363,6 +379,9 @@ test "python move: code that runs at import needs order_change" {
     try refuseOrder("def other():\n    return 2\n\nclass Make:\n    x = print(1)\n", "Make");
     try refuseOrder("import os\n\nos.limit = 3\n\ndef make():\n    return 1\n", "make");
     try refuseOrder("def make():\n    return 1\n\nLIMIT = print(1)\n", "make");
+    try refuseOrder("from dataclasses import dataclass, field\n\ndef make():\n    return 1\n\n@dataclass\nclass P:\n    x: list = field(default_factory=list)\n", "make");
+    try refuseOrder("from dataclasses import dataclass\n\ndef make():\n    return 1\n\n@dataclass\nclass Moved:\n    x: int = 1\n", "Moved");
+    try refuseOrder("def make():\n    return 1\n\nif DEBUG:\n    LIMIT = 1\n", "make");
 }
 
 test "python move: a dropped user import fails the proof" {

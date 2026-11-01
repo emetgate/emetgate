@@ -693,6 +693,8 @@ The language service is the repository's own `node_modules/typescript`; a global
 
 Without the language service (no `node_modules/typescript`, no `node`, a timeout or a crash) the rename falls back to a text path that accepts only the unambiguous case: a top-level function, class, interface, type, enum or variable that is not exported, whose name has exactly one declaration in its file (a type and a value of one name are refused), appears in no other tracked file and is used nowhere as a property name. Everything else is refused as `RenameUnresolved`, and the result names the reason the service was not used. An `export { Engine as Motor }` keeps its public name: only the local name changes. JSX tags (`<Panel>`, `</Panel>`) are identifiers and are renamed and checked like any use. Limits: a name used in a JSDoc type sits in a comment, so a rename the service proposes there is refused (`NotAnIdentifier`); `export default` of an anonymous class, namespaces and nested declarations cannot be renamed; the resolver does not model `with`, `eval` scopes or global script files, so a use it cannot resolve is refused; a missed reference in a file that never mentions the old name as an identifier (for example `x.method()` on a value of another type) is caught by the typecheck and the tests, not by the kernel; the language service is given the tracked files and the root `tsconfig.json` only.
 
+In Python and C# the references come from the cross-reference facts, so a method call is renamed only when the type of its receiver is proven. An untyped local counts when its one binding gives the type: a constructor (`c = Cart()`, `var c = new Cart()`, `new G<int>()`) or a call with one provable return type (`c = make_cart()`, `var c = Factory.Make()`). A Python function proves its return type by an annotation or, for a module-level function that is not async, not a generator and not decorated, by every `return` spelling the same constructor. A C# method proves it by its declared return type, unless it has an overload, a base class that may hold one, or a return type that is a type parameter. A local bound twice, written through `global` or `nonlocal`, held at module level, or built from a name that is rebound stays unproven. Every such site refuses the whole rename with `RenameUnresolved`, naming each file and line, and nothing is written. `self.make()`, `this.Make()`, string annotations and `using` aliases stay unproven too.
+
 **Moving a declaration.** `emetgate_move` takes `file`, `symbol`, `hash` and `target_file` (an existing file or a new one in an existing directory). The model writes no import; the kernel derives them:
 
 - the moved statement (with its leading comment) is cut from the source and appended to the target byte for byte;
@@ -706,7 +708,7 @@ Without the language service only a declaration that is not exported and whose n
 
 **Moving in Python.** `emetgate_move` moves a top-level function, class or assignment between modules with no language service: the kernel reads every tracked `.py` and `.pyi` file. `from m import f`, `from m import f as g` and `from . import m` followed by `m.f`, and `import pkg.m` followed by `pkg.m.f` all follow the move, and so does a re-export in a package `__init__.py`. The moved code takes the imports it needs and the source imports the name back when it still uses it. A case the kernel cannot prove is refused with a `fix`: code that writes a module global (`PyGlobalState`), reads `__file__` or `__name__` (`PyModuleDunder`), a `__future__` import the two modules do not share (`PyFutureMismatch`), a name that would capture another binding (`PyNameCapture`), a reach through a package attribute (`PyChainThroughPackage`), and a string or `import_module` naming the module (`DynamicReference`).
 
-Module-level code in Python is what runs at import: a call, an attribute or subscript assignment, an augmented assignment, a decorator, a default argument, or a control-flow statement in the source or target is `ModuleSideEffect` unless `order_change` is true. A docstring, an import, `NAME = constant`, a plain function and a class holding only such members are not.
+Module-level code in Python is what runs at import: a call, an attribute or subscript assignment, an augmented assignment, a decorator, a default argument, or a control-flow statement in the source or target is `ModuleSideEffect` unless `order_change` is true. A docstring, an import, `NAME = constant`, a plain function and a class holding only such members are not. Nor are, in a source or target that stays where it is, statements that provably run no user code at import, so nothing can observe the move: a class with `@dataclass` from `dataclasses` (with arguments free of effects), methods decorated with the builtin `property`, `staticmethod` or `classmethod` and the `.setter`, `.getter` and `.deleter` of an earlier property, an `if __name__ == "__main__":` without `else`, an `if` on `TYPE_CHECKING` from `typing`, `sys.version_info` compared with a tuple of integers or `sys.platform` compared with a string, and a `try` whose parts are all quiet. Each needs its name bound exactly that way and no star import in the file. `field(...)`, `if DEBUG:`, a decorated top-level function, any other decorator and moving a decorated class itself still need `order_change`. A repository module that shadows `dataclasses`, `typing` or `sys` is not detected.
 
 **Moving in C#.** `emetgate_move` takes a top-level type, or a static member of a non-generic top-level type. The type lands in the namespace of the target file (or the source's namespace in a new file), its text byte for byte; `using` directives it needs are added. When the namespace changes, each user gains `using New;` where it named the type by its short name, and `Old.T` becomes `New.T`. A static method, field or property goes to `target_type` (or the sole type in `target_file`, which may be the same file): `A.M` becomes `B.M` and a bare `M` left in `A` becomes `B.M`. Refused with a `fix`: a nested type (`NotTopLevel`), a `file`-scoped type (`CsFileScopedType`), a `partial` type changing namespace (`CsPartialType`), an instance member (`MoveNotStatic`), a target file with several types and no `target_type` (`MoveNeedsTargetType`), a member using other members of its type, reached through `using static`, an alias or a derived type (`MoveMemberDependency`), and a string naming the type or member (`DynamicReference`). The text is not reindented, and `cref` in XML comments is not rewritten.
 
@@ -1561,7 +1563,20 @@ A member call binds through `this`, a class used statically, a namespace import,
 type, a constructor parameter property or a constant made with `new`. The last three are
 labelled `typed`, the others `proven`. Everything else stays `unresolved` with its reason.
 
-The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v7`: versioned, with a
+In Python and C# a local without a type also binds when its one binding is a constructor or a
+call with one provable return type (labelled `typed`, the rules are under `emetgate_rename`). In
+C# a bare call binds to the enclosing class, its bases, then `using static` types; a namespace
+path such as `Shop.Models.Factory.Twice(2)` and a generic `new G<int>()` bind through the
+enclosing namespaces and `using` directives, including `global using` in any file of the
+repository. A name two imports could supply, a `using` alias and a type declared in two files
+or twice in one (`class G` beside `class G<T>`, a `partial class` in several files) stay
+`unresolved`. A C# definition is `exported` when it and every type around it are `public`, or
+are an interface member with no modifier; a `partial` part with no modifier in another file
+reports not exported. A Python definition is `exported` when it is listed in `__all__`, or with
+no `__all__` when its name has no leading `_`; a function imported by another module is not
+bounded unless it is private by that rule.
+
+The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v9`: versioned, with a
 BLAKE3 checksum, written to a temporary file and moved into place. A refresh lists the
 tracked files, compares directory stamps, re-reads only changed files (a file stamped within
 2 s of the store's write time is always re-hashed), extracts a file again only when its
@@ -1602,7 +1617,9 @@ full signature and the headers of the blocks around them; every elided range is 
 answer turns `partial`. Callers and callees are shown by signature and call line as `proven` or
 `typed`; candidates that could not be resolved are listed and the `Partial because` line names
 why. The tests section lists the `describe`/`it`/`test` titles of the test files (`*.test.*`,
-`*.spec.*`, `__tests__`) that reference a target, resolved or by name in a test file that
+`*.spec.*`, `__tests__`, `test_*.py`, `*_test.py`, `tests/`; in C# a file with `[Fact]`, `[Test]`,
+`[TestMethod]` and similar methods, a test project folder or a `using` of a test framework, where the title
+is the method name) that reference a target, resolved or by name in a test file that
 imports the target's module, three per file and a count for the rest. Quoted files are read
 without waiting on another program's lock: a file changed after the snapshot is extracted again
 before it is quoted; a file that is gone or locked is named `vanished` or `unreadable`, and a
@@ -1686,7 +1703,7 @@ On the token benchmark in `tests/bench` (tokenizer `o200k_base`, six scenarios, 
 | TSX | `.tsx` | tree-sitter-typescript (tsx dialect) | same profile shape as TypeScript, plus JSX |
 | JavaScript | `.js`, `.mjs`, `.cjs`, `.jsx` | tree-sitter-javascript | JSX is parsed by the same grammar, no separate profile |
 | Python | `.py`, `.pyi` | tree-sitter-python | cross-reference facts, `emetgate_rename`, `emetgate_move` and `emetgate_move_file`; overload stubs, deleters and short refs (see Reader) |
-| C# | `.cs` | tree-sitter-c-sharp | cross-reference facts with `using` directives resolved, `emetgate_rename`, `emetgate_move` and `emetgate_move_file`; every member kind, overloads and short refs (see Reader) |
+| C# | `.cs` | tree-sitter-c-sharp | cross-reference facts with `using`, `using static` and qualified names resolved, `emetgate_rename`, `emetgate_move` and `emetgate_move_file`; every member kind, overloads and short refs (see Reader) |
 | Zig | `.zig` | tree-sitter-zig | top-level `fn` only; see the limits below |
 
 Zig does not share the class/getter/setter shape the generic conformance suite in

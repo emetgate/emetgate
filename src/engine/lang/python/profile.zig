@@ -4,6 +4,7 @@ const profile_mod = @import("../profile.zig");
 const python_rename = @import("rename.zig");
 const python_facts = @import("facts.zig");
 const python_map = @import("map.zig");
+const python_inert = @import("inert.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -108,6 +109,7 @@ pub const profile: Profile = .{
     .empty_body = "...",
     .expression_statement = "expression_statement",
     .loud_statement = loudStatement,
+    .inert_statement = python_inert.isInert,
     .eager_parameters = true,
     .prose_strings = &.{ "string", "concatenated_string" },
     .directives = &.{},

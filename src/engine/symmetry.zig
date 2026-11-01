@@ -90,7 +90,7 @@ fn signatureHasEffect(profile: *const Profile, function: ts.Node) bool {
     return false;
 }
 
-fn hasEffect(profile: *const Profile, node: ts.Node) bool {
+pub fn hasEffect(profile: *const Profile, node: ts.Node) bool {
     if (isEffect(profile, node.kind()) or isUpdate(profile, node)) return true;
     var i: u32 = 0;
     while (node.child(i)) |child| : (i += 1) {

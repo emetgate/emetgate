@@ -44,6 +44,7 @@ pub const Import = struct {
     spec_scope: []const u8 = "",
     global: bool = false,
     spec_start: u32 = 0,
+    holder: Span = .{ .start = 0, .end = 0 },
 };
 
 fn oneOf(kind: []const u8, kinds: []const []const u8) bool {
@@ -299,6 +300,7 @@ const CsharpWalk = struct {
             .global = hasToken(directive, &.{"global"}),
             .spec_start = target.startByte(),
         };
+        if (directive.parent()) |holder| entry.holder = span(holder);
         if (directive.childByField("name")) |alias| {
             entry.form = .import;
             entry.namespace = self.snapshot.tree.text(alias);
@@ -340,7 +342,9 @@ pub fn hasModuleEffects(snapshot: *const Snapshot) bool {
     var i: u32 = 0;
     while (root.namedChild(i)) |statement| : (i += 1) {
         if (snapshot.profile.isComment(statement.kind())) continue;
-        if (symmetry.statementHasEffect(snapshot.profile, statement)) return true;
+        if (!symmetry.statementHasEffect(snapshot.profile, statement)) continue;
+        const inert = snapshot.profile.inert_statement orelse return true;
+        if (!inert(snapshot, statement)) return true;
     }
     return false;
 }
@@ -481,6 +485,84 @@ test "modules: a python docstring, name binding and function are quiet, code tha
     try testing.expect(try pythonEffects(runtime, "assert True\n"));
     try testing.expect(!try pythonEffects(runtime, "class P:\n    ...\n"));
     try testing.expect(!try pythonEffects(runtime, "class P:\n    \"\"\"Doc.\"\"\"\n    size: int = 1\n"));
+}
+
+test "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    try testing.expect(!try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass(frozen=True)\nclass P:\n    x: int = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "import dataclasses\n\n@dataclasses.dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "class C:\n    @property\n    def v(self):\n        return 1\n\n    @v.setter\n    def v(self, x):\n        pass\n\n    @staticmethod\n    def s():\n        return 1\n\n    @classmethod\n    def k(cls):\n        return 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "from dataclasses import dataclass\n\nclass C:\n    @dataclass\n    class P:\n        x: int = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "if __name__ == \"__main__\":\n    print(1)\n"));
+    try testing.expect(!try pythonEffects(runtime, "if __name__ == '__main__':\n    print(1)\n"));
+    try testing.expect(!try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\n"));
+    try testing.expect(!try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif not TYPE_CHECKING:\n    a = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "import typing\n\nif typing.TYPE_CHECKING:\n    import os\nelse:\n    os = None\n"));
+    try testing.expect(!try pythonEffects(runtime, "import sys\n\nif sys.version_info >= (3, 8):\n    import a\nelif sys.platform == \"win32\":\n    import b\nelse:\n    c = 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "try:\n    import a\nexcept ImportError:\n    a = None\nelse:\n    b = 1\nfinally:\n    c = 2\n"));
+    try testing.expect(try pythonEffects(runtime, "@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from mine import dataclass\n\n@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import field as dataclass\n\n@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\nfrom mine import *\n\n@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\ndataclass = print\n\n@dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\nclass P:\n    x: int = print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\nfrom dataclasses import field\n\n@dataclass\nclass P:\n    x: list = field(default_factory=list)\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass(order=print(1))\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\n@wrap\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\ndef f():\n    return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\nclass P(make()):\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import dataclasses as dataclass\n\n@dataclass.dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import dataclasses\n\ndataclasses = other\n\n@dataclasses.dataclass\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    @wrap\n    def m(self):\n        return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    @property\n    def m(self, x=print(1)):\n        return x\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    @wrap.setter\n    def m(self):\n        return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    @property\n    def m(self):\n        return 1\n\n    @m.other\n    def m(self):\n        return 2\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    def m(self):\n        return 1\n\n    @m.setter\n    def m(self, x):\n        pass\n"));
+    try testing.expect(try pythonEffects(runtime, "def property(f):\n    print(1)\n    return f\n\nclass C:\n    @property\n    def m(self):\n        return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    def property(self):\n        return 1\n\n    @property\n    def m(self):\n        return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "def property(f):\n    return f\n\nclass C:\n    @property\n    def m(self):\n        return 1\n\n    @m.setter\n    def m(self, x):\n        pass\n"));
+    try testing.expect(try pythonEffects(runtime, "from mine import *\n\nclass C:\n    @property\n    def m(self):\n        return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "@property\ndef f():\n    return 1\n"));
+    try testing.expect(try pythonEffects(runtime, "if __name__ == \"__main__\":\n    print(1)\nelse:\n    print(2)\n"));
+    try testing.expect(try pythonEffects(runtime, "__name__ = \"__main__\"\n\nif __name__ == \"__main__\":\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "if __name__ != \"__main__\":\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "if __name__ == \"other\":\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "if other == \"__main__\":\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "if DEBUG:\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "if TYPE_CHECKING:\n    import os\n"));
+    try testing.expect(try pythonEffects(runtime, "from mine import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\n"));
+    try testing.expect(try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\nelse:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\nelif print(1):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    import os\nelif TYPE_CHECKING:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.argv == 1:\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "if sys.version_info >= (3, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys as sys2\nimport other as sys\n\nif sys.version_info >= (3, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nsys = other\n\nif sys.version_info >= (3, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.version_info >= limit:\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.platform == limit:\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.platform == f\"{limit}\":\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "try:\n    print(1)\nexcept E:\n    pass\n"));
+    try testing.expect(try pythonEffects(runtime, "try:\n    import a\nexcept make():\n    pass\n"));
+    try testing.expect(try pythonEffects(runtime, "try:\n    import a\nexcept E:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "try:\n    import a\nelse:\n    print(1)\nfinally:\n    pass\n"));
+    try testing.expect(try pythonEffects(runtime, "try:\n    import a\nfinally:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "for i in x:\n    pass\n"));
+    try testing.expect(!try pythonEffects(runtime, "try:\n    import a\nexcept* E:\n    a = None\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.version_info >= (limit, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.argv == (1, 2):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import dataclasses\n\n@dataclasses.wrap\nclass P:\n    x: int = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\nimport os\n\nif os.version_info >= (3, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "from mine import sys\n\nif sys.version_info >= (3, 8):\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.version_info >= (3, 8) > limit:\n    a = 1\n"));
+    try testing.expect(try pythonEffects(runtime, "if __name__ == \"__main__\" == other:\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    @property\n    def other(self):\n        return 1\n\n    @m.setter\n    def m(self, x):\n        pass\n"));
+    try testing.expect(try pythonEffects(runtime, "from mine import *\n\nif __name__ == \"__main__\":\n    print(1)\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    x: int = 1\n    @wrap\n    class D:\n        pass\n"));
+    try testing.expect(try pythonEffects(runtime, "class C:\n    print(1)\n    @property\n    def m(self):\n        return 1\n"));
+    try testing.expect(!try pythonEffects(runtime, "try:\n    import a\n# note\nexcept E:\n    a = None\n"));
 }
 
 test "modules: the free names of a declaration are its imports, other declarations and globals, not its locals" {
