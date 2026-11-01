@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2598**
-- Mutations declared in `tests/mutations.json`: **1782**
-  - killed: **1733**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2600**
+- Mutations declared in `tests/mutations.json`: **1783**
+  - killed: **1734**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1122 mutation(s).
+1123 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -887,6 +887,7 @@ python tools/verification_page.py --check
 | `TS1-plugins-passed-through` | `src/platform/tsserver_host.js` | `delete options.plugins;` -> `` | tsserver: tsconfig plugins never reach the language service; red team rename: a malicious... | killed |
 | `TS2-hung-service-kept` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `` | tsserver: a hung language service is killed at the timeout and restarted by the... | killed |
 | `TS3-typescript-check-skipped` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return erro...` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};` | tsserver: a repo without node_modules/typescript is an explicit error, not a gl... | killed |
+| `TS5-start-held-to-request-timeout` | `src/platform/tsserver.zig` | `"}", self.options.start_timeout_ms);` -> `"}", self.options.timeout_ms);` | tsserver: a start slower than the request timeout is not a hang | killed |
 | `TS4-failed-answer-kills-service` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `errdefer self.stop();` | tsserver: a request the language service answers with an error leaves the proce... | killed |
 | `RN14-cache-not-invalidated-after-rename` | `src/protocol/rename_tool.zig` | `if (policy.tree_cache) \|cache\| for (outcome.plan.edits) \|edi...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the renamed file... | survives (unclassified) |
 | `SC1-merged-declaration-check-skipped` | `src/engine/rename.zig` | `return error.MergedDeclaration;` -> `continue;` | rename: renaming a class and only one of an interface merged with it is refused...; renam... | killed |

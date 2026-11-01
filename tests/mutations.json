@@ -5584,6 +5584,15 @@
       ]
     },
     {
+      "id": "TS5-start-held-to-request-timeout",
+      "file": "src/platform/tsserver.zig",
+      "from": "\"}\", self.options.start_timeout_ms);",
+      "to": "\"}\", self.options.timeout_ms);",
+      "kills": [
+        "tsserver: a start slower than the request timeout is not a hang"
+      ]
+    },
+    {
       "id": "TS4-failed-answer-kills-service",
       "file": "src/platform/tsserver.zig",
       "from": "        errdefer |err| if (err != error.LanguageServiceFailed) self.stop();\n",
