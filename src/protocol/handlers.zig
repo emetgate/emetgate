@@ -77,7 +77,12 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     _ = test_command_mod.takeLate();
     test_debt.drop();
-    if (policy.mirror) |m| m.tick();
+    if (policy.mirror) |m| {
+        if (policy.context) |context| {
+            if (context.stale()) m.reset();
+        }
+        m.tick();
+    }
     defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {

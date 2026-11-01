@@ -714,6 +714,8 @@ stderr follows stdout after a `[stderr]` line. When anything was cut the reply a
 
 Lockdown pre-allows `emetgate_run` (see the table below) and gives Claude Code a `PreToolUse` hook for it, `emetgate hook pretool`, matched to `^mcp__.+__emetgate_run$`. The hook reads the tool call from stdin and splits the command into words and parts the way a shell does: quotes, escapes, `&&`, `||`, `;`, `|`, `&`, line breaks, `$( )`, backticks, `bash -c`, `cmd /c`, `powershell -Command`, `eval`, `sudo`, `env`, `timeout`, `xargs` and `npx` are followed, eight levels deep. A part that deletes recursively or by force (`rm -r`/`-f`, `rmdir /s`, `del /s`, `Remove-Item -Recurse`, `rimraf`, `find -delete`), rewrites or deletes remote history (`git push --force`, `--delete`, `--mirror`, a `+` or `:` refspec), discards changes (`git reset --hard`, `git clean -f`, `git checkout -- .`, `git restore`, `git switch -f`, `git branch -D`, `git stash drop`), rewrites history (`filter-branch`, `filter-repo`), drops or truncates a database object, formats or overwrites a disk, shuts the machine down, changes permissions recursively, pipes a download into a shell, runs an encoded PowerShell command, or adds, replaces or forgets an emetgate rule makes the hook print `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"emetgate: this command <reason>: <part>"}}`, and Claude Code asks the user before the call. Any other command gets no output and runs. Tool input the hook cannot read also asks. The list is a judgment over words, not a sandbox: a script the model writes and then runs, or a program that deletes on its own, is not recognised, and a rule ledger edited by a command is not caught.
 
+Lockdown also gives Claude Code a `SessionStart` hook, `emetgate hook session`, in exec form with no matcher, and sets `EMETGATE_CONTEXT` for that launch to a new file under `%LOCALAPPDATA%\emetgate\lockdown\<hash>\context\`, which it deletes when Claude Code exits. After a compaction or `/clear` the hook moves the file and the server sends every file again; see [the session mirror](#reader) for the rules. A value of `EMETGATE_CONTEXT` in the parent environment is replaced.
+
 The repository ships a Claude Code skill, `.claude/skills/md-audit/SKILL.md`, that audits a CLAUDE.md or AGENTS.md file: it sorts every instruction sentence into enforceable, waiting for a mechanism, unverifiable or belief, proposes a check and scope for the enforceable ones, measures each with `emetgate_scan` and reports, changing nothing. To use it in every project, copy the `md-audit` folder into `%USERPROFILE%\.claude\skills\` (`~/.claude/skills/` elsewhere).
 
 ### Lockdown
@@ -907,6 +909,8 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   another. `force:true` always sends the full content and records it again; every
   `unchanged` reply says so in its hint. Symbol reads (`emetgate_read_symbol`) are
   keyed by the symbol's own hash and do not carry `since_call`.
+  A compaction or `/clear` empties the mirror, and without a `SessionStart` hook the
+  server sends everything: see **Compaction and `/clear`** below.
 
 Measured with `tests/bench/reader.py` (o200k_base tokens; reproduce with
 `python tests/bench/reader.py`, a built `emetgate` binary, and, for the two real-project
@@ -954,18 +958,22 @@ top of content that is already only a couple hundred tokens. This is the row's p
 floor: shrinking the wrapper further would need a shorter hash than `emetgate_try` accepts
 today, which was judged out of scope for this pass (see the reader's remaining limits).
 
-**Limits.** Claude Code can summarize (compact) its own context; the mirror only knows
-what it sent, not whether the model still has it. An `unchanged` reply after compaction
-is telling the model "you already have this" when it may not — the wrong direction to
-get wrong, which is why `force:true` exists and every `unchanged` reply advertises it.
-This branch does not wire an automatic reset on compaction: `src/platform/lockdown.zig`
-only launches Claude Code with a fixed argv and one environment variable today and does not
-manage `.claude/settings.json` or hooks, and a `PreCompact` hook would need to reach a
-mirror that lives in a specific running MCP process's memory. The mirror is **on by
-default**, so a compaction mid-session can make one `unchanged` reply stale; the reply
-names the call that sent the content (`since_call`) so the model can tell how far back
-it was, and `--no-mirror` turns the mirror off for a project that does not accept
-that.
+**Compaction and `/clear`.** The mirror knows what it sent, not whether the model still has it: after a compaction or `/clear` an `unchanged` reply would point at content the model has lost. So the server trusts the mirror only while a *context epoch* stands still.
+
+- `emetgate hook session` is a `SessionStart` hook. It writes a new random token and the hook's `session_id` to an epoch file, atomically, and prints nothing, so nothing enters the context. It does this for every source (`startup`, `resume`, `clear`, `compact`, `fork`, and any later one) and when stdin is empty or not JSON. If it cannot write, it deletes the old file and exits 1.
+- Before every tool call the server reads that file, about 100 bytes. If the bytes moved, it drops every mirror record, so the next read of any file, range, skeleton or symbol sends the content, and a repeat inside the new window answers `unchanged` again. `since_call` keeps counting across a reset: it numbers tool calls of the server process and names the call that last sent the content, never one from before the reset.
+- The mirror works only once it is armed: the file exists and either names this server's own `CLAUDE_CODE_SESSION_ID` or was seen to move while the server ran. A missing or unreadable file, a file left by an earlier session, and an environment that names no file all mean a reset on every call. Every failure sends content.
+- The file is the one `EMETGATE_CONTEXT` names, and otherwise `%LOCALAPPDATA%\emetgate\context\<hash of CLAUDE_PROJECT_DIR>.epoch`. The hook and the server work it out the same way from their environment. Lockdown sets `EMETGATE_CONTEXT` to a new file for each launch and adds the hook itself, so two lockdown sessions on one repository never reset each other. Without lockdown, sessions on one project share the file, so a compaction in one also resets the other: one extra resend each, never a missed reset.
+
+**`emetgate mcp` without lockdown.** With no hook the file never appears, so the server sends full content on every read and answers `unchanged` to nothing. That costs tokens and is always correct, which is the side to fail on. To get `unchanged` replies, add the hook to your Claude Code settings, with no matcher so that it runs for every source:
+
+```json
+{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"C:\\path\\to\\emetgate.exe","args":["hook","session"]}]}]}}
+```
+
+A client with no compaction, or a script that holds on to every reply, can pass `--mirror`: it turns the epoch check off and trusts the mirror for the life of the process. `--no-mirror` turns the mirror off. `force:true` still sends the content in every mode.
+
+**Limits.** The epoch is one per server, while Claude Code subagents without lockdown share their parent's server and mirror, so a subagent can get `unchanged` for a file only its parent read. Lockdown runs with no built-in tools and so no subagents. The file is compared when a tool call arrives, so the fix relies on Claude Code finishing the `SessionStart` hook before it sends the next tool call. A lockdown process that is killed leaves its epoch file behind; it is about 100 bytes and no later launch reads it.
 
 ### Writer
 
