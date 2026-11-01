@@ -37,6 +37,7 @@ pub const Rule = struct {
     id: []const u8,
     check: []const u8,
     where: ?[]const u8 = null,
+    text: []const u8 = "",
     lang: rule_catalog.Lang = .universal,
 };
 
@@ -60,6 +61,7 @@ pub const Violation = struct {
     end_line: u32,
     end_col: u32,
     text: []u8,
+    rule_text: []u8 = &.{},
 };
 
 pub const Report = struct {
@@ -90,7 +92,7 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
     for (recall.decisions) |decision| {
         if (decision.status != .active or !decision.enforce) continue;
         const check = decision.check orelse continue;
-        try list.append(gpa, .{ .id = decision.id, .check = check, .where = decision.where, .lang = rule_catalog.langOf(decision.text, check) });
+        try list.append(gpa, .{ .id = decision.id, .check = check, .where = decision.where, .text = decision.text, .lang = rule_catalog.langOf(decision.text, check) });
     }
     return .{ .gpa = gpa, .recall = recall, .rules = try list.toOwnedSlice(gpa) };
 }
@@ -549,7 +551,9 @@ fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, at: Position, end:
     const file_owned = try gpa.dupe(u8, file);
     errdefer gpa.free(file_owned);
     const text_owned = try gpa.dupe(u8, text);
-    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .end_line = end.line, .end_col = end.col, .text = text_owned };
+    errdefer gpa.free(text_owned);
+    const rule_text = try gpa.dupe(u8, rule.text);
+    return .{ .rule = rule_id, .check = check, .file = file_owned, .line = at.line, .col = at.col, .end_line = end.line, .end_col = end.col, .text = text_owned, .rule_text = rule_text };
 }
 
 fn freeViolation(gpa: Allocator, v: Violation) void {
@@ -557,6 +561,7 @@ fn freeViolation(gpa: Allocator, v: Violation) void {
     gpa.free(v.check);
     gpa.free(v.file);
     gpa.free(v.text);
+    gpa.free(v.rule_text);
 }
 
 pub const Adopted = struct {

@@ -606,3 +606,58 @@ test "git parity: add, commit -a and stash never pick up or remove .emetgate" {
     try testing.expect(exists(&repo, "d.log"));
     try expectNoWorkspace(&repo, &.{ "ls-files", "--cached" });
 }
+
+fn freeze(root_abs: []const u8, where: []const u8) !void {
+    const id = try @import("emetgate").memory.remember(gpa, testing.io, root_abs, .project, "kept by hand", true, "frozen", where);
+    gpa.free(id);
+}
+
+test "git write commit is rejected when it would carry a frozen path, however the path gets in" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("held.txt", "one\n");
+    try repo.writeFile("free.txt", "one\n");
+    try repo.commitAll("init");
+    try freeze(repo.root_abs, "held.txt");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const head = try repo.git(&.{ "rev-parse", "HEAD" });
+    defer gpa.free(head);
+
+    try repo.writeFile("held.txt", "two\n");
+    for ([_][]const []const u8{
+        &.{ "commit", "-am", "x" },
+        &.{ "commit", "--all", "-m", "x" },
+        &.{ "commit", "-m", "x", "--", "held.txt" },
+    }) |args| {
+        var reply = try call(runtime, repo.root_abs, .{ .args = args });
+        defer reply.deinit();
+        try testing.expect(reply.is_error);
+        try testing.expectEqualStrings("rule_violation", reply.string("reason").?);
+        try testing.expect(std.mem.indexOf(u8, reply.string("fix").?, "change the code instead") != null);
+    }
+    gpa.free(try repo.git(&.{ "add", "held.txt" }));
+    {
+        var reply = try call(runtime, repo.root_abs, .{ .args = &[_][]const u8{ "commit", "-m", "x" } });
+        defer reply.deinit();
+        try testing.expectEqualStrings("rule_violation", reply.string("reason").?);
+    }
+    const still = try repo.git(&.{ "rev-parse", "HEAD" });
+    defer gpa.free(still);
+    try testing.expectEqualStrings(head, still);
+
+    gpa.free(try repo.git(&.{ "reset", "-q", "held.txt" }));
+    try repo.writeFile("free.txt", "two\n");
+    {
+        var reply = try call(runtime, repo.root_abs, .{ .args = &[_][]const u8{ "commit", "-m", "free only", "--", "free.txt" } });
+        defer reply.deinit();
+        try testing.expectEqualStrings("ok", reply.string("status").?);
+    }
+    const log = try repo.git(&.{ "log", "-1", "--format=%s" });
+    defer gpa.free(log);
+    try testing.expectEqualStrings("free only", std.mem.trim(u8, log, "\r\n"));
+    const dirty = try repo.git(&.{ "status", "--short" });
+    defer gpa.free(dirty);
+    try testing.expect(std.mem.indexOf(u8, dirty, "held.txt") != null);
+}

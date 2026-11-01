@@ -2,7 +2,6 @@ const std = @import("std");
 const sandbox = @import("sandbox.zig");
 
 pub const max_summary = 200;
-const tail_lines = 15;
 const max_summary_lines = 3;
 const separator = " | ";
 
@@ -26,48 +25,160 @@ pub const Summary = struct {
     }
 };
 
-const summary_words = [_][]const u8{ "passing", "failing", "pending", "passed", "failed", "skipped", "# pass", "# fail", "# tests", "tests:", "test suites:", "tests run", " ok ", "ran " };
+const outcome_words = [_][]const u8{ "passing", "failing", "pending", "passed", "failed", "skipped", "pass", "fail", "failures", "failure", "ignored", "succeeded", "cancelled", "canceled", "todo", "xfailed", "xpassed" };
+const test_words = [_][]const u8{ "tests", "test" };
+const after_test_count = [_][]const u8{ "in", "across", "ran", "run", "completed", "total" };
+const after_outcome_count = [_][]const u8{ "in", "and", "of", "with", "out" };
+const before_any_run = [_][]const u8{ "running", "collecting", "collected", "found", "discovered", "discovering", "executing", "starting" };
+const counter_keys = [_][]const u8{ "tests", "pass", "fail", "passed", "failed" };
+const optional_keys = [_][]const u8{ "skipped", "cancelled", "canceled", "todo", "pending", "ignored" };
+const result_marks = [_][]const u8{ "\u{2714} ", "\u{2713} ", "\u{221a} ", "\u{2716} ", "\u{2715} ", "\u{2717} ", "\u{00d7} " };
+const max_line_tokens = 64;
 
-fn hasCount(line: []const u8) bool {
+const TokenKind = enum { word, count, mark };
+const Token = struct { kind: TokenKind, text: []const u8 };
+
+const LineTokens = struct {
+    items: [max_line_tokens]Token = undefined,
+    len: usize = 0,
+
+    fn add(self: *LineTokens, token: Token) void {
+        if (self.len == self.items.len) return;
+        self.items[self.len] = token;
+        self.len += 1;
+    }
+
+    fn slice(self: *const LineTokens) []const Token {
+        return self.items[0..self.len];
+    }
+};
+
+fn joinsWord(c: u8) bool {
+    return c == '.' or c == '-' or c == '/' or c == '\\';
+}
+
+fn wordEnd(line: []const u8, start: usize) usize {
+    var end = start;
+    while (end < line.len) : (end += 1) {
+        const c = line[end];
+        if (std.ascii.isAlphanumeric(c) or c == '_') continue;
+        if (joinsWord(c) and end + 1 < line.len and std.ascii.isAlphanumeric(line[end + 1])) continue;
+        break;
+    }
+    return end;
+}
+
+fn isCount(word: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, word, '/');
+    var pieces: usize = 0;
+    while (parts.next()) |part| : (pieces += 1) {
+        if (part.len == 0) return false;
+        for (part) |c| if (!std.ascii.isDigit(c)) return false;
+    }
+    return pieces <= 2;
+}
+
+fn tokenize(line: []const u8) LineTokens {
+    var tokens: LineTokens = .{};
     var index: usize = 0;
-    while (index < line.len) : (index += 1) {
-        if (line[index] == 0x1b) {
-            const end = std.mem.indexOfScalarPos(u8, line, index, 'm') orelse return false;
+    while (index < line.len and tokens.len < max_line_tokens) {
+        const c = line[index];
+        if (c == 0x1b) {
+            const end = std.mem.indexOfScalarPos(u8, line, index, 'm') orelse return tokens;
+            index = end + 1;
+        } else if (std.ascii.isAlphanumeric(c) or c == '_') {
+            const end = wordEnd(line, index);
+            const word = line[index..end];
+            tokens.add(.{ .kind = if (isCount(word)) .count else .word, .text = word });
             index = end;
-            continue;
+        } else {
+            if (!std.ascii.isWhitespace(c)) tokens.add(.{ .kind = .mark, .text = line[index .. index + 1] });
+            index += 1;
         }
-        if (std.ascii.isDigit(line[index])) return true;
+    }
+    return tokens;
+}
+
+fn isWordIn(token: Token, words: []const []const u8) bool {
+    if (token.kind != .word) return false;
+    for (words) |word| {
+        if (std.ascii.eqlIgnoreCase(token.text, word)) return true;
     }
     return false;
+}
+
+fn isZero(word: []const u8) bool {
+    return std.mem.trim(u8, word, "0").len == 0;
+}
+
+fn isSeparator(token: Token) bool {
+    return token.kind == .mark and (token.text[0] == ':' or token.text[0] == '=');
+}
+
+fn endsCount(tokens: []const Token, index: usize, words: []const []const u8) bool {
+    if (index >= tokens.len) return true;
+    const next = tokens[index];
+    return next.kind == .mark or isWordIn(next, words) or isWordIn(next, &outcome_words) or isWordIn(next, &test_words);
+}
+
+fn valueFollows(tokens: []const Token, index: usize) bool {
+    return index + 1 < tokens.len and isSeparator(tokens[index]) and tokens[index + 1].kind == .count;
+}
+
+fn countsRun(tokens: []const Token, index: usize) bool {
+    const token = tokens[index];
+    const counted = index > 0 and tokens[index - 1].kind == .count;
+    if (isWordIn(token, &outcome_words)) return valueFollows(tokens, index + 1) or (counted and endsCount(tokens, index + 1, &after_outcome_count));
+    if (!isWordIn(token, &test_words)) return false;
+    if (valueFollows(tokens, index + 1)) return true;
+    if (index + 2 < tokens.len and std.ascii.eqlIgnoreCase(tokens[index + 1].text, "run") and valueFollows(tokens, index + 2)) return true;
+    return counted and endsCount(tokens, index + 1, &after_test_count);
+}
+
+fn startsWithToken(body: []const u8, word: []const u8) bool {
+    return body.len > word.len and std.mem.startsWith(u8, body, word) and !std.ascii.isAlphanumeric(body[word.len]);
+}
+
+fn namesOneTest(body: []const u8) bool {
+    for (result_marks) |mark| {
+        if (std.mem.startsWith(u8, body, mark)) return true;
+    }
+    if (startsWithToken(body, "not ok")) return true;
+    if (std.mem.startsWith(u8, body, "ok ") and body.len > 3 and std.ascii.isDigit(body[3])) return true;
+    if (std.mem.startsWith(u8, body, "FAILED ") and !std.mem.startsWith(u8, body, "FAILED (")) return true;
+    if (std.mem.startsWith(u8, body, "ERROR ")) return true;
+    var digits: usize = 0;
+    while (digits < body.len and std.ascii.isDigit(body[digits])) digits += 1;
+    return digits != 0 and digits < body.len and body[digits] == ')';
+}
+
+fn isGoPackageLine(body: []const u8) bool {
+    if (std.mem.startsWith(u8, body, "FAIL\t")) return true;
+    return std.mem.startsWith(u8, body, "ok ") and body.len > 3 and (body[3] == ' ' or body[3] == '\t');
+}
+
+fn withoutLeadingMarks(tokens: []const Token) []const Token {
+    var start: usize = 0;
+    while (start < tokens.len and tokens[start].kind == .mark) start += 1;
+    return tokens[start..];
 }
 
 pub fn isSummaryLine(line: []const u8) bool {
-    if (!hasCount(line)) return false;
-    for (summary_words) |word| {
-        if (std.ascii.indexOfIgnoreCase(line, word) != null) return true;
+    const body = clean(line);
+    if (isFrame(body) or std.mem.startsWith(u8, body, "File \"") or namesOneTest(body)) return false;
+    if (isGoPackageLine(body)) return true;
+    const all = tokenize(body);
+    const tokens = withoutLeadingMarks(all.slice());
+    if (tokens.len == 0 or isWordIn(tokens[0], &before_any_run)) return false;
+    const bare = tokens.len == 2 and tokens[1].kind == .count;
+    const labeled = tokens.len == 3 and isSeparator(tokens[1]) and tokens[2].kind == .count;
+    if ((bare or labeled) and isWordIn(tokens[0], &optional_keys)) return !isZero(tokens[tokens.len - 1].text);
+    if (bare) return isWordIn(tokens[0], &counter_keys);
+    for (tokens, 0..) |_, index| {
+        if (countsRun(tokens, index)) return true;
     }
     return false;
 }
-
-const Lines = struct {
-    items: [tail_lines][]const u8 = undefined,
-    count: usize = 0,
-
-    fn fromTail(bytes: []const u8) Lines {
-        var lines: Lines = .{};
-        var end = bytes.len;
-        while (end > 0 and lines.count < tail_lines) {
-            const start = if (std.mem.lastIndexOfScalar(u8, bytes[0..end], '\n')) |nl| nl + 1 else 0;
-            const line = clean(bytes[start..end]);
-            if (line.len != 0) {
-                lines.items[lines.count] = line;
-                lines.count += 1;
-            }
-            end = if (start == 0) 0 else start - 1;
-        }
-        return lines;
-    }
-};
 
 fn clean(line: []const u8) []const u8 {
     var trimmed = std.mem.trim(u8, line, " \t\r");
@@ -78,57 +189,40 @@ fn clean(line: []const u8) []const u8 {
     return trimmed;
 }
 
+const Picked = struct {
+    items: [max_summary_lines][]const u8 = undefined,
+    count: usize = 0,
+
+    fn fromStream(bytes: []const u8) Picked {
+        var picked: Picked = .{};
+        var end = bytes.len;
+        while (end > 0 and picked.count < picked.items.len) {
+            const start = if (std.mem.lastIndexOfScalar(u8, bytes[0..end], '\n')) |nl| nl + 1 else 0;
+            const line = clean(bytes[start..end]);
+            if (line.len != 0 and isSummaryLine(line)) {
+                picked.items[picked.count] = line;
+                picked.count += 1;
+            }
+            end = if (start == 0) 0 else start - 1;
+        }
+        return picked;
+    }
+};
+
 pub fn summarize(report: sandbox.Report) Summary {
     var summary: Summary = .{};
     if (report.no_tests) summary.add(no_tests_note);
-    var picked: [max_summary_lines][]const u8 = undefined;
-    var count: usize = 0;
     for ([_][]const u8{ report.stdout, report.stderr }) |stream| {
-        const lines = Lines.fromTail(stream);
-        for (lines.items[0..lines.count]) |line| {
-            if (count == picked.len) break;
-            if (isSummaryLine(line)) {
-                picked[count] = line;
-                count += 1;
-            }
+        const picked = Picked.fromStream(stream);
+        if (picked.count == 0) continue;
+        var index = picked.count;
+        while (index > 0) {
+            index -= 1;
+            summary.add(picked.items[index]);
         }
-        if (count != 0) break;
-    }
-    if (count == 0) {
-        if (countLines(report.stdout, &summary)) return summary;
-        const lines = Lines.fromTail(if (std.mem.trim(u8, report.stdout, " \t\r\n").len != 0) report.stdout else report.stderr);
-        if (lines.count != 0) summary.add(lines.items[0]);
-        return summary;
-    }
-    var index = count;
-    while (index > 0) {
-        index -= 1;
-        summary.add(picked[index]);
+        break;
     }
     return summary;
-}
-
-fn isCountLine(line: []const u8) bool {
-    var digits: usize = 0;
-    while (digits < line.len and std.ascii.isDigit(line[digits])) digits += 1;
-    if (digits == 0 or digits >= line.len or line[digits] != ' ') return false;
-    const rest = line[digits + 1 ..];
-    for ([_][]const u8{ "passing", "failing", "pending" }) |word| {
-        if (std.mem.startsWith(u8, rest, word)) return true;
-    }
-    return false;
-}
-
-fn countLines(stream: []const u8, summary: *Summary) bool {
-    var found = false;
-    var lines = std.mem.splitScalar(u8, stream, '\n');
-    while (lines.next()) |raw| {
-        const line = clean(raw);
-        if (!isCountLine(line)) continue;
-        summary.add(line);
-        found = true;
-    }
-    return found;
 }
 
 pub const no_tests_note = "no tests collected; treated as passing";
@@ -369,9 +463,9 @@ test "a passing run is summed up by its count lines, oldest first and under the 
 
     const quiet = reportOf(0, "build ok\nall good\n\n", "");
     summary = summarize(quiet);
-    try testing.expectEqualStrings("all good", summary.text());
+    try testing.expectEqualStrings("", summary.text());
 
-    const long = reportOf(0, "x" ** 500 ++ " passing\n", "");
+    const long = reportOf(0, "passed: 3 " ++ "x" ** 500 ++ "\n", "");
     summary = summarize(long);
     try testing.expectEqual(@as(usize, max_summary), summary.text().len);
 
@@ -430,4 +524,48 @@ test "a run that collected no tests counts as passing with a note, a failing or 
     var leftovers = reportOf(5, "no tests ran\n", "");
     leftovers.killed_leftovers = true;
     try std.testing.expect(!noTests(leftovers));
+}
+
+test "every runner's real summary is what a run sums up to, and its noise never is" {
+    const Case = struct { stdout: []const u8, stderr: []const u8 = "", want: []const u8 };
+    for ([_]Case{
+        .{ .stdout = "\u{2714} adds (0.5ms)\n\u{2139} tests 3\n\u{2139} suites 0\n\u{2139} pass 3\n\u{2139} fail 0\n\u{2139} cancelled 0\n\u{2139} skipped 0\n\u{2139} todo 0\n\u{2139} duration_ms 52.1\n", .want = "\u{2139} tests 3 | \u{2139} pass 3 | \u{2139} fail 0" },
+        .{ .stdout = "\u{2139} tests 3\n\u{2139} pass 2\n\u{2139} fail 0\n\u{2139} skipped 1\n\u{2139} todo 0\n", .want = "\u{2139} pass 2 | \u{2139} fail 0 | \u{2139} skipped 1" },
+        .{ .stdout = "TAP version 13\nok 1 - 3 passed\n1..1\n# tests 1\n# suites 0\n# pass 1\n# fail 0\n# skipped 0\n# duration_ms 3\n", .want = "# tests 1 | # pass 1 | # fail 0" },
+        .{ .stdout = "\u{2714} a\n\u{2139} tests 1\n\u{2139} pass 1\n\u{2139} fail 0\n    at Test.processPendingSubtests (node:internal/test_runner/test:527:18)\n    at Test.postRun (node:internal/test_runner/test:1 pending)\n", .want = "\u{2139} tests 1 | \u{2139} pass 1 | \u{2139} fail 0" },
+        .{ .stdout = "tests/a.py ...  [100%]\n========================= 3 passed in 0.12s =========================\n", .want = "========================= 3 passed in 0.12s =========================" },
+        .{ .stdout = "FAILED tests/a.py::test_x - assert 3 failed\n===== 1 failed, 2 passed in 0.12s =====\n", .want = "===== 1 failed, 2 passed in 0.12s =====" },
+        .{ .stdout = "Passed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3, Duration: 12 ms - App.dll (net8.0)\n", .want = "Passed!  - Failed:     0, Passed:     3, Skipped:     0, Total:     3, Duration: 12 ms - App.dll (net8.0)" },
+        .{ .stdout = "Test summary: total: 3, failed: 0, succeeded: 3, skipped: 0, duration: 0.6s\nBuild succeeded in 1.1s\n", .want = "Test summary: total: 3, failed: 0, succeeded: 3, skipped: 0, duration: 0.6s" },
+        .{ .stdout = "", .stderr = "All 5 tests passed.\n", .want = "All 5 tests passed." },
+        .{ .stdout = "", .stderr = "Build Summary: 3/3 steps succeeded; 10/10 tests passed\n", .want = "Build Summary: 3/3 steps succeeded; 10/10 tests passed" },
+        .{ .stdout = "running 5 tests\ntest a ... ok\n\ntest result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n\n", .want = "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s" },
+        .{ .stdout = "PASS\nok  \texample.com/x\t0.123s\n", .want = "ok  \texample.com/x\t0.123s" },
+        .{ .stdout = "ok  \texample.com/x\t(cached)\n", .want = "ok  \texample.com/x\t(cached)" },
+        .{ .stdout = "--- FAIL: TestX (0.00s)\nFAIL\nFAIL\texample.com/x\t0.1s\nFAIL\n", .want = "FAIL\texample.com/x\t0.1s" },
+        .{ .stdout = "", .stderr = "....\n----------------------------------------------------------------------\nRan 5 tests in 0.100s\n\nOK\n", .want = "Ran 5 tests in 0.100s" },
+        .{ .stdout = "", .stderr = "Ran 5 tests in 0.1s\n\nFAILED (failures=1)\n", .want = "Ran 5 tests in 0.1s | FAILED (failures=1)" },
+        .{ .stdout = " 3 pass\n 0 fail\n 5 expect() calls\nRan 3 tests across 1 file. [5.00ms]\n", .want = "3 pass | 0 fail | Ran 3 tests across 1 file. [5.00ms]" },
+        .{ .stdout = "ok | 3 passed | 0 failed (5ms)\n", .want = "ok | 3 passed | 0 failed (5ms)" },
+        .{ .stdout = "[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0\n[INFO] BUILD SUCCESS\n", .want = "[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0" },
+        .{ .stdout = "OK (5 tests, 10 assertions)\n", .want = "OK (5 tests, 10 assertions)" },
+        .{ .stdout = " Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Duration  1.2s\n", .want = "Test Files  1 passed (1) | Tests  3 passed (3)" },
+        .{ .stdout = "\x1b[32m  37 passing\x1b[0m\x1b[90m (120ms)\x1b[0m\n", .want = "37 passing\x1b[0m\x1b[90m (120ms)\x1b[0m" },
+        .{ .stdout = "\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m3 passed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n", .want = "Tests \x1b[22m \x1b[1m\x1b[32m3 passed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m" },
+        .{ .stdout = "5 examples, 0 failures\n", .want = "5 examples, 0 failures" },
+        .{ .stdout = "Compiled 3 files in 12ms\nall good\n", .want = "" },
+        .{ .stdout = "\u{2713} returns 3 failed items\n\u{2714} 2 tests passed through\n1) keeps 3 failed items\nok 4 - shows 5 passed\nnot ok 5 - shows 5 passed\n", .want = "" },
+        .{ .stdout = "Running 3 tests\nFound 2 tests\ncollected 3 items\nlogged 2 failed jobs\nport 8080 passed through\n", .want = "" },
+        .{ .stdout = "\u{2139} skipped 0\n\u{2139} todo 0\nskipped: 0\n", .want = "" },
+    }) |case| {
+        errdefer std.debug.print("output: {s}{s}\n", .{ case.stdout, case.stderr });
+        const summary = summarize(reportOf(0, case.stdout, case.stderr));
+        try testing.expectEqualStrings(case.want, summary.text());
+    }
+}
+
+test "a summary far above a long failure list is still found, for any runner" {
+    const output = "\u{2139} tests 2\n\u{2139} pass 1\n\u{2139} fail 1\n\n\u{2716} failing tests:\n\n" ++ "  AssertionError: expected true to equal false\n" ** 40;
+    const summary = summarize(reportOf(1, output, ""));
+    try testing.expectEqualStrings("\u{2139} tests 2 | \u{2139} pass 1 | \u{2139} fail 1", summary.text());
 }

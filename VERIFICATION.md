@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2623**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2640**
 - Mutations declared in `tests/mutations.json`: **1783**
   - killed: **1734**
   - equivalent: **9**
@@ -501,7 +501,7 @@ python tools/verification_page.py --check
 | `SP17-where-file-match-ignored` | `src/platform/where.zig` | `.file => \|p\| samePath(p, rel),` -> `.file => \|p\| p.len != 0,` | a file where covers only that file and a directory where covers what is under it; scope: ... | killed |
 | `SP18-gate-where-ignored` | `src/platform/rules.zig` | `if (!w.coversFile(change.rel)) continue;         }         cons...` -> `if (false and !w.coversFile(change.rel)) continue;         }   ...` | scope: a rule whose where names another file does not block the proposal | killed |
 | `SP19-gate-judges-the-whole-file-for-a-symbol-scope` | `src/platform/rules.zig` | `const span = judgedSpan(gpa, scope, after) catch` -> `const span = judgedSpan(gpa, null, after) catch` | scope: a symbol-scoped rule blocks only a proposal to that symbol; scope: a batch applies... | killed |
-| `SP20-ledger-rule-drops-where` | `src/platform/rules.zig` | `.check = check, .where = decision.where, .lang` -> `.check = check, .lang` | scope: a rule whose where names another file does not block the proposal; scope: a rule s... | killed |
+| `SP20-ledger-rule-drops-where` | `src/platform/rules.zig` | `.check = check, .where = decision.where, .text` -> `.check = check, .text` | scope: a rule whose where names another file does not block the proposal; scope: a rule s... | killed |
 | `SP24-scan-symbol-span-is-whole-file` | `src/platform/rules.zig` | `return .{ .start = target.body.startByte(), .end = target.body....` -> `_ = target;     return .{ .start = 0, .end = @intCast(snapshot....` | scope: a symbol scope ignores the same text in another symbol of the same file; scope: a ... | killed |
 | `EX1-exclusions-ignored` | `src/platform/where.zig` | `return self.base.coversFile(rel) and !self.excludes(rel);` -> `return self.base.coversFile(rel);` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
 | `EX2-dir-name-only-first-component` | `src/platform/where.zig` | `start = i + 1;` -> `start = i;` | exclusion: src/ !__tests__/ drops the test directories and keeps production code; exclusi... | killed |
@@ -1599,7 +1599,7 @@ python tools/verification_page.py --check
 | `C22-env-error-on-success` | `src/platform/test_outcome.zig` | `if (code == 0) return null;` -> `` | a missing command or module is an environment error, a failing test or a relati... | killed |
 | `C22-relative-module-is-env-error` | `src/platform/test_outcome.zig` | `if (relativeModule(line)) break;` -> `` | a missing command or module is an environment error, a failing test or a relati... | killed |
 | `C22-env-error-reported-as-failure` | `src/protocol/wire.zig` | `else if (test_outcome.envError(report) != null) "test_env_error"` -> `` | a test command that could not start is a test_env_error with its first useful l... | killed |
-| `B18-ansi-digits-count` | `src/platform/test_outcome.zig` | `if (line[index] == 0x1b) {` -> `if (false) {` | a passing run is summed up by its count lines, oldest first and under the size ... | killed |
+| `B18-ansi-digits-count` | `src/platform/test_outcome.zig` | `if (c == 0x1b) {` -> `if (false) {` | every runner's real summary is what a run sums up to, and its noise never is | killed |
 | `B18-rejected-summary-dropped` | `src/protocol/wire.zig` | `if (std.mem.eql(u8, reason, "tests_failed")) {` -> `if (false) {` | a test command that could not start is a test_env_error with its first useful l... | killed |
 | `TF-frames-uncapped` | `src/platform/test_outcome.zig` | `if (frames > frames_per_stack) {` -> `if (false) {` | test output keeps its failure lines, drops repeated stacks and frames past the ... | killed |
 | `TF-repeated-frames-kept` | `src/platform/test_outcome.zig` | `if (frames != 0 and (try seen.getOrPut(arena, body)).found_exis...` -> `if (frames != 0 and (try seen.getOrPut(arena, body)).found_exis...` | test output keeps its failure lines, drops repeated stacks and frames past the ... | killed |
@@ -1700,7 +1700,7 @@ python tools/verification_page.py --check
 | `TD3-bin-dir-searched` | `src/platform/test_command.zig` | `"bin", "obj",` -> `"obj",` | test detection: a dotnet solution, or the one test project in a subfolder, name... | killed |
 | `TD4-one-of-many-test-projects-picked` | `src/platform/test_command.zig` | `if (found.count != 1) return null;` -> `if (found.count == 0) return null;` | test detection: a dotnet solution, or the one test project in a subfolder, name... | killed |
 | `DG1-digest-errors-not-first` | `src/protocol/output_digest.zig` | `if (!isErrorEntry(entry) or used + need > budget / 2) continue;` -> `if (isErrorEntry(entry) or used + need > budget / 2) continue;` | an error line repeated under hundreds of failing test titles is shown even when... | killed |
-| `TO1-count-lines-not-scanned` | `src/platform/test_outcome.zig` | `if (countLines(report.stdout, &summary)) return summary;` -> `` | a failing run whose count lines sit above a long failure list is summed up by t... | killed |
+| `TO1-count-lines-not-scanned` | `src/platform/test_outcome.zig` | `end = if (start == 0) 0 else start - 1;` -> `end = 0;` | a failing run whose count lines sit above a long failure list is summed up by t... | killed |
 | `DD1-punctuation-substituted` | `src/protocol/diff_digest.zig` | `if (!isWord(a[0]) or !isWord(b[0])) return null;` -> `` | a word for word substitution is one pair, anything else is not | killed |
 | `DD2-single-substitution-collapsed` | `src/protocol/diff_digest.zig` | `.? < 2) break false;` -> `.? < 1) break false;` | consecutive collapsed lines print as a range and a single substitution is shown... | killed |
 | `RD1-numeric-index-flagged` | `src/engine/rename.zig` | `{ "-", "/", "//",` -> `{ "/", "//",` | rename: a string that is exactly the name, eval, computed requires and construc... | killed |
