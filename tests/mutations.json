@@ -17318,28 +17318,10 @@
       ]
     },
     {
-      "id": "T3-EX4-field-modifier-not-read",
-      "file": "src/engine/facts_extract.zig",
-      "from": "        while (current) |at| : (current = at.parent()) {\n",
-      "to": "        while (current) |at| : (current = null) {\n",
-      "kills": [
-        "facts extract: a C# definition is exported only when it and every type around it are public"
-      ]
-    },
-    {
       "id": "T3-EX5-implicit-enum-member-lost",
       "file": "src/engine/facts_extract.zig",
       "from": "        return !hidden and (owner.kind == .interface or owner.kind == .enumeration);\n",
       "to": "        return false;\n",
-      "kills": [
-        "facts extract: a C# definition is exported only when it and every type around it are public"
-      ]
-    },
-    {
-      "id": "T3-EX6-class-body-walked-past",
-      "file": "src/engine/facts_extract.zig",
-      "from": "            if (std.mem.eql(u8, at.kind(), self.profile.class_body)) break;\n",
-      "to": "",
       "kills": [
         "facts extract: a C# definition is exported only when it and every type around it are public"
       ]
@@ -17368,7 +17350,7 @@
       "id": "T3-AL3-dynamic-list-trusted",
       "file": "src/engine/name_list.zig",
       "from": "        if (!try staticList(snapshot, list, entry.node, &names, gpa)) open = true;\n",
-      "to": "        _ = try staticList(snapshot, list, entry.node, &names, gpa);\n",
+      "to": "        if (!try staticList(snapshot, list, entry.node, &names, gpa)) open = false;\n",
       "kills": [
         "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
         "python boundedness: a public function can be imported, a private or unlisted one stays local"
@@ -17405,7 +17387,7 @@
     {
       "id": "T3-BD2-private-owner-public",
       "file": "src/engine/boundedness.zig",
-      "from": "        if (seen.isPrivate(text)) return false;\n",
+      "from": "        if (owner) |inner| if (seen.isPrivate(inner)) return false;\n",
       "to": "",
       "kills": [
         "python boundedness: a method follows its class, a nested function is local"
@@ -17424,7 +17406,7 @@
       "id": "T3-BD4-rule-off",
       "file": "src/engine/boundedness.zig",
       "from": "    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| return isExposedByName(snapshot, seen, sym, name);\n",
-      "to": "",
+      "to": "    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| if (false) return isExposedByName(snapshot, seen, sym, name);\n",
       "kills": [
         "python boundedness: a public function can be imported, a private or unlisted one stays local"
       ]
@@ -17499,6 +17481,42 @@
       "to": ") return;",
       "kills": [
         "evidence: a Python file with test content counts as a test file, whatever its name"
+      ]
+    },
+    {
+      "id": "T3-EX7-hidden-word-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (oneOf(self.raw(child), self.f.hidden_modifiers)) hidden = true;\n",
+      "to": "            if (false) hidden = true;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX4-field-modifier-not-read",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        while (current) |at| : (current = at.parent()) {\n            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "        while (current) |at| : (current = null) {\n            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX6-owner-modifier-read",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX8-first-type-stops-early",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "            if (at.startByte() == owner.span.start) break;\n",
+      "kills": [
+        "facts extract: a C# type at the very start of a file reads its own visibility"
       ]
     }
   ]

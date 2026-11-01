@@ -238,7 +238,7 @@ const Extractor = struct {
         var hidden = false;
         var current: ?ts.Node = node;
         while (current) |at| : (current = at.parent()) {
-            if (std.mem.eql(u8, at.kind(), self.profile.class_body)) break;
+            if (parent != 0 and at.startByte() == owner.span.start) break;
             var i: u32 = 0;
             while (at.namedChild(i)) |child| : (i += 1) {
                 if (!self.profile.isModifier(child.kind())) continue;

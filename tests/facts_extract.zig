@@ -236,8 +236,8 @@ test "facts extract: a C# definition is exported only when it and every type aro
         \\    public class Cart {
         \\        public int Total() { int Local() { return 1; } return Local(); }
         \\        public int Count { get; set; }
-        \\        public int Size;
-        \\        private int hidden;
+        \\        public int Size, Extra;
+        \\        private int hidden, secret;
         \\        internal int Inner() { return 1; }
         \\        protected int Guarded() { return 1; }
         \\        int Bare() { return 1; }
@@ -246,7 +246,7 @@ test "facts extract: a C# definition is exported only when it and every type aro
         \\    }
         \\    class Quiet { public int Open() { return 1; } }
         \\    internal class Helper { public int Help() { return 1; } }
-        \\    public interface IShape { int Area(); }
+        \\    public interface IShape { int Area(); int Twice() { return 2; } private int Sealed() { return 1; } }
         \\    interface IHidden { int Gone(); }
         \\    public enum Color { Red }
         \\}
@@ -256,8 +256,8 @@ test "facts extract: a C# definition is exported only when it and every type aro
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const found = try facts_extract.extract(arena_state.allocator(), snapshot);
-    const yes = [_][]const u8{ "Cart", "Total", "Count", "Size", "Line", "Qty", "IShape", "Color", "Red" };
-    const no = [_][]const u8{ "Local", "hidden", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
+    const yes = [_][]const u8{ "Cart", "Total", "Count", "Size", "Extra", "Line", "Qty", "IShape", "Twice", "Color", "Red" };
+    const no = [_][]const u8{ "Local", "hidden", "secret", "Sealed", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
     var seen: usize = 0;
     for (found.defs) |d| {
         for (yes) |name| {
@@ -294,6 +294,20 @@ fn pythonExported(source: []const u8, name: []const u8) !bool {
     return error.NoDef;
 }
 
+test "facts extract: a C# type at the very start of a file reads its own visibility" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, "public class First { public int Size, Extra; int Bare; }\n", ".cs");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (d.name.len == 0) continue;
+        try testing.expectEqual(!std.mem.eql(u8, d.name, "Bare"), d.exported);
+    }
+}
+
 test "facts extract: a Python definition is exported by __all__ when the list is static, else by its name" {
     try testing.expect(try pythonExported("def area():\n    return 1\n", "area"));
     try testing.expect(!try pythonExported("def _area():\n    return 1\n", "_area"));
@@ -307,4 +321,5 @@ test "facts extract: a Python definition is exported by __all__ when the list is
     try testing.expect(try pythonExported("__all__ = names()\ndef _area():\n    return 1\n", "_area"));
     try testing.expect(try pythonExported("__all__ = [\"a\", *more]\ndef _area():\n    return 1\n", "_area"));
     try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__.extend(more)\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__ = [\"b\"]\ndef _area():\n    return 1\n", "_area"));
 }

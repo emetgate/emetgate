@@ -144,9 +144,8 @@ fn isExposedByName(snapshot: *const Snapshot, seen: name_list.Exposed, sym: symb
         if (profile.functionKind(p.kind()) != null) return false;
         if (!isContainer(profile, p.kind())) continue;
         const holder = p.childByField("name") orelse return true;
-        const text = snapshot.source[holder.startByte()..holder.endByte()];
-        if (seen.isPrivate(text)) return false;
-        owner = text;
+        if (owner) |inner| if (seen.isPrivate(inner)) return false;
+        owner = snapshot.source[holder.startByte()..holder.endByte()];
     }
     if (owner) |top| return seen.covers(top) and !seen.isPrivate(name);
     return seen.covers(name);
@@ -548,4 +547,8 @@ test "python boundedness: a method follows its class, a nested function is local
     try expectPythonEscape("class Cart:\n    def __eq__(self, o):\n        return True\n", "Cart.__eq__", true);
     try expectPythonEscape("class _Cart:\n    def total(self):\n        return 1\n", "_Cart.total", false);
     try expectPythonEscape("__all__ = []\nclass Cart:\n    def total(self):\n        return 1\n", "Cart.total", false);
+    try expectPythonEscape("__all__ = [\"_Cart\"]\nclass _Cart:\n    def total(self):\n        return 1\n", "_Cart.total", true);
+    try expectPythonEscape("class Cart:\n    class _Line:\n        def total(self):\n            return 1\n", "Cart._Line.total", false);
+    try expectPythonEscape("class Cart:\n    class Line:\n        def total(self):\n            return 1\n", "Cart.Line.total", true);
+    try expectPythonEscape("def outer():\n    def inner():\n        return 1\n    return inner\n", "inner", false);
 }
