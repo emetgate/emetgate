@@ -8092,8 +8092,8 @@
     {
       "id": "MP14-tests-mixed-with-code",
       "file": "src/engine/map.zig",
-      "from": "            const family: Family = if (isTestPath(table, state.path)) .tests else .code;",
-      "to": "            const family: Family = if (isTestPath(table, state.path) and false) .tests else .code;",
+      "from": "            const family: Family = if (isTestFile(state, self.options.fallback)) .tests else .code;",
+      "to": "            const family: Family = if (isTestFile(state, self.options.fallback) and false) .tests else .code;",
       "kills": [
         "map: test files are kept in test regions apart from the code they exercise"
       ]
