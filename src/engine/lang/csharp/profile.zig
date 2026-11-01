@@ -2,6 +2,7 @@ const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
 const csharp_rename = @import("rename.zig");
 const csharp_facts = @import("facts.zig");
+const csharp_map = @import("map.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -117,6 +118,7 @@ pub const profile: Profile = .{
     .modules = &csharp_rename.modules,
     .declarations = csharp_rename.declarations(),
     .facts = &csharp_facts.csharp,
+    .map = &csharp_map.table,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {

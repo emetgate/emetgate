@@ -1,6 +1,7 @@
 const std = @import("std");
 const ts = @import("../tree_sitter.zig");
 const Accessor = @import("../ref.zig").Accessor;
+const facts = @import("../facts.zig");
 
 pub const FunctionKind = enum {
     declaration,
@@ -342,14 +343,18 @@ pub const MapTable = struct {
     test_infixes: []const []const u8,
     decorators: []const MapDecorator,
     call_forms: []const MapCallForm,
-    doc_open: []const u8,
-    doc_close: []const u8,
-    line_comment: []const u8,
-    body_open: u8,
-    arrow: []const u8,
-    statement_end: u8,
-    open_brackets: []const u8,
-    close_brackets: []const u8,
+    doc_open: []const u8 = "",
+    doc_close: []const u8 = "",
+    line_comment: []const u8 = "",
+    body_open: u8 = 0,
+    arrow: []const u8 = "",
+    statement_end: u8 = 0,
+    open_brackets: []const u8 = "",
+    close_brackets: []const u8 = "",
+    namespace_scoped: bool = false,
+    test_name: ?*const fn (base: []const u8) bool = null,
+    test_segment: ?*const fn (segment: []const u8) bool = null,
+    extract: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, defs: []const facts.Def) std.mem.Allocator.Error!facts.MapFacts = null,
 };
 
 pub fn compactSpelling(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {

@@ -3,6 +3,7 @@ const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
 const python_rename = @import("rename.zig");
 const python_facts = @import("facts.zig");
+const python_map = @import("map.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -96,6 +97,7 @@ pub const profile: Profile = .{
     .modules = &python_rename.modules,
     .declarations = python_rename.declarations,
     .facts = &python_facts.python,
+    .map = &python_map.table,
 };
 
 const Decorated = enum { staticmethod, classmethod, property, setter, deleter, getter, overload };

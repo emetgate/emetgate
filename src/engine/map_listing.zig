@@ -235,6 +235,16 @@ fn writeBody(w: *Writer, region: *const map.Region, files: []const File, rows: [
     }
 }
 
+fn writeRoutes(w: *Writer, region: *const map.Region) !void {
+    if (region.routes.len == 0) return;
+    try w.print("{d} routes, commands and events:\n", .{region.routes.len});
+    for (region.routes) |route| {
+        try w.print("  {s}", .{route.display});
+        if (route.name.len != 0) try w.print(" {s}", .{route.name});
+        try w.print(" {s}:{d}\n", .{ route.path[@min(region.dir.len, route.path.len)..], route.line });
+    }
+}
+
 pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, region_id: map.RegionId, context: Context, options: Options) !ListingAnswer {
     if (region_id >= m.regions.len) return ListingAnswer.refuse(error.UnknownRegion, try std.fmt.allocPrint(arena, "no region r{d}; the map has r1 to r{d}", .{ region_id + 1, m.regions.len }));
     const budget = @max(options.budget, min_budget);
@@ -258,7 +268,9 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     }
     const total: u32 = @intCast(rows.items.len);
     if (options.offset > 0 and options.offset >= total) return ListingAnswer.refuse(error.OffsetOutOfRange, try std.fmt.allocPrint(arena, "offset {d} is past the {d} entries of r{d}", .{ options.offset, total, region_id + 1 }));
-    const body = budget -| reserve;
+    var entries_text: Writer.Allocating = .init(arena);
+    if (options.offset == 0) try writeRoutes(&entries_text.writer, region);
+    const body = (budget -| reserve) -| entries_text.written().len;
     const p = plan(region, files, rows.items, body, options.offset, true);
 
     var missing: std.ArrayList(answer.Missing) = .empty;
@@ -323,6 +335,7 @@ pub fn regionListing(arena: Allocator, store: *const Store, m: *const map.Map, r
     try w.print("region r{d} {s} ({t}): {d} symbols in {d} files; paths below are relative to {s}\n", .{ region_id + 1, region.path, region.family, total_symbols, files.len, if (region.dir.len == 0) "the repository root" else region.dir });
     try result.writeStatus(w, shown_symbols, "symbols");
     try w.writeByte('\n');
+    try w.writeAll(entries_text.written());
     try writeBody(w, region, files, rows.items, p);
     if (value.next) |next| {
         try w.print("... entries {d} to {d} of {d} not shown (budget {d} characters), so the listing is partial; next page: emetgate map region r{d} --offset {d}\n", .{ next + 1, total, total, budget, region_id + 1, next });
