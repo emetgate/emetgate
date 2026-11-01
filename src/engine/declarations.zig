@@ -21,6 +21,7 @@ pub const Declaration = struct {
     declaration: Span,
     hash: Hash,
     ambiguous: bool = false,
+    signature: []const u8 = "",
 };
 
 const domain = "emetgate declaration v1";
@@ -161,12 +162,22 @@ const Collector = struct {
                 continue;
             }
             const shape = shapeOf(self.profile.declarations.fields, member.kind()) orelse continue;
-            if (self.isFunctionValue(member)) continue;
-            const name = member.childByField(shape.name_field) orelse continue;
-            if (!oneOf(name.kind(), self.profile.addressable_names)) continue;
+            if (self.isFunctionValue(member) or functions_mod.classify(self.profile, member) != null) continue;
+            const named = member.childByField(shape.name_field);
+            const name = named orelse (if (shape.name_token) |token| functions_mod.childOfKind(member, token) else null) orelse continue;
+            if (named != null and !oneOf(name.kind(), self.profile.addressable_names)) continue;
             const empty: Span = .{ .start = 0, .end = 0 };
-            try self.add(.field, member, name, container, self.hasKeywordBefore(member, name), empty, .{ .start = self.decoratedStart(member), .end = member.endByte() });
+            try self.add(.field, member, name, try self.qualified(member, container), self.hasKeywordBefore(member, name), empty, .{ .start = self.decoratedStart(member), .end = member.endByte() });
         }
+    }
+
+    fn qualified(self: *Collector, member: ts.Node, container: []const []const u8) ![]const []const u8 {
+        const qualifier = self.profile.memberQualifier orelse return container;
+        const node = qualifier(member) orelse return container;
+        var path: std.ArrayList([]const u8) = .empty;
+        try path.appendSlice(self.arena, container);
+        try path.append(self.arena, try profile_mod.compactSpelling(self.arena, self.text(node)));
+        return path.items;
     }
 
     fn fieldStatement(self: *Collector, member: ts.Node, container: []const []const u8) !void {

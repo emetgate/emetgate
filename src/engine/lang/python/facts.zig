@@ -39,6 +39,7 @@ pub const python: Facts = .{
     .test_file_infixes = &test_file_infixes,
     .test_dirs = &test_dirs,
     .doc_directives = &doc_directives,
+    .docstrings = true,
     .member = "attribute",
     .object_field = "object",
     .property_field = "attribute",
