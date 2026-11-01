@@ -2519,8 +2519,8 @@
     {
       "id": "SP20-ledger-rule-drops-where",
       "file": "src/platform/rules.zig",
-      "from": ", .where = decision.where });",
-      "to": " });",
+      "from": ", .where = decision.where, .text = decision.text });",
+      "to": ", .text = decision.text });",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
@@ -13971,10 +13971,10 @@
     {
       "id": "B18-ansi-digits-count",
       "file": "src/platform/test_outcome.zig",
-      "from": "        if (line[index] == 0x1b) {",
+      "from": "        if (c == 0x1b) {",
       "to": "        if (false) {",
       "kills": [
-        "a passing run is summed up by its count lines, oldest first and under the size cap"
+        "every runner's real summary is what a run sums up to, and its noise never is"
       ]
     },
     {
@@ -15230,8 +15230,8 @@
     {
       "id": "TO1-count-lines-not-scanned",
       "file": "src/platform/test_outcome.zig",
-      "from": "        if (countLines(report.stdout, &summary)) return summary;\n",
-      "to": "",
+      "from": "            end = if (start == 0) 0 else start - 1;",
+      "to": "            end = 0;",
       "kills": [
         "a failing run whose count lines sit above a long failure list is summed up by them, not by a stack frame"
       ]

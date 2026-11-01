@@ -551,6 +551,7 @@ test "every runner's real summary is what a run sums up to, and its noise never 
         .{ .stdout = "OK (5 tests, 10 assertions)\n", .want = "OK (5 tests, 10 assertions)" },
         .{ .stdout = " Test Files  1 passed (1)\n      Tests  3 passed (3)\n   Duration  1.2s\n", .want = "Test Files  1 passed (1) | Tests  3 passed (3)" },
         .{ .stdout = "\x1b[32m  37 passing\x1b[0m\x1b[90m (120ms)\x1b[0m\n", .want = "37 passing\x1b[0m\x1b[90m (120ms)\x1b[0m" },
+        .{ .stdout = "\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m3 passed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n", .want = "Tests \x1b[22m \x1b[1m\x1b[32m3 passed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m" },
         .{ .stdout = "5 examples, 0 failures\n", .want = "5 examples, 0 failures" },
         .{ .stdout = "Compiled 3 files in 12ms\nall good\n", .want = "" },
         .{ .stdout = "\u{2713} returns 3 failed items\n\u{2714} 2 tests passed through\n1) keeps 3 failed items\nok 4 - shows 5 passed\nnot ok 5 - shows 5 passed\n", .want = "" },
