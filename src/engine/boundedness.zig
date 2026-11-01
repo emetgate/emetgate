@@ -44,7 +44,8 @@ pub fn analyze(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_sp
 }
 
 const isOneOf = @import("functions.zig").isOneOf;
-const Profile = @import("lang/profile.zig").Profile;
+const profile_mod = @import("lang/profile.zig");
+const Profile = profile_mod.Profile;
 
 fn analyzeInner(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_span: symbol.Span) !FrameReport {
     if (snapshot.tree.root().hasError()) return unbounded(.signature_change, .analysis_error);
@@ -177,7 +178,7 @@ fn hasDynamicConstruct(profile: *const Profile, snapshot: *Snapshot) bool {
         const kind = node.kind();
         if (std.mem.eql(u8, kind, profile.call.node)) {
             if (node.childByField(profile.call.function_field)) |callee| {
-                if (isOneOf(snapshot.tree.text(callee), profile.dynamic_callees)) return true;
+                if (profile_mod.calleeIsOneOf(snapshot.tree.text(callee), profile.dynamic_callees)) return true;
             }
         }
         for (profile.dynamic_constructors) |constructor| {

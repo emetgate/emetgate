@@ -236,6 +236,7 @@ test {
     _ = @import("tests/verify_filtered_commit.zig");
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/open_run.zig");
+    _ = @import("tests/open_run_frozen.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_retry.zig");
@@ -261,6 +262,7 @@ test {
     _ = @import("tests/map_region_rank.zig");
     _ = @import("tests/map_explore.zig");
     _ = @import("tests/map_tools.zig");
+    _ = @import("tests/map_py_cs.zig");
     _ = @import("tests/first_reply.zig");
     _ = @import("tests/delete_references.zig");
     _ = @import("tests/rename_tool.zig");
@@ -321,6 +323,7 @@ test {
     _ = @import("tests/lang/conformance.zig");
     _ = @import("tests/lang/python.zig");
     _ = @import("tests/lang/csharp_graph.zig");
+    _ = @import("tests/lang/member_refs.zig");
     _ = @import("tests/rename_facts.zig");
     _ = @import("tests/lang/jsx_compat.zig");
     _ = @import("tests/lang/zig/compat.zig");

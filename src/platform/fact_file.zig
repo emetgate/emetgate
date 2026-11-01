@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 7;
+pub const version: u32 = 8;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
@@ -256,6 +256,37 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.str(n.namespace);
         try e.str(n.name);
     }
+    try e.byte(@intFromBool(f.map.test_content));
+    try e.varint(f.map.entries.len);
+    for (f.map.entries) |m| {
+        try e.byte(@intFromEnum(m.kind));
+        try e.str(m.tag);
+        try e.str(m.text);
+        try e.index(m.def);
+        try e.index(m.group);
+        try e.str(m.receiver);
+        try e.str(m.handler);
+        try e.varint(m.handler_start);
+        try e.varint(m.handler_end);
+        try e.varint(m.line);
+        try e.byte(@as(u8, @intFromBool(m.absolute)) | @as(u8, @intFromBool(m.file_named)) << 1 | @as(u8, @intFromBool(m.stated)) << 2);
+    }
+    try e.varint(f.map.groups.len);
+    for (f.map.groups) |g| {
+        try e.str(g.name);
+        try e.str(g.prefix);
+        try e.str(g.base);
+        try e.str(g.area);
+        try e.byte(@as(u8, @intFromBool(g.class_like)) | @as(u8, @intFromBool(g.top)) << 1);
+    }
+    try e.varint(f.map.mounts.len);
+    for (f.map.mounts) |m| {
+        try e.str(m.parent);
+        try e.index(m.parent_group);
+        try e.str(m.child);
+        try e.str(m.prefix);
+        try e.byte(@as(u8, @intFromBool(m.module)) | @as(u8, @intFromBool(m.overrides)) << 1);
+    }
 }
 
 fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
@@ -383,6 +414,53 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         n.namespace = try d.str();
         n.name = try d.str();
     }
+    const test_content = try d.byte();
+    if (test_content > 1) return error.Corrupt;
+    const map_entries = try a.alloc(facts.MapEntry, try d.count(11));
+    for (map_entries) |*m| {
+        m.kind = try d.enumOf(facts.MapKind);
+        m.tag = try d.str();
+        m.text = try d.str();
+        m.def = try d.index();
+        if (m.def != none and m.def >= defs.len) return error.Corrupt;
+        m.group = try d.index();
+        m.receiver = try d.str();
+        m.handler = try d.str();
+        m.handler_start = try d.int();
+        m.handler_end = try d.int();
+        m.line = try d.int();
+        const flags = try d.byte();
+        if (flags > 7) return error.Corrupt;
+        m.absolute = flags & 1 != 0;
+        m.file_named = flags & 2 != 0;
+        m.stated = flags & 4 != 0;
+    }
+    const map_groups = try a.alloc(facts.MapGroup, try d.count(5));
+    for (map_groups) |*g| {
+        g.name = try d.str();
+        g.prefix = try d.str();
+        g.base = try d.str();
+        g.area = try d.str();
+        const flags = try d.byte();
+        if (flags > 3) return error.Corrupt;
+        g.class_like = flags & 1 != 0;
+        g.top = flags & 2 != 0;
+    }
+    for (map_entries) |m| {
+        if (m.group != none and m.group >= map_groups.len) return error.Corrupt;
+    }
+    const map_mounts = try a.alloc(facts.MapMount, try d.count(5));
+    for (map_mounts) |*m| {
+        m.parent = try d.str();
+        m.parent_group = try d.index();
+        if (m.parent_group != none and m.parent_group >= map_groups.len) return error.Corrupt;
+        m.child = try d.str();
+        m.prefix = try d.str();
+        const flags = try d.byte();
+        if (flags > 3) return error.Corrupt;
+        m.module = flags & 1 != 0;
+        m.overrides = flags & 2 != 0;
+    }
     const found: facts.FileFacts = .{
         .namespaces = namespaces,
         .defs = defs,
@@ -399,6 +477,7 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         .parse_errors = parse_errors,
         .outline = outline,
         .tests = tests,
+        .map = .{ .test_content = test_content == 1, .entries = map_entries, .groups = map_groups, .mounts = map_mounts },
     };
     try checkTargets(found);
     return found;

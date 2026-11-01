@@ -2,6 +2,7 @@ const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
 const csharp_rename = @import("rename.zig");
 const csharp_facts = @import("facts.zig");
+const csharp_map = @import("map.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -11,6 +12,7 @@ const Accessor = @import("../../ref.zig").Accessor;
 const MemberTraits = profile_mod.MemberTraits;
 const Container = profile_mod.Container;
 const LiteralValues = profile_mod.LiteralValues;
+const Binding = profile_mod.Binding;
 
 extern fn tree_sitter_c_sharp() callconv(.c) ?*const ts.Language;
 
@@ -29,11 +31,17 @@ const function_nodes = [_]FunctionNode{
     .{ .node = "lambda_expression", .kind = .arrow },
 };
 
+const value_bodied = [_]FunctionNode{
+    .{ .node = "property_declaration", .kind = .method, .body_field = "value", .body_only = "arrow_expression_clause", .skeleton = " { get; }" },
+    .{ .node = "indexer_declaration", .kind = .method, .body_field = "value", .body_only = "arrow_expression_clause", .skeleton = " { get; }" },
+};
+
 const function_names = [_]FunctionName{
-    .{ .node = "accessor_declaration", .owner_depth = 2, .field = "name" },
-    .{ .node = "operator_declaration", .field = null },
-    .{ .node = "conversion_operator_declaration", .field = null },
-    .{ .node = "destructor_declaration", .field = null },
+    .{ .node = "accessor_declaration", .owner_depth = 2, .field = "name", .token = "this" },
+    .{ .node = "operator_declaration", .field = "operator" },
+    .{ .node = "conversion_operator_declaration", .field = "type" },
+    .{ .node = "destructor_declaration", .field = "name" },
+    .{ .node = "indexer_declaration", .field = null, .token = "this" },
 };
 
 const containers = [_]Container{
@@ -46,18 +54,33 @@ const containers = [_]Container{
     .{ .node = "file_scoped_namespace_declaration", .name = .field },
 };
 
-const never_matching_literal_values: LiteralValues = .{
-    .pair = "",
-    .key_field = "",
-    .value_field = "",
-    .quoted_key = "",
-    .literals = &.{},
+const bindings = [_]Binding{
+    .{ .parent = "variable_declarator", .value_field = "", .name_field = "name" },
+    .{ .parent = "assignment_expression", .value_field = "right", .name_field = "left" },
+    .{ .parent = "property_declaration", .value_field = "value", .name_field = "name" },
+};
+
+const literal_values: LiteralValues = .{
+    .pair = "assignment_expression",
+    .key_field = "left",
+    .value_field = "right",
+    .quoted_key = "string_literal",
+    .quoted_key_content = "string_literal_content",
+    .literals = &.{ "integer_literal", "real_literal", "string_literal", "verbatim_string_literal", "raw_string_literal", "character_literal" },
     .negation_operator_field = "",
-    .negation_operator = "",
+    .negation_operator = "-",
     .negation_argument_field = "",
-    .negatable = &.{},
-    .template = "",
-    .substitution = "",
+    .negatable = &.{ "integer_literal", "real_literal" },
+    .template = "interpolated_string_expression",
+    .substitution = "interpolation",
+    .named_arguments = &.{ "argument", "attribute_argument" },
+    .named_argument_name_field = "name",
+    .named_argument_value_field = "",
+    .pair_parent = "initializer_expression",
+    .equals_pairs = &.{ "anonymous_object_creation_expression", "with_initializer" },
+    .entry_pair = "initializer_expression",
+    .indexed_key = "element_binding_expression",
+    .negation_unary = "prefix_unary_expression",
 };
 
 pub const profile: Profile = .{
@@ -65,13 +88,13 @@ pub const profile: Profile = .{
     .extensions = &.{".cs"},
     .grammar = grammar,
     .functions = &function_nodes,
-    .bindings = &.{},
+    .bindings = &bindings,
     .transparent_wrappers = &.{"parenthesized_expression"},
     .addressable_names = &.{"identifier"},
     .dotted_name = "qualified_name",
     .name_segments = &.{"identifier"},
     .containers = &containers,
-    .declaration_statements = &.{},
+    .declaration_statements = &.{ "variable_declaration", "local_declaration_statement", "field_declaration" },
     .declarator = "variable_declarator",
     .export_wrappers = &.{},
     .decorator = "attribute_list",
@@ -84,7 +107,7 @@ pub const profile: Profile = .{
     .reexport_specifier = null,
     .namespace_exports = &.{},
     .star_token = null,
-    .dynamic_callees = &.{},
+    .dynamic_callees = &.{ "Activator.CreateInstance", ".Activator.CreateInstance", "Assembly.Load", ".Assembly.Load", "Assembly.LoadFrom", ".Assembly.LoadFrom", "Type.GetType", ".Type.GetType", ".GetMethod", ".GetProperty", ".GetField", ".GetMember", ".InvokeMember" },
     .dynamic_constructors = &.{},
     .strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal", "interpolated_string_expression" },
     .string_holes = &.{"interpolation"},
@@ -94,9 +117,16 @@ pub const profile: Profile = .{
     .expression_statement = "expression_statement",
     .prose_strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal" },
     .directives = &.{},
-    .literal_values = never_matching_literal_values,
+    .literal_values = literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{ "public", "protected", "internal" },
+    .expression_body = "arrow_expression_clause",
+    .value_bodied = &value_bodied,
+    .body_wording = "its block or its => expression, as emetgate_read_symbol returned it",
+    .short_refs = true,
+    .memberLabel = memberLabel,
+    .memberQualifier = memberQualifier,
+    .parameterKey = parameterKey,
     .modifier = "modifier",
     .function_names = &function_names,
     .file_scoped_containers = &.{"file_scoped_namespace_declaration"},
@@ -104,6 +134,10 @@ pub const profile: Profile = .{
     .modules = &csharp_rename.modules,
     .declarations = csharp_rename.declarations(),
     .facts = &csharp_facts.csharp,
+    .import_forms = .{ .calls = &.{ "Assembly.Load", ".Assembly.Load", "Assembly.LoadFrom", ".Assembly.LoadFrom", "Type.GetType", ".Type.GetType" }, .dotted = true, .directive = "using_directive" },
+    .commented_definitions = &.{ "class_declaration", "struct_declaration", "interface_declaration", "enum_declaration", "record_declaration", "delegate_declaration" },
+    .uncommented_definitions = &.{"accessor_declaration"},
+    .map = &csharp_map.table,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
@@ -112,6 +146,9 @@ fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: Functi
     if (isKind(node, "accessor_declaration")) {
         const owner = (node.parent() orelse return .{}).parent() orelse return .{};
         return .{ .accessor = accessorOf(node), .is_static = hasStaticModifier(tree, owner) };
+    }
+    if (isKind(node, "property_declaration") or isKind(node, "indexer_declaration")) {
+        return .{ .accessor = .get, .is_static = hasStaticModifier(tree, node) };
     }
     return .{
         .is_constructor = isKind(node, "constructor_declaration"),
@@ -123,7 +160,111 @@ fn accessorOf(node: ts.Node) Accessor {
     const name = node.childByField("name") orelse return .none;
     if (isKind(name, "get")) return .get;
     if (isKind(name, "set") or isKind(name, "init")) return .set;
+    if (isKind(name, "add")) return .add;
+    if (isKind(name, "remove")) return .remove;
     return .none;
+}
+
+fn memberOwner(node: ts.Node) ts.Node {
+    if (!isKind(node, "accessor_declaration")) return node;
+    return (node.parent() orelse return node).parent() orelse node;
+}
+
+fn memberLabel(arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node) std.mem.Allocator.Error!?[]const u8 {
+    if (isKind(node, "operator_declaration")) {
+        const operator = node.childByField("operator") orelse return null;
+        return try std.fmt.allocPrint(arena, "operator{s}{s}", .{ if (std.ascii.isAlphabetic(tree.text(operator)[0])) " " else "", tree.text(operator) });
+    }
+    if (isKind(node, "conversion_operator_declaration")) {
+        const target = node.childByField("type") orelse return null;
+        return try std.fmt.allocPrint(arena, "operator {s}", .{try profile_mod.compactSpelling(arena, tree.text(target))});
+    }
+    if (isKind(node, "destructor_declaration")) {
+        const name = node.childByField("name") orelse return null;
+        return try std.fmt.allocPrint(arena, "~{s}", .{tree.text(name)});
+    }
+    if (isKind(node, "indexer_declaration")) return "this";
+    return null;
+}
+
+fn memberQualifier(node: ts.Node) ?ts.Node {
+    const owner = memberOwner(node);
+    var i: u32 = 0;
+    while (owner.namedChild(i)) |child| : (i += 1) {
+        if (isKind(child, "explicit_interface_specifier")) return child.namedChild(0);
+    }
+    return null;
+}
+
+fn parameterKey(arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node, full: bool) std.mem.Allocator.Error!?[]const u8 {
+    const owner = memberOwner(node);
+    var key: std.ArrayList(u8) = .empty;
+    if (owner.childByField("type_parameters")) |generics| try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(generics)));
+    const parameters = owner.childByField("parameters") orelse parameterListOf(owner);
+    if (parameters == null or isTypeDeclaration(owner)) return if (key.items.len != 0) key.items else null;
+    try key.append(arena, '(');
+    var first = true;
+    var i: u32 = 0;
+    while (parameters.?.child(i)) |parameter| : (i += 1) {
+        const is_array = isKind(parameter, "params");
+        if (!is_array and !isKind(parameter, "parameter")) continue;
+        if (!first) try key.append(arena, ',');
+        first = false;
+        if (is_array) {
+            try appendParameterArray(arena, tree, parameters.?, i, full, &key);
+        } else if (full) {
+            try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(parameter)));
+        } else {
+            try appendParameterType(arena, tree, parameter, &key);
+        }
+    }
+    try key.append(arena, ')');
+    return key.items;
+}
+
+fn appendParameterArray(arena: std.mem.Allocator, tree: ts.Tree, list: ts.Node, at: u32, full: bool, key: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+    try key.appendSlice(arena, "params ");
+    const shape = list.child(at + 1) orelse return;
+    try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(shape)));
+    if (!full) return;
+    const name = list.child(at + 2) orelse return;
+    try key.append(arena, ' ');
+    try key.appendSlice(arena, tree.text(name));
+}
+
+fn parameterListOf(owner: ts.Node) ?ts.Node {
+    var i: u32 = 0;
+    while (owner.namedChild(i)) |child| : (i += 1) {
+        if (isKind(child, "bracketed_parameter_list") or isKind(child, "parameter_list")) return child;
+    }
+    return null;
+}
+
+fn isTypeDeclaration(owner: ts.Node) bool {
+    for ([_][]const u8{ "class_declaration", "struct_declaration", "interface_declaration", "record_declaration", "enum_declaration", "delegate_declaration" }) |kind| {
+        if (isKind(owner, kind)) return true;
+    }
+    return false;
+}
+
+fn appendParameterType(arena: std.mem.Allocator, tree: ts.Tree, parameter: ts.Node, key: *std.ArrayList(u8)) std.mem.Allocator.Error!void {
+    var i: u32 = 0;
+    while (parameter.child(i)) |child| : (i += 1) {
+        if (!isKind(child, "modifier") and !isModifierWord(child.kind())) continue;
+        const word = tree.text(child);
+        if (std.mem.eql(u8, word, "this")) continue;
+        try key.appendSlice(arena, word);
+        try key.append(arena, ' ');
+    }
+    const shape = parameter.childByField("type") orelse parameter;
+    try key.appendSlice(arena, try profile_mod.compactSpelling(arena, tree.text(shape)));
+}
+
+fn isModifierWord(kind: []const u8) bool {
+    for ([_][]const u8{ "ref", "out", "in", "params", "scoped", "readonly" }) |word| {
+        if (std.mem.eql(u8, word, kind)) return true;
+    }
+    return false;
 }
 
 fn isKind(node: ts.Node, name: []const u8) bool {

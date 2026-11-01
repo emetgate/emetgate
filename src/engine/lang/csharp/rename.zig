@@ -102,7 +102,11 @@ pub fn declarations() Declarations {
         .types = &type_declarations,
         .variable_statements = &.{},
         .value_field = "value",
-        .fields = &.{.{ .node = "property_declaration", .kind = .field, .name_field = "name" }},
+        .fields = &.{
+            .{ .node = "property_declaration", .kind = .field, .name_field = "name" },
+            .{ .node = "event_declaration", .kind = .field, .name_field = "name" },
+            .{ .node = "indexer_declaration", .kind = .field, .name_field = "name", .name_token = "this" },
+        },
         .field_statements = &.{ "field_declaration", "event_field_declaration" },
         .enum_body = "enum_member_declaration_list",
         .enum_members = &.{.{ .node = "enum_member_declaration", .kind = .enum_member, .name_field = "name" }},

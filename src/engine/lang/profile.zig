@@ -1,6 +1,7 @@
 const std = @import("std");
 const ts = @import("../tree_sitter.zig");
 const Accessor = @import("../ref.zig").Accessor;
+const facts = @import("../facts.zig");
 
 pub const FunctionKind = enum {
     declaration,
@@ -15,6 +16,9 @@ pub const FunctionKind = enum {
 pub const FunctionNode = struct {
     node: []const u8,
     kind: FunctionKind,
+    body_field: []const u8 = "body",
+    body_only: ?[]const u8 = null,
+    skeleton: ?[]const u8 = null,
 };
 
 pub const Binding = struct {
@@ -29,6 +33,7 @@ pub const FunctionName = struct {
     node: []const u8,
     owner_depth: u8 = 0,
     field: ?[]const u8,
+    token: ?[]const u8 = null,
 };
 
 pub const Container = struct {
@@ -64,10 +69,30 @@ pub const LiteralValues = struct {
     substitution: []const u8,
     quoted_key_content: []const u8 = "",
     bare_pair_key: bool = true,
-    named_argument: []const u8 = "",
+    named_arguments: []const []const u8 = &.{},
     named_argument_name_field: []const u8 = "",
     named_argument_value_field: []const u8 = "",
+    pair_parent: []const u8 = "",
+    equals_pairs: []const []const u8 = &.{},
+    entry_pair: []const u8 = "",
+    indexed_key: []const u8 = "",
+    negation_unary: []const u8 = "",
 };
+
+pub const ImportForms = struct {
+    calls: []const []const u8 = &.{},
+    dotted: bool = false,
+    directive: []const u8 = "",
+};
+
+pub fn calleeIsOneOf(callee: []const u8, names: []const []const u8) bool {
+    for (names) |name| {
+        if (name.len != 0 and name[0] == '.') {
+            if (std.mem.endsWith(u8, callee, name)) return true;
+        } else if (std.mem.eql(u8, callee, name)) return true;
+    }
+    return false;
+}
 
 pub const Namespace = enum {
     value,
@@ -169,6 +194,7 @@ pub const DeclarationShape = struct {
     node: []const u8,
     kind: DeclarationKind,
     name_field: []const u8,
+    name_token: ?[]const u8 = null,
 };
 
 pub const Declarations = struct {
@@ -217,6 +243,8 @@ pub const MemberTraits = struct {
     is_static: bool = false,
     is_constructor: bool = false,
     receiver: bool = true,
+    is_member: bool = false,
+    overload_stub: bool = false,
 };
 
 pub const FieldSite = struct {
@@ -305,6 +333,8 @@ pub const Facts = struct {
     class_body_field: []const u8 = "body",
     test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},
+    docstrings: bool = false,
+    xml_docs: bool = false,
 };
 
 pub const TestDefinition = struct {
@@ -334,15 +364,38 @@ pub const MapTable = struct {
     test_infixes: []const []const u8,
     decorators: []const MapDecorator,
     call_forms: []const MapCallForm,
-    doc_open: []const u8,
-    doc_close: []const u8,
-    line_comment: []const u8,
-    body_open: u8,
-    arrow: []const u8,
-    statement_end: u8,
-    open_brackets: []const u8,
-    close_brackets: []const u8,
+    doc_open: []const u8 = "",
+    doc_close: []const u8 = "",
+    line_comment: []const u8 = "",
+    body_open: u8 = 0,
+    arrow: []const u8 = "",
+    statement_end: u8 = 0,
+    open_brackets: []const u8 = "",
+    close_brackets: []const u8 = "",
+    namespace_scoped: bool = false,
+    test_name: ?*const fn (base: []const u8) bool = null,
+    test_segment: ?*const fn (segment: []const u8) bool = null,
+    extract: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, defs: []const facts.Def) std.mem.Allocator.Error!facts.MapFacts = null,
 };
+
+pub fn compactSpelling(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var pending = false;
+    for (text) |c| {
+        if (std.ascii.isWhitespace(c)) {
+            pending = out.items.len != 0;
+            continue;
+        }
+        if (pending and isWordByte(out.items[out.items.len - 1]) and isWordByte(c)) try out.append(arena, ' ');
+        pending = false;
+        try out.append(arena, c);
+    }
+    return out.items;
+}
+
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
+}
 
 pub const Profile = struct {
     name: []const u8,
@@ -383,6 +436,14 @@ pub const Profile = struct {
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
+    expression_body: ?[]const u8 = null,
+    value_bodied: []const FunctionNode = &.{},
+    body_wording: []const u8 = "its block, from its opening brace to its closing brace",
+    braces: bool = true,
+    short_refs: bool = false,
+    memberLabel: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node) std.mem.Allocator.Error!?[]const u8 = null,
+    memberQualifier: ?*const fn (node: ts.Node) ?ts.Node = null,
+    parameterKey: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node, full: bool) std.mem.Allocator.Error!?[]const u8 = null,
     modifier: ?[]const u8 = null,
     function_names: []const FunctionName = &.{},
     file_scoped_containers: []const []const u8 = &.{},
@@ -392,6 +453,11 @@ pub const Profile = struct {
     declarations: Declarations = .{},
     facts: ?*const Facts = null,
     map: ?*const MapTable = null,
+    import_forms: ImportForms = .{},
+    docstrings: bool = false,
+    definition_wrappers: []const []const u8 = &.{},
+    commented_definitions: []const []const u8 = &.{},
+    uncommented_definitions: []const []const u8 = &.{},
 
     pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;
@@ -427,6 +493,16 @@ pub const Profile = struct {
     pub fn functionKind(self: *const Profile, node_kind: []const u8) ?FunctionKind {
         for (self.functions) |entry| {
             if (std.mem.eql(u8, entry.node, node_kind)) return entry.kind;
+        }
+        return null;
+    }
+
+    pub fn functionNode(self: *const Profile, node_kind: []const u8) ?FunctionNode {
+        for (self.functions) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
+        }
+        for (self.value_bodied) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
         }
         return null;
     }

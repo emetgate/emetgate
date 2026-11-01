@@ -167,9 +167,10 @@ const Extractor = struct {
             const function = functions.classify(self.profile, s.node) orelse continue;
             const name = function.name orelse continue;
             if (borrowsName(self.profile, s.node)) continue;
+            const label = if (self.profile.memberLabel) |labelled| try labelled(self.arena, self.snapshot.tree, s.node) else null;
             try drafts.append(self.arena, .{ .node_start = s.node.startByte(), .def = .{
                 .kind = defKindOf(s.kind),
-                .name = try self.text(name),
+                .name = label orelse try self.text(name),
                 .qname = try std.fmt.allocPrint(self.arena, "{f}", .{s.ref}),
                 .parent = none,
                 .span = s.declaration,
@@ -178,7 +179,7 @@ const Extractor = struct {
                 .hash = s.hash,
                 .alpha = try alpha.hash(self.arena, self.snapshot, s.declaration),
                 .is_static = s.ref.is_static,
-                .body_start = bodyStart(s.node),
+                .body_start = s.body.startByte(),
             } });
             try self.describe(&drafts.items[drafts.items.len - 1].def, s.node);
         }
@@ -1004,5 +1005,8 @@ pub fn extract(arena: Allocator, snapshot: *const Snapshot) Error!facts.FileFact
     const lines: facts_spine.Lines = .{ .starts = self.line_starts, .bytes = snapshot.source };
     found.outline = try facts_outline.collect(arena, profile, snapshot.tree, lines, found.defs);
     found.tests = try facts_tests.collect(arena, profile, snapshot.tree, lines);
+    if (profile.map) |table| {
+        if (table.extract) |collect| found.map = try collect(arena, snapshot.tree, found.defs);
+    }
     return found;
 }

@@ -197,7 +197,7 @@ pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestP
 }
 
 pub fn trustedTypecheckCommand(policy: Policy) []const u8 {
-    return policy.typecheck_command orelse "";
+    return policy.typecheck_command orelse if (policy.detect_test) test_command_mod.detect else "";
 }
 
 pub const CommitError = error{ CommitNotEnabled, MissingCommitMessage } || commit_message.Error;

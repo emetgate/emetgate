@@ -213,6 +213,7 @@ fn noComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
             walker.skipChildren();
             continue;
         }
+        if (isShebang(tree, node)) continue;
         if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {
             try out.append(gpa, .{ .check = "no_comment", .span = .{ .start = node.startByte(), .end = node.endByte() } });
         }
@@ -228,13 +229,29 @@ fn noLiteral(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Span,
     while (walker.next()) |entry| {
         const node = entry.node;
         if (node.startByte() < span.start or node.endByte() > span.end) continue;
-        const fields = literalFields(shape, node) orelse continue;
-        const key = node.childByField(fields.key) orelse continue;
-        const value = node.childByField(fields.value) orelse continue;
-        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;
-        if (!std.mem.eql(u8, keyName(shape, tree, key), name)) continue;
-        if (!isLiteral(shape, tree, value)) continue;
+        if (isOneOf(node.kind(), shape.equals_pairs)) {
+            try equalsPairs(gpa, shape, tree, node, name, out);
+            continue;
+        }
+        const pair = literalPair(shape, node) orelse continue;
+        if (!pair.bare_key and !isKind(pair.key, shape.quoted_key)) continue;
+        if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) continue;
+        if (!isLiteral(shape, tree, pair.value)) continue;
         try out.append(gpa, .{ .check = "no_literal", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+    }
+}
+
+fn equalsPairs(gpa: Allocator, shape: profile_mod.LiteralValues, tree: ts.Tree, node: ts.Node, name: []const u8, out: *std.ArrayList(Violation)) CollectError!void {
+    var i: u32 = 0;
+    while (node.child(i)) |equals| : (i += 1) {
+        if (equals.isNamed() or !isKind(equals, "=")) continue;
+        const key = equals.prevNamedSibling() orelse continue;
+        var at = i + 1;
+        const value = while (node.child(at)) |next| : (at += 1) {
+            if (next.isNamed()) break next;
+        } else continue;
+        if (!std.mem.eql(u8, tree.text(key), name) or !isLiteral(shape, tree, value)) continue;
+        try out.append(gpa, .{ .check = "no_literal", .span = .{ .start = key.startByte(), .end = value.endByte() } });
     }
 }
 
@@ -315,23 +332,26 @@ fn requireComment(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: 
         }
         if (node.startByte() < span.start or node.endByte() > span.end) continue;
         if (!isNamedDefinition(profile, node)) continue;
-        if (precededByComment(profile, node)) continue;
+        if (precededByComment(profile, node) or hasDocstring(profile, node)) continue;
         try out.append(gpa, .{ .check = "require_comment", .span = .{ .start = node.startByte(), .end = node.endByte() } });
     }
 }
 
 // A named function/generator/method with a name, or a class declaration with one.
 fn isNamedDefinition(profile: *const Profile, node: ts.Node) bool {
+    if (isOneOf(node.kind(), profile.uncommented_definitions)) return false;
+    if (isOneOf(node.kind(), profile.commented_definitions)) return node.childByField("name") != null;
     if (profile.functionKind(node.kind())) |kind| {
         switch (kind) {
-            .declaration, .generator_declaration, .method => return node.childByField("name") != null,
+            .declaration, .generator_declaration => return node.childByField("name") != null,
+            .method => return node.childByField("name") != null or profile.functionName(node.kind()) != null,
             else => return false,
         }
     }
     // A class declaration is a container named from a field (not an object literal,
     // which is named from its binding).
     if (profile.containerName(node.kind())) |source| {
-        if (source == .binding) return false;
+        if (source == .binding or profile.commented_definitions.len != 0) return false;
         if (std.mem.indexOf(u8, node.kind(), "class") == null) return false;
         return node.childByField("name") != null;
     }
@@ -341,11 +361,29 @@ fn isNamedDefinition(profile: *const Profile, node: ts.Node) bool {
 // Does a comment sit immediately before this definition (or its export wrapper)?
 fn precededByComment(profile: *const Profile, node: ts.Node) bool {
     var anchor = node;
-    if (anchor.parent()) |parent| {
-        if (isOneOf(parent.kind(), profile.export_wrappers)) anchor = parent;
+    if (anchor.prevNamedSibling()) |own| {
+        if (profile.isComment(own.kind())) return true;
     }
-    const previous = anchor.prevNamedSibling() orelse return false;
-    return profile.isComment(previous.kind());
+    if (anchor.parent()) |parent| {
+        if (isOneOf(parent.kind(), profile.export_wrappers) or isOneOf(parent.kind(), profile.definition_wrappers)) anchor = parent;
+    }
+    if (anchor.prevNamedSibling()) |previous| return profile.isComment(previous.kind());
+    if (!profile.docstrings) return false;
+    const block = anchor.parent() orelse return false;
+    if (!isKind(block, profile.block)) return false;
+    const before = block.prevNamedSibling() orelse return false;
+    return profile.isComment(before.kind());
+}
+
+fn hasDocstring(profile: *const Profile, node: ts.Node) bool {
+    if (!profile.docstrings) return false;
+    const body = node.childByField("body") orelse return false;
+    var i: u32 = 0;
+    while (body.namedChild(i)) |statement| : (i += 1) {
+        if (profile.isComment(statement.kind())) continue;
+        return isStringStatement(profile, statement);
+    }
+    return false;
 }
 
 // max_function_lines:<n>: a function whose body spans more than n lines is a
@@ -389,7 +427,15 @@ fn forbidImport(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Sp
             continue;
         }
         if (node.startByte() < span.start or node.endByte() > span.end) continue;
-        if (m.from_statement) |from_statement| {
+        if (isKind(node, profile.import_forms.directive)) {
+            if (directiveImportsModule(profile, tree, node, module)) {
+                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+            }
+        } else if (isKind(node, profile.call.node)) {
+            if (callImportsModule(profile, tree, node, module)) {
+                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
+            }
+        } else if (m.from_statement) |from_statement| {
             if (dottedImportNames(m, from_statement, tree, node, module)) {
                 try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
             }
@@ -398,24 +444,70 @@ fn forbidImport(gpa: Allocator, profile: *const Profile, tree: ts.Tree, span: Sp
             if (std.mem.eql(u8, unquote(tree.text(source)), module)) {
                 try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
             }
-        } else if (isKind(node, profile.call.node)) {
-            if (callImportsModule(profile, tree, node, module)) {
-                try out.append(gpa, .{ .check = "forbid_import", .span = .{ .start = node.startByte(), .end = node.endByte() } });
-            }
         }
     }
 }
 
-// A `require("module")` or dynamic `import("module")` call for the named module.
 fn callImportsModule(profile: *const Profile, tree: ts.Tree, node: ts.Node, module: []const u8) bool {
     const callee = node.childByField(profile.call.function_field) orelse return false;
-    const name = tree.text(callee);
-    if (!std.mem.eql(u8, name, "require") and !std.mem.eql(u8, name, "import")) return false;
+    if (!profile_mod.calleeIsOneOf(tree.text(callee), profile.import_forms.calls)) return false;
     const arguments = node.childByField(profile.call.arguments_field) orelse return false;
-    if (arguments.namedChildCount() != 1) return false;
-    const first = arguments.namedChild(0) orelse return false;
-    if (!isOneOf(first.kind(), profile.strings)) return false;
-    return std.mem.eql(u8, unquote(tree.text(first)), module);
+    const shape = profile.literal_values;
+    var i: u32 = 0;
+    while (arguments.namedChild(i)) |argument| : (i += 1) {
+        if (profile.isComment(argument.kind())) continue;
+        const named = isOneOf(argument.kind(), shape.named_arguments);
+        const value = if (named) argumentValue(shape, argument) orelse continue else argument;
+        if (namesModule(profile, tree, value, module)) return true;
+        if (!named or argument.childByField(shape.named_argument_name_field) == null) return false;
+    }
+    return false;
+}
+
+fn argumentValue(shape: profile_mod.LiteralValues, argument: ts.Node) ?ts.Node {
+    if (shape.named_argument_value_field.len != 0) return argument.childByField(shape.named_argument_value_field);
+    const count = argument.namedChildCount();
+    if (count == 0) return null;
+    return argument.namedChild(count - 1);
+}
+
+fn namesModule(profile: *const Profile, tree: ts.Tree, value: ts.Node, module: []const u8) bool {
+    if (!isOneOf(value.kind(), profile.strings) or hasStringHole(profile, value)) return false;
+    const text = plainString(tree.text(value));
+    if (!profile.import_forms.dotted) return std.mem.eql(u8, text, module);
+    const end = std.mem.indexOfScalar(u8, text, ',') orelse text.len;
+    return importsModule(std.mem.trim(u8, text[0..end], " "), module);
+}
+
+fn plainString(text: []const u8) []const u8 {
+    var start: usize = 0;
+    while (start < text.len and (std.ascii.isAlphabetic(text[start]) or text[start] == '@' or text[start] == '$')) start += 1;
+    const body = text[start..];
+    if (body.len < 2) return body;
+    const quote = body[0];
+    if (quote != '"' and quote != '\'' and quote != '`') return text;
+    return std.mem.trim(u8, body, body[0..1]);
+}
+
+fn hasStringHole(profile: *const Profile, value: ts.Node) bool {
+    var i: u32 = 0;
+    while (value.namedChild(i)) |part| : (i += 1) {
+        if (isOneOf(part.kind(), profile.string_holes)) return true;
+        if (isOneOf(part.kind(), profile.prose_strings) and hasStringHole(profile, part)) return true;
+    }
+    return false;
+}
+
+fn directiveImportsModule(profile: *const Profile, tree: ts.Tree, node: ts.Node, module: []const u8) bool {
+    var i = node.namedChildCount();
+    const target = while (i > 0) : (i -= 1) {
+        const child = node.namedChild(i - 1) orelse continue;
+        if (!profile.isComment(child.kind())) break child;
+    } else return false;
+    var text = tree.text(target);
+    if (std.mem.indexOf(u8, text, "::")) |at| text = text[at + 2..];
+    if (std.mem.indexOfScalar(u8, text, '<')) |at| text = text[0..at];
+    return importsModule(std.mem.trim(u8, text, " "), module);
 }
 
 fn dottedImportNames(m: *const profile_mod.Modules, from_statement: []const u8, tree: ts.Tree, node: ts.Node, module: []const u8) bool {
@@ -444,15 +536,30 @@ fn unquote(text: []const u8) []const u8 {
     return text;
 }
 
-const LiteralFields = struct { key: []const u8, value: []const u8, bare_key: bool };
+const LiteralPair = struct { key: ts.Node, value: ts.Node, bare_key: bool };
 
-fn literalFields(shape: profile_mod.LiteralValues, node: ts.Node) ?LiteralFields {
-    if (isKind(node, shape.pair)) return .{ .key = shape.key_field, .value = shape.value_field, .bare_key = shape.bare_pair_key };
-    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return .{ .key = shape.named_argument_name_field, .value = shape.named_argument_value_field, .bare_key = true };
+fn literalPair(shape: profile_mod.LiteralValues, node: ts.Node) ?LiteralPair {
+    if (isKind(node, shape.pair)) {
+        if (shape.pair_parent.len != 0 and !isKind(node.parent() orelse return null, shape.pair_parent)) return null;
+        return .{ .key = node.childByField(shape.key_field) orelse return null, .value = node.childByField(shape.value_field) orelse return null, .bare_key = shape.bare_pair_key };
+    }
+    if (isOneOf(node.kind(), shape.named_arguments)) {
+        return .{ .key = node.childByField(shape.named_argument_name_field) orelse return null, .value = argumentValue(shape, node) orelse return null, .bare_key = true };
+    }
+    if (shape.entry_pair.len != 0 and isKind(node, shape.entry_pair) and node.namedChildCount() == 2 and isKind(node.parent() orelse return null, shape.entry_pair)) {
+        return .{ .key = node.namedChild(0).?, .value = node.namedChild(1).?, .bare_key = false };
+    }
     return null;
 }
 
-fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) []const u8 {
+fn keyName(shape: profile_mod.LiteralValues, tree: ts.Tree, indexed: ts.Node) []const u8 {
+    var key = indexed;
+    if (isKind(key, shape.indexed_key)) {
+        while (!isKind(key, shape.quoted_key)) {
+            if (key.namedChildCount() != 1) return "";
+            key = key.namedChild(0).?;
+        }
+    }
     if (!isKind(key, shape.quoted_key)) return tree.text(key);
     if (shape.quoted_key_content.len != 0) return quotedContent(shape, tree, key);
     if (key.namedChildCount() != 1) return "";
@@ -471,6 +578,12 @@ fn quotedContent(shape: profile_mod.LiteralValues, tree: ts.Tree, key: ts.Node) 
 }
 
 fn isNegatedLiteral(shape: profile_mod.LiteralValues, tree: ts.Tree, value: ts.Node) bool {
+    if (shape.negation_unary.len != 0) {
+        if (!isKind(value, shape.negation_unary)) return false;
+        const sign = value.child(0) orelse return false;
+        const operand = value.namedChild(0) orelse return false;
+        return std.mem.eql(u8, tree.text(sign), shape.negation_operator) and isOneOf(operand.kind(), shape.negatable);
+    }
     const operator = value.childByField(shape.negation_operator_field) orelse return false;
     const argument = value.childByField(shape.negation_argument_field) orelse return false;
     return std.mem.eql(u8, tree.text(operator), shape.negation_operator) and isOneOf(argument.kind(), shape.negatable);
@@ -487,18 +600,45 @@ fn isLiteral(shape: profile_mod.LiteralValues, tree: ts.Tree, value: ts.Node) bo
     return true;
 }
 
+fn isShebang(tree: ts.Tree, node: ts.Node) bool {
+    return node.startByte() == 0 and std.mem.startsWith(u8, tree.source, "#!") and node.endByte() <= (std.mem.indexOfScalar(u8, tree.source, '\n') orelse tree.source.len);
+}
+
 fn isProseStatement(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
     if (!isStringStatement(profile, node)) return false;
-    return !isDirective(profile, tree, node);
+    if (profile.docstrings and hasStringHole(profile, node)) return false;
+    return !isDirective(profile, tree, node) and !isDocstring(profile, tree, node);
+}
+
+fn isDocstring(profile: *const Profile, tree: ts.Tree, statement: ts.Node) bool {
+    if (!profile.docstrings) return false;
+    const opening = tree.text(statement);
+    if (opening.len != 0 and std.mem.indexOfScalar(u8, "fFbB", opening[0]) != null) return false;
+    const parent = statement.parent() orelse return false;
+    if (!isKind(parent, profile.root)) {
+        if (!isKind(parent, profile.block)) return false;
+        const owner = parent.parent() orelse return false;
+        if (profile.functionKind(owner.kind()) == null and profile.containerName(owner.kind()) == null) return false;
+    }
+    var previous = statement.prevNamedSibling();
+    while (previous) |sibling| : (previous = sibling.prevNamedSibling()) {
+        if (!profile.isComment(sibling.kind())) return false;
+    }
+    return true;
 }
 
 fn isStringStatement(profile: *const Profile, node: ts.Node) bool {
+    if (isOneOf(node.kind(), profile.prose_strings)) {
+        const parent = node.parent() orelse return false;
+        return isKind(parent, profile.block) or isKind(parent, profile.root);
+    }
     if (!isKind(node, profile.expression_statement) or node.namedChildCount() != 1) return false;
     const expression = node.namedChild(0).?;
     return isOneOf(expression.kind(), profile.prose_strings);
 }
 
 fn isDirective(profile: *const Profile, tree: ts.Tree, node: ts.Node) bool {
+    if (profile.directives.len == 0) return false;
     const literal = tree.text(node.namedChild(0).?);
     if (!isOneOf(literal, profile.directives)) return false;
     const parent = node.parent() orelse return false;
@@ -1081,4 +1221,162 @@ test "python: no_literal leaves computed, named, interpolated and differently na
 test "no_literal refuses a language with no literal option shape instead of reporting it clean" {
     const zig_profile = &@import("lang/zig/profile.zig").profile;
     try testing.expectError(error.QueryNotForLanguage, runIn(zig_profile, "const x = .{ .timeout = 5 };\n", &.{"no_literal:timeout"}));
+}
+
+const functions = @import("functions.zig");
+const python_profile = &@import("lang/python/profile.zig").profile;
+const csharp_profile = &@import("lang/csharp/profile.zig").profile;
+
+fn flaggedIn(profile: *const Profile, source: []const u8, spec: []const u8) !usize {
+    const violations = try runIn(profile, source, &.{spec});
+    defer testing.allocator.free(violations);
+    return violations.len;
+}
+
+fn expectFlaggedTexts(profile: *const Profile, source: []const u8, spec: []const u8, expected: []const []const u8) !void {
+    const violations = try runIn(profile, source, &.{spec});
+    defer testing.allocator.free(violations);
+    errdefer for (violations) |v| std.debug.print("flagged: {s}\n", .{source[v.span.start..v.span.end]});
+    try testing.expectEqual(expected.len, violations.len);
+    for (expected, violations) |want, got| try testing.expectEqualStrings(want, source[got.span.start..got.span.end]);
+}
+
+test "python: forbid_import catches importlib and __import__ by name, alias and dotted prefix" {
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "import importlib\nm = importlib.import_module(\"pickle\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "import importlib as il\nm = il.import_module(\"pickle.x\", \"pkg\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "from importlib import import_module\nm = import_module(name=\"pickle\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "m = __import__(\"pickle\", globals())\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "m = __import__(r'pickle')\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 2), try flaggedIn(python_profile, "import pickle\nfrom pickle.x import y\n", "forbid_import:pickle"));
+}
+
+test "python: forbid_import leaves another module, a computed name and an unrelated call alone" {
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, "m = __import__(\"pickletools\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, "m = __import__(f\"pickle{x}\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, "m = __import__(name)\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, "m = load(\"pickle\")\n", "forbid_import:pickle"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, "m = __import__(other, \"pickle\")\n", "forbid_import:pickle"));
+}
+
+test "c#: forbid_import catches every using form and a load by name" {
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using System.Net;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using System.Net.Http;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "global using System.Net;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using static System.Net.Dns;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using D = System.Net.Dns;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using L = System.Net.Items<int>;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "using global::System.Net;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "namespace N { using System.Net; }\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "class C { object A = Assembly.Load(\"System.Net, Version=4.0.0.0\"); }\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "class C { object T = System.Type.GetType(\"System.Net.Dns\"); }\n", "forbid_import:System.Net"));
+}
+
+test "c#: forbid_import leaves another namespace, an alias name and a using statement alone" {
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "using System.Network;\nclass C {}\n", "forbid_import:System.Net"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "using Net = System.IO;\nclass C {}\n", "forbid_import:Net"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "class C { void M() { using (var Net = Open()) { } } }\n", "forbid_import:Net"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "class C { object A = Assembly.Load(name); }\n", "forbid_import:System.Net"));
+}
+
+test "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with" {
+    try expectFlaggedTexts(csharp_profile, "class C { void M() { Run(timeout: 5); } }\n", "no_literal:timeout", &.{"timeout: 5"});
+    try expectFlaggedTexts(csharp_profile, "class C { void M() { Run(timeout: -5); } }\n", "no_literal:timeout", &.{"timeout: -5"});
+    try expectFlaggedTexts(csharp_profile, "[Retry(timeout = 5)]\nclass C {}\n", "no_literal:timeout", &.{"timeout = 5"});
+    try expectFlaggedTexts(csharp_profile, "class C { object O = new Opts { timeout = \"x\" }; }\n", "no_literal:timeout", &.{"timeout = \"x\""});
+    try expectFlaggedTexts(csharp_profile, "class C { object O = new { timeout = 1.5, other = 2 }; }\n", "no_literal:timeout", &.{"timeout = 1.5"});
+    try expectFlaggedTexts(csharp_profile, "class C { void M(R r) { r = r with { timeout = 5 }; } }\n", "no_literal:timeout", &.{"timeout = 5"});
+    try expectFlaggedTexts(csharp_profile, "class C { object O = new D { [\"timeout\"] = 5 }; }\n", "no_literal:timeout", &.{"[\"timeout\"] = 5"});
+    try expectFlaggedTexts(csharp_profile, "class C { object O = new D { { \"timeout\", 5 } }; }\n", "no_literal:timeout", &.{"{ \"timeout\", 5 }"});
+    try expectFlaggedTexts(csharp_profile, "class C { void M() { Run(timeout: $\"plain\"); } }\n", "no_literal:timeout", &.{"timeout: $\"plain\""});
+}
+
+test "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone" {
+    const clean = [_][]const u8{
+        "class C { void M() { Run(timeout: limit); } }\n",
+        "class C { void M() { Run(timeout: -limit); } }\n",
+        "class C { void M() { Run(timeout: $\"{x}s\"); } }\n",
+        "class C { void M() { Run(other: 5); } }\n",
+        "class C { void M() { Run(5); } }\n",
+        "class C { void M() { timeout = 5; } }\n",
+        "class C { object O = new Opts { timeout = limit }; }\n",
+        "class C { object O = new D { [timeout] = 5 }; }\n",
+        "class C { object O = new { timeout = limit }; }\n",
+    };
+    for (clean) |source| try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, source, "no_literal:timeout"));
+}
+
+test "python: require_comment takes a comment above the decorators, a docstring and a comment on a first member" {
+    const documented = [_][]const u8{
+        "# c\n@dec\ndef f():\n    return 1\n",
+        "@dec\n# c\ndef f():\n    return 1\n",
+        "@dec\ndef f():\n    \"\"\"Doc.\"\"\"\n    return 1\n",
+        "def f():\n    # note\n    \"\"\"Doc.\"\"\"\n    return 1\n",
+        "class A:\n    \"\"\"Doc.\"\"\"\n",
+        "# c\n@dec\nclass A:\n    x = 1\n",
+        "# c\nclass A:\n    # m\n    def f(self):\n        return 1\n",
+        "# c\nclass A:\n    # m\n    @dec\n    def f(self):\n        return 1\n",
+    };
+    for (documented) |source| {
+        errdefer std.debug.print("source: {s}\n", .{source});
+        try testing.expectEqual(@as(usize, 0), try flaggedIn(python_profile, source, "require_comment"));
+    }
+}
+
+test "python: require_comment still flags a decorated definition without a comment and a string that is not a docstring" {
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "@dec\ndef f():\n    return 1\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "def f():\n    x = 1\n    \"\"\"Late.\"\"\"\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "def f():\n    # only a note\n    return 1\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(python_profile, "x = 1\n\n@dec\nclass A:\n    y = 2\n", "require_comment"));
+}
+
+test "c#: require_comment judges types and members but not property accessors" {
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "/// <summary>c</summary>\nclass C {\n    public int X { get; set; }\n}\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "// c\n[Attr]\nclass C {\n    // m\n    [Attr]\n    public int M() { return 1; }\n}\n", "require_comment"));
+    const bare = [_][]const u8{
+        "class C {}\n",
+        "struct S {}\n",
+        "record R(int A);\n",
+        "interface I {}\n",
+        "enum E { A }\n",
+        "delegate void D();\n",
+        "namespace N { struct S {} }\n",
+    };
+    for (bare) |source| try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, source, "require_comment"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "// c\nclass C {\n    public int M() { return 1; }\n}\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 1), try flaggedIn(csharp_profile, "// c\nclass C {\n    public static C operator +(C a, C b) { return a; }\n}\n", "require_comment"));
+    try testing.expectEqual(@as(usize, 0), try flaggedIn(csharp_profile, "namespace N { }\n", "require_comment"));
+}
+
+test "python: no_comment flags comments and loose strings, not docstrings or a shebang" {
+    try expectFlaggedTexts(python_profile, "#!/usr/bin/env python\n\"\"\"Module.\"\"\"\nx = 1\n# note\n\"loose\"\n", "no_comment", &.{ "# note", "\"loose\"" });
+    try expectFlaggedTexts(python_profile, "# first\n\"\"\"Module.\"\"\"\n", "no_comment", &.{"# first"});
+    try expectFlaggedTexts(python_profile, "class A:\n    \"\"\"Doc.\"\"\"\n    def f(self):\n        'Doc.'\n        return 1\n", "no_comment", &.{});
+    try expectFlaggedTexts(python_profile, "def f():\n    \"\"\"Doc.\"\"\"\n    \"\"\"Second.\"\"\"\n", "no_comment", &.{"\"\"\"Second.\"\"\""});
+    try expectFlaggedTexts(python_profile, "if x:\n    \"\"\"Not a doc.\"\"\"\n", "no_comment", &.{"\"\"\"Not a doc.\"\"\""});
+    try expectFlaggedTexts(python_profile, "def f():\n    \"a\" \"b\"\n    \"c\" \"d\"\n", "no_comment", &.{"\"c\" \"d\""});
+    try expectFlaggedTexts(python_profile, "def f():\n    b\"bytes\"\n", "no_comment", &.{"b\"bytes\""});
+    try expectFlaggedTexts(python_profile, "f\"{run()}\"\nx = \"value\"\ncall(\"arg\")\n", "no_comment", &.{});
+}
+
+test "c#: bindings name a lambda after its variable, field or property and keep the whole statement" {
+    const source = "class C {\n    Func<int> Field = () => 1;\n    Func<int> Prop { get; } = () => 2;\n    void M() {\n        Func<int> local = () => 3;\n    }\n}\n";
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const parser = try ts.Parser.init(csharp_profile.grammar());
+    defer parser.deinit();
+    const tree = try parser.parse(source);
+    defer tree.deinit();
+    const found = try functions.collectFunctions(testing.allocator, csharp_profile, tree);
+    defer testing.allocator.free(found);
+    var names: [8][]const u8 = undefined;
+    var named: usize = 0;
+    for (found) |function| {
+        if (!std.mem.eql(u8, function.node.kind(), "lambda_expression")) continue;
+        names[named] = tree.text(functions.bindingName(csharp_profile, function.node).?);
+        named += 1;
+    }
+    try testing.expectEqualSlices(u8, "Field", names[0]);
+    try testing.expectEqualSlices(u8, "Prop", names[1]);
+    try testing.expectEqualSlices(u8, "local", names[2]);
+    try testing.expectEqual(@as(usize, 3), named);
 }

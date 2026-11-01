@@ -302,13 +302,180 @@ fn trxStatus(outcome: []const u8) Status {
     return .failed;
 }
 
-pub const Kind = enum { pytest, dotnet };
+const rule_line = "=" ** 70;
+
+const TestHead = struct {
+    name: []const u8,
+    qualified: []const u8,
+    rest: []const u8,
+};
+
+fn dottedName(text: []const u8, extra: []const u8) bool {
+    if (text.len == 0) return false;
+    for (text) |c| {
+        if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.' and std.mem.indexOfScalar(u8, extra, c) == null) return false;
+    }
+    return true;
+}
+
+fn testHead(line: []const u8) ?TestHead {
+    const open = std.mem.indexOf(u8, line, " (") orelse return null;
+    const close = std.mem.indexOfScalarPos(u8, line, open, ')') orelse return null;
+    const name = line[0..open];
+    const qualified = line[open + 2 .. close];
+    if (!dottedName(name, "") or !dottedName(qualified, "<>")) return null;
+    return .{ .name = name, .qualified = qualified, .rest = line[close + 1 ..] };
+}
+
+const failed_loader = "unittest.loader._FailedTest";
+
+fn modulePath(arena: Allocator, module: []const u8) ![]const u8 {
+    const path = try arena.dupe(u8, module);
+    std.mem.replaceScalar(u8, path, '.', '/');
+    return std.fmt.allocPrint(arena, "{s}.py", .{path});
+}
+
+fn unittestCase(arena: Allocator, head: TestHead, status: Status) !Case {
+    if (std.mem.startsWith(u8, head.qualified, failed_loader)) {
+        const file = try modulePath(arena, head.name);
+        return .{ .id = file, .file = file, .status = .failed, .whole = true };
+    }
+    const ends_in_name = head.qualified.len > head.name.len and head.qualified[head.qualified.len - head.name.len - 1] == '.' and std.mem.endsWith(u8, head.qualified, head.name);
+    const id = if (ends_in_name) try arena.dupe(u8, head.qualified) else try std.fmt.allocPrint(arena, "{s}.{s}", .{ head.qualified, head.name });
+    return .{ .id = id, .file = try unittestFile(arena, id), .status = status };
+}
+
+fn unittestFile(arena: Allocator, id: []const u8) ![]const u8 {
+    const method = std.mem.lastIndexOfScalar(u8, id, '.') orelse return "";
+    const class = std.mem.lastIndexOfScalar(u8, id[0..method], '.') orelse return "";
+    return modulePath(arena, id[0..class]);
+}
+
+fn sectionHead(line: []const u8) ?TestHead {
+    for ([_][]const u8{ "FAIL: ", "ERROR: ", "UNEXPECTED SUCCESS: " }) |mark| {
+        if (std.mem.startsWith(u8, line, mark)) return testHead(line[mark.len..]);
+    }
+    return null;
+}
+
+fn ranCount(line: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, line, "Ran ")) return null;
+    const end = std.mem.indexOfScalarPos(u8, line, "Ran ".len, ' ') orelse return null;
+    if (!std.mem.startsWith(u8, line[end..], " test")) return null;
+    return std.fmt.parseInt(usize, line["Ran ".len..end], 10) catch null;
+}
+
+pub fn parseUnittest(arena: Allocator, text: []const u8, into: *std.ArrayList(Case)) !bool {
+    var ran: ?usize = null;
+    var after_rule = false;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, "\r");
+        const section = after_rule;
+        after_rule = std.mem.eql(u8, line, rule_line);
+        if (section) {
+            if (sectionHead(line)) |head| {
+                try into.append(arena, try unittestCase(arena, head, .failed));
+                continue;
+            }
+        }
+        if (ranCount(line)) |count| {
+            ran = count;
+            continue;
+        }
+        if (std.mem.startsWith(u8, line, "skipped '") and into.items.len != 0) {
+            into.items[into.items.len - 1].status = .skipped;
+            continue;
+        }
+        const head = testHead(line) orelse continue;
+        if (head.rest.len != 0 and !std.mem.startsWith(u8, head.rest, " ...")) continue;
+        const skipped = std.mem.startsWith(u8, head.rest, " ... skipped ");
+        try into.append(arena, try unittestCase(arena, head, if (skipped) .skipped else .passed));
+    }
+    const expected = ran orelse return false;
+    into.items.len = settle(into.items).len;
+    return into.items.len == expected;
+}
+
+pub const Kind = enum { pytest, dotnet, unittest };
+
+const Words = struct {
+    text: []const u8,
+    at: usize = 0,
+
+    fn next(self: *Words) ?[]const u8 {
+        while (self.at < self.text.len and (self.text[self.at] == ' ' or self.text[self.at] == '\t')) self.at += 1;
+        if (self.at >= self.text.len) return null;
+        const quoted = self.text[self.at] == '"';
+        const start = if (quoted) self.at + 1 else self.at;
+        const stops: []const u8 = if (quoted) "\"" else " \t";
+        const end = std.mem.indexOfAnyPos(u8, self.text, start, stops) orelse self.text.len;
+        self.at = if (quoted) @min(end + 1, self.text.len) else end;
+        return self.text[start..end];
+    }
+};
+
+fn programName(word: []const u8) []const u8 {
+    const slash = std.mem.lastIndexOfAny(u8, word, "\\/");
+    const base = if (slash) |at| word[at + 1 ..] else word;
+    for ([_][]const u8{ ".exe", ".cmd", ".bat" }) |tail| {
+        if (std.ascii.endsWithIgnoreCase(base, tail)) return base[0 .. base.len - tail.len];
+    }
+    return base;
+}
+
+fn isPython(program: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(program, "py")) return true;
+    for ([_][]const u8{ "python", "pypy" }) |stem| {
+        if (!std.ascii.startsWithIgnoreCase(program, stem)) continue;
+        for (program[stem.len..]) |c| if (!std.ascii.isDigit(c) and c != '.') return false;
+        return true;
+    }
+    return false;
+}
+
+fn pythonModuleKind(words: *Words) ?Kind {
+    while (words.next()) |word| {
+        if (std.mem.eql(u8, word, "-m")) {
+            const module = words.next() orelse return null;
+            if (std.mem.eql(u8, module, "pytest")) return .pytest;
+            if (std.mem.eql(u8, module, "unittest")) return .unittest;
+            return null;
+        }
+        if (word.len == 0 or word[0] != '-') return null;
+        if (std.mem.eql(u8, word, "-X") or std.mem.eql(u8, word, "-W")) _ = words.next() orelse return null;
+    }
+    return null;
+}
+
+fn runnerKind(first: []const u8, words: *Words) ?Kind {
+    const program = programName(first);
+    if (std.ascii.eqlIgnoreCase(program, "pytest") or std.ascii.eqlIgnoreCase(program, "py.test")) return .pytest;
+    if (isPython(program)) return pythonModuleKind(words);
+    if (std.ascii.eqlIgnoreCase(program, "dotnet")) {
+        const verb = words.next() orelse return null;
+        return if (std.mem.eql(u8, verb, "test")) .dotnet else null;
+    }
+    return null;
+}
 
 pub fn kindOf(command: []const u8) ?Kind {
-    const trimmed = std.mem.trim(u8, command, " \t");
-    if (std.mem.endsWith(u8, trimmed, " -m pytest")) return .pytest;
-    if (std.mem.eql(u8, trimmed, "dotnet test") or std.mem.startsWith(u8, trimmed, "dotnet test ")) return .dotnet;
-    return null;
+    if (std.mem.indexOfAny(u8, command, "&|;<>`\r\n") != null) return null;
+    var words: Words = .{ .text = command };
+    var first = words.next() orelse return null;
+    for ([_][]const u8{ "uv", "poetry", "pipenv", "pdm" }) |wrapper| {
+        if (!std.ascii.eqlIgnoreCase(programName(first), wrapper)) continue;
+        const verb = words.next() orelse return null;
+        if (!std.mem.eql(u8, verb, "run")) return null;
+        first = words.next() orelse return null;
+        break;
+    }
+    const kind = runnerKind(first, &words) orelse return null;
+    while (words.next()) |word| {
+        if (std.mem.eql(u8, word, "--")) return null;
+        if (kind == .unittest and (std.mem.eql(u8, word, "-f") or std.mem.eql(u8, word, "--failfast"))) return null;
+    }
+    return kind;
 }
 
 const report_file = "emetgate-junit.xml";
@@ -332,12 +499,14 @@ pub const Reporter = struct {
         const name = switch (kind) {
             .pytest => report_file,
             .dotnet => report_dir,
+            .unittest => "",
         };
         const path = try std.fmt.allocPrint(gpa, "{s}-cache\\{s}", .{ gate_dir, name });
         errdefer gpa.free(path);
         const augmented = switch (kind) {
             .pytest => try std.fmt.allocPrint(gpa, "{s} --junitxml=..\\{s}-cache\\{s} -o junit_family=xunit1 --continue-on-collection-errors --maxfail=0", .{ std.mem.trim(u8, command, " \t"), base, name }),
             .dotnet => try std.fmt.allocPrint(gpa, "{s} --logger trx --results-directory ..\\{s}-cache\\{s}", .{ std.mem.trim(u8, command, " \t"), base, name }),
+            .unittest => try std.fmt.allocPrint(gpa, "{s} -v", .{std.mem.trim(u8, command, " \t")}),
         };
         return .{ .kind = kind, .command = augmented, .path = path };
     }
@@ -351,7 +520,20 @@ pub const Reporter = struct {
         switch (self.kind) {
             .pytest => std.Io.Dir.deleteFileAbsolute(io, self.path) catch {},
             .dotnet => std.Io.Dir.cwd().deleteTree(io, self.path) catch {},
+            .unittest => {},
         }
+    }
+
+    pub fn refused(self: Reporter, report: sandbox.Report) bool {
+        const code = switch (report.outcome) {
+            .exited => |code| code,
+            else => return false,
+        };
+        return switch (self.kind) {
+            .pytest => code == 4,
+            .unittest => code == 2,
+            .dotnet => false,
+        };
     }
 
     pub fn collect(self: Reporter, gpa: Allocator, io: std.Io, report: sandbox.Report) !?Results {
@@ -361,7 +543,7 @@ pub const Reporter = struct {
         };
         if (report.killed_leftovers) return null;
         const known = switch (self.kind) {
-            .pytest => code == 0 or code == 1 or code == 5,
+            .pytest, .unittest => code == 0 or code == 1 or code == 5,
             .dotnet => code == 0 or code == 1,
         };
         if (!known) return null;
@@ -372,6 +554,7 @@ pub const Reporter = struct {
         const found = switch (self.kind) {
             .pytest => try self.readJunit(arena, io, &cases),
             .dotnet => try self.readTrx(arena, io, &cases),
+            .unittest => try parseUnittest(arena, report.stderr, &cases),
         };
         if (!found) {
             arena_state.deinit();
@@ -552,7 +735,71 @@ test "a dotnet trx report becomes one result per fully qualified test, with not 
     try testing.expectEqualStrings("Overflows", shortName("Calc.Tests.AddTests.Overflows(x: \"big\")"));
 }
 
-test "only a detected pytest or dotnet command gets a reporter, and only on a plain gate directory name" {
+test "the runner is read from every way of writing its command, and a command that cannot take the report flags has none" {
+    const pytest_forms = [_][]const u8{ "pytest", "pytest -q", "py.test tests", "pytest.exe -x", ".venv\\Scripts\\pytest", "python -m pytest", "python -m pytest -q tests", "py -3.12 -m pytest", "python3 -X utf8 -m pytest", "\"C:\\Program Files\\Py\\python.exe\" -m pytest -k \"a b\"", "uv run pytest", "poetry run python -m pytest -q", "pipenv run pytest", "pdm run pytest" };
+    for (pytest_forms) |form| try testing.expectEqual(@as(?Kind, .pytest), kindOf(form));
+    const unittest_forms = [_][]const u8{ "python -m unittest", "python -m unittest discover -s tests", "python -m unittest tests.test_a -b", ".venv\\Scripts\\python -m unittest discover", "py -m unittest" };
+    for (unittest_forms) |form| try testing.expectEqual(@as(?Kind, .unittest), kindOf(form));
+    const dotnet_forms = [_][]const u8{ "dotnet test", "dotnet test t\\T.csproj --no-restore", "dotnet.exe test" };
+    for (dotnet_forms) |form| try testing.expectEqual(@as(?Kind, .dotnet), kindOf(form));
+    const others = [_][]const u8{ "", "pytest && echo done", "pytest > out.txt", "npm test", "python manage.py test", "python -c \"import pytest\"", "python -m nose", "dotnet build", "uv sync", "pythonista -m pytest", "pytest -- -x", "dotnet test -- x=y", "python -m unittest -f", "python -m unittest --failfast discover" };
+    for (others) |form| try testing.expectEqual(@as(?Kind, null), kindOf(form));
+}
+
+fn unittestCases(arena: Allocator, text: []const u8) !?[]Case {
+    var cases: std.ArrayList(Case) = .empty;
+    if (!try parseUnittest(arena, text, &cases)) return null;
+    return cases.items;
+}
+
+test "verbose unittest output becomes one result per test on the names of every Python" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cases = (try unittestCases(arena,
+        "test_good (pkg.test_a.T.test_good) ... ok\r\n" ++
+            "test_old (pkg.test_a.T) ... ok\r\n" ++
+            "test_bad (pkg.test_a.T.test_bad) ... FAIL\r\n" ++
+            "test_loud (pkg.test_a.T.test_loud) ... noise from the test\r\nok\r\n" ++
+            "test_doc (pkg.test_a.T.test_doc)\r\nWhat it does ... ok\r\n" ++
+            "test_sub (pkg.test_a.T.test_sub) ... \r\n" ++
+            "test_skip (pkg.test_a.T.test_skip) ... skipped 'later'\r\n" ++
+            "test_late (pkg.test_a.T.test_late) ... noise\r\nskipped 'later'\r\n" ++
+            "test_lucky (pkg.test_a.T.test_lucky) ... unexpected success\r\n" ++
+            "test_gone (unittest.loader._FailedTest.test_gone) ... ERROR\r\n" ++
+            "\r\n" ++ rule_line ++ "\r\nFAIL: test_bad (pkg.test_a.T.test_bad)\r\n----\r\nAssertionError\r\n" ++
+            rule_line ++ "\r\nFAIL: test_sub (pkg.test_a.T.test_sub) (i=1)\r\n----\r\n" ++
+            "FAIL: test_good (pkg.test_a.T.test_good)\r\n" ++
+            rule_line ++ "\r\nUNEXPECTED SUCCESS: test_lucky (pkg.test_a.T.test_lucky)\r\n" ++
+            rule_line ++ "\r\nERROR: test_gone (unittest.loader._FailedTest.test_gone)\r\n" ++
+            "----\r\nRan 10 tests in 0.002s\r\n\r\nFAILED (failures=2, errors=1, skipped=2, unexpected successes=1)\r\n")).?;
+    try testing.expectEqual(@as(usize, 10), cases.len);
+    try testing.expectEqual(Status.passed, find(cases, "pkg.test_a.T.test_good").?.status);
+    try testing.expectEqual(Status.passed, find(cases, "pkg.test_a.T.test_old").?.status);
+    try testing.expectEqual(Status.failed, find(cases, "pkg.test_a.T.test_bad").?.status);
+    try testing.expectEqual(Status.passed, find(cases, "pkg.test_a.T.test_loud").?.status);
+    try testing.expectEqual(Status.passed, find(cases, "pkg.test_a.T.test_doc").?.status);
+    try testing.expectEqual(Status.failed, find(cases, "pkg.test_a.T.test_sub").?.status);
+    try testing.expectEqual(Status.skipped, find(cases, "pkg.test_a.T.test_skip").?.status);
+    try testing.expectEqual(Status.skipped, find(cases, "pkg.test_a.T.test_late").?.status);
+    try testing.expectEqual(Status.failed, find(cases, "pkg.test_a.T.test_lucky").?.status);
+    try testing.expectEqualStrings("pkg/test_a.py", find(cases, "pkg.test_a.T.test_bad").?.file);
+    const module = find(cases, "test_gone.py").?;
+    try testing.expect(module.whole);
+    try testing.expectEqual(Status.failed, module.status);
+}
+
+test "unittest output that does not add up to its Ran line gives no per-test result" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expect(try unittestCases(arena, "test_a (m.T.test_a) ... ok\n") == null);
+    try testing.expect(try unittestCases(arena, "setUpClass (m.T) ... ERROR\n----\nRan 0 tests in 0.0s\n") == null);
+    try testing.expect(try unittestCases(arena, "m.T.test_a ... ok\n----\nRan 1 test in 0.0s\n") == null);
+    try testing.expectEqual(@as(usize, 0), (try unittestCases(arena, "----\nRan 0 tests in 0.000s\n\nNO TESTS RAN\n")).?.len);
+}
+
+test "a pytest or dotnet or unittest command gets a reporter, and only on a plain gate directory name" {
     const gpa = testing.allocator;
     const py = (try Reporter.of(gpa, "C:\\w\\k\\shadow", ".venv\\Scripts\\python -m pytest")).?;
     defer py.deinit(gpa);
@@ -563,7 +810,12 @@ test "only a detected pytest or dotnet command gets a reporter, and only on a pl
     try testing.expectEqual(Kind.dotnet, net.kind);
     try testing.expect(std.mem.endsWith(u8, net.command, " --logger trx --results-directory ..\\shadow-cache\\emetgate-trx"));
     try testing.expect(try Reporter.of(gpa, "C:\\w\\k\\shadow", "zig build test") == null);
-    try testing.expect(try Reporter.of(gpa, "C:\\w\\k\\shadow", "python -m unittest discover") == null);
+    const bare = (try Reporter.of(gpa, "C:\\w\\k\\shadow", "pytest -q")).?;
+    defer bare.deinit(gpa);
+    try testing.expect(std.mem.startsWith(u8, bare.command, "pytest -q --junitxml="));
+    const unit = (try Reporter.of(gpa, "C:\\w\\k\\shadow", "python -m unittest discover")).?;
+    defer unit.deinit(gpa);
+    try testing.expectEqualStrings("python -m unittest discover -v", unit.command);
     try testing.expect(try Reporter.of(gpa, "C:\\w\\k\\sha dow", "python -m pytest") == null);
 }
 

@@ -7,6 +7,11 @@ const map_tree = @import("map_tree.zig");
 const map_rank = @import("map_rank.zig");
 const map_terms = @import("map_terms.zig");
 const map_concepts = @import("map_concepts.zig");
+const map_routes = @import("map_routes.zig");
+
+const max_tags: usize = 3;
+const max_loose_shown: usize = 8;
+const loose_share: f64 = 0.1;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -28,6 +33,15 @@ pub const Entry = struct {
     symbol: SymbolId,
     kind: EntryKind,
     tag: []const u8,
+    stated: bool = false,
+};
+
+pub const RouteLine = struct {
+    kind: facts.MapKind,
+    display: []const u8,
+    name: []const u8,
+    path: []const u8,
+    line: u32,
 };
 
 pub const Region = struct {
@@ -43,6 +57,8 @@ pub const Region = struct {
     entry_points: []const Entry,
     concepts: []const []const u8,
     listing_chars: u64,
+    routes: []const RouteLine = &.{},
+    loose: []const []const u8 = &.{},
 };
 
 pub const SymbolSnap = struct {
@@ -163,16 +179,27 @@ pub fn isTestPath(table: ?*const MapTable, path: []const u8) bool {
     for (t.test_infixes) |infix| {
         if (std.mem.indexOf(u8, base, infix) != null) return true;
     }
+    if (t.test_name) |named| {
+        if (named(base)) return true;
+    }
     var it = std.mem.splitScalar(u8, path[0 .. path.len - base.len], '/');
     while (it.next()) |segment| {
         for (t.test_segments) |marker| {
             if (std.mem.eql(u8, segment, marker)) return true;
         }
+        if (t.test_segment) |marked| {
+            if (marked(segment)) return true;
+        }
     }
     return false;
 }
 
-fn tableOf(state: *const FileState, fallback: ?*const MapTable) ?*const MapTable {
+pub fn isTestFile(state: *const FileState, fallback: ?*const MapTable) bool {
+    if (isTestPath(tableOf(state, fallback), state.path)) return true;
+    return state.status == .indexed and state.facts.map.test_content;
+}
+
+pub fn tableOf(state: *const FileState, fallback: ?*const MapTable) ?*const MapTable {
     if (state.profile) |p| {
         if (p.map) |m| return m;
     }
@@ -216,6 +243,7 @@ const Builder = struct {
     entry_of: []?Entry = &.{},
     regions: std.ArrayList(Region) = .empty,
     region_files: std.ArrayList(std.ArrayList(u32)) = .empty,
+    route_lines: bool = false,
     capacity: u64 = 0,
 
     fn collectFiles(self: *Builder) !void {
@@ -223,7 +251,7 @@ const Builder = struct {
         for (self.store.files.items, 0..) |*state, id| {
             if (state.status == .removed) continue;
             const table = tableOf(state, self.options.fallback);
-            const family: Family = if (isTestPath(table, state.path)) .tests else .code;
+            const family: Family = if (isTestFile(state, self.options.fallback)) .tests else .code;
             var weight: u64 = basename(state.path).len + 1;
             if (state.status == .indexed) {
                 for (state.facts.defs) |d| {
@@ -409,6 +437,63 @@ const Builder = struct {
                 }
             }
         }
+        try self.statedEntries();
+    }
+
+    fn statedEntries(self: *Builder) !void {
+        const rows = try map_routes.collect(self.arena, self.store, self.options.fallback);
+        if (rows.len == 0) return;
+        self.route_lines = true;
+        const k_of = try self.arena.alloc(u32, self.store.files.items.len);
+        @memset(k_of, none);
+        for (self.files, 0..) |f, k| k_of[f.id] = @intCast(k);
+        var by_symbol: std.AutoArrayHashMapUnmanaged(u32, std.ArrayList([]const u8)) = .empty;
+        var kinds: std.AutoHashMapUnmanaged(u32, facts.MapKind) = .empty;
+        var routes = try self.arena.alloc(std.ArrayList(RouteLine), self.regions.items.len);
+        var loose = try self.arena.alloc(std.ArrayList([]const u8), self.regions.items.len);
+        for (routes) |*r| r.* = .empty;
+        for (loose) |*l| l.* = .empty;
+        for (rows) |row| {
+            const stated_k = k_of[row.file];
+            if (stated_k == none) continue;
+            var symbol: ?u32 = null;
+            if (row.def != none and row.def_file != none and k_of[row.def_file] != none and self.files[k_of[row.def_file]].family == .code) {
+                symbol = self.symIndex(k_of[row.def_file], row.def);
+            }
+            var name: []const u8 = row.handler;
+            var region = self.files[stated_k].region;
+            if (symbol) |s| {
+                const sym = self.syms.items[s];
+                name = self.files[sym.file].state.facts.defs[sym.def].qname;
+                region = self.files[sym.file].region;
+                const slot = try by_symbol.getOrPut(self.arena, s);
+                if (!slot.found_existing) slot.value_ptr.* = .empty;
+                var known = false;
+                for (slot.value_ptr.items) |d| {
+                    if (std.mem.eql(u8, d, row.display)) known = true;
+                }
+                if (!known) try slot.value_ptr.append(self.arena, row.display);
+                try kinds.put(self.arena, s, row.kind);
+            } else {
+                const where = if (row.handler.len != 0) row.handler else try std.fmt.allocPrint(self.arena, "{s}:{d}", .{ basename(self.files[stated_k].state.path), row.line });
+                try loose[region].append(self.arena, try std.fmt.allocPrint(self.arena, "{s} {s}", .{ row.display, where }));
+            }
+            try routes[region].append(self.arena, .{ .kind = row.kind, .display = row.display, .name = name, .path = self.files[stated_k].state.path, .line = row.line });
+        }
+        var it = by_symbol.iterator();
+        while (it.next()) |item| {
+            const s = item.key_ptr.*;
+            const kind: EntryKind = switch (kinds.get(s).?) {
+                .route => .route,
+                .command => .command,
+                .event => .event,
+            };
+            self.entry_of[s] = .{ .symbol = self.symbolId(s), .kind = kind, .tag = try joinDisplays(self.arena, item.value_ptr.items), .stated = true };
+        }
+        for (self.regions.items, routes, loose) |*region, r, l| {
+            region.routes = r.items;
+            region.loose = l.items;
+        }
     }
 
     fn symbolId(self: *const Builder, s: u32) SymbolId {
@@ -480,6 +565,16 @@ const Builder = struct {
         }
     }
 };
+
+fn joinDisplays(arena: Allocator, displays: []const []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (displays[0..@min(displays.len, max_tags)], 0..) |d, i| {
+        if (i != 0) try out.appendSlice(arena, " + ");
+        try out.appendSlice(arena, d);
+    }
+    if (displays.len > max_tags) try out.print(arena, " +{d}", .{displays.len - max_tags});
+    return out.items;
+}
 
 fn decoratorRule(table: *const MapTable, name: []const u8) ?profile_mod.MapDecorator {
     for (table.decorators) |rule| {
@@ -1051,24 +1146,34 @@ const Renderer = struct {
         return self.b.symIndex(sym.file, d.parent);
     }
 
+    fn groupKey(self: *const Renderer, s: u32) ![]const u8 {
+        const sym = self.b.syms.items[s];
+        const f = self.b.files[sym.file];
+        if (f.table) |t| {
+            if (t.namespace_scoped) return f.state.facts.defs[sym.def].qname;
+        }
+        return std.fmt.allocPrint(self.b.arena, "\x00{d}", .{s});
+    }
+
     fn names(self: *Renderer, region: *Region, all: []const u32) !void {
         const arena = self.b.arena;
         var groups: std.ArrayList(Group) = .empty;
-        var at: std.AutoHashMapUnmanaged(u32, usize) = .empty;
+        var at: std.StringHashMapUnmanaged(usize) = .empty;
         var printed: std.StringHashMapUnmanaged(void) = .empty;
         var unique: std.ArrayList(u32) = .empty;
         for (all) |s| {
             const sym = self.b.syms.items[s];
             const qname = self.b.files[sym.file].state.facts.defs[sym.def].qname;
-            const seen = try printed.getOrPut(arena, qname);
+            const entry = self.b.entry_of[s];
+            const key = if (entry != null and entry.?.stated) try std.mem.concat(arena, u8, &.{ qname, "\x00", entry.?.tag }) else qname;
+            const seen = try printed.getOrPut(arena, key);
             if (seen.found_existing) continue;
             try unique.append(arena, s);
         }
         const selected = unique.items;
         for (selected) |s| {
             const owner = self.ownerOf(s);
-            const key = owner orelse s;
-            const entry = try at.getOrPut(arena, key);
+            const entry = try at.getOrPut(arena, try self.groupKey(owner orelse s));
             if (!entry.found_existing) {
                 entry.value_ptr.* = groups.items.len;
                 try groups.append(arena, .{ .owner = owner });
@@ -1159,6 +1264,23 @@ fn hexShort(root: []const u8) [16]u8 {
     return out;
 }
 
+fn writeLoose(w: *Writer, loose: []const []const u8, left: *u64) !usize {
+    var shown: usize = 0;
+    for (loose) |item| {
+        if (shown == max_loose_shown or item.len + 3 > left.*) break;
+        try w.writeAll(if (shown == 0) " | " else ", ");
+        try w.writeAll(item);
+        left.* -= item.len + 2;
+        shown += 1;
+    }
+    if (shown == 0) {
+        left.* = 0;
+        return loose.len;
+    }
+    if (shown < loose.len) try w.print(", +{d}", .{loose.len - shown});
+    return loose.len - shown;
+}
+
 fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, stats: *Stats) ![]const u8 {
     const arena = b.arena;
     var r: Renderer = .{ .b = b, .planner = planner, .out = .init(arena) };
@@ -1178,11 +1300,13 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
         try w.writeAll("Every symbol is in exactly one region; every region is listed. Line: id, path under the ## heading ({a/, b.ts} = these sibling entries; x .. y = sibling entries x to y), key symbols by weight (Class{member}; GET/POST/cmd/on = route, command, event handler), ");
         try w.writeAll(if (b.options.fold_files) "[more files; service{a, b} = a.service and b.service], #terms.\n" else "[more files], #terms.\n");
     }
+    if (b.route_lines and planner.concept_plan == null) try w.writeAll("A route is written with its full path where the source states it: GET /api/users name; ALL = any verb, WS = websocket; <x> = computed when the program runs, shown as written; after | come entries with no named symbol of their own.\n");
     try w.writeAll("emetgate map region r1 lists every symbol of region r1 with line, kind, signature and doc; emetgate_evidence Class.method returns its code, callers, callees and tests.\n");
     var names_count: u32 = 0;
     var files_count: u32 = 0;
     var terms_count: u32 = 0;
     var entries_count: u32 = 0;
+    var loose_left: u64 = @intFromFloat(@as(f64, @floatFromInt(b.options.budget_tokens)) * b.options.chars_per_token * loose_share);
     const terms_of = try arena.alloc(std.ArrayList(u32), b.regions.items.len);
     for (terms_of) |*t| t.* = .empty;
     for (selection.terms, selection.chosen_terms, 0..) |t, chosen, ti| {
@@ -1227,6 +1351,10 @@ fn render(b: *Builder, planner: *Planner, selection: Selection, complete: bool, 
                         for (selected.items) |s| {
                             if (r.tagOf(s) != null) entries_count += 1;
                         }
+                    }
+                    if (planner.concept_plan == null and reg.loose.len != 0 and loose_left != 0) {
+                        const hidden = try writeLoose(w, reg.loose, &loose_left);
+                        entries_count += @intCast(reg.loose.len - hidden);
                     }
                     var shown_files: std.ArrayList(u32) = .empty;
                     for (reg.files) |k| {

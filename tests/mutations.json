@@ -1077,7 +1077,7 @@
     {
       "id": "T1-typecheck-failure-ignored",
       "file": "src/platform/runner.zig",
-      "from": "        if (!checked.passed()) return .{ .typecheck = checked };\n",
+      "from": "        if (!checked.passed()) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };\n",
       "to": "",
       "kills": [
         "typecheck: a failing typecheck rejects before the tests run and leaves disk untouched",
@@ -1186,7 +1186,7 @@
     {
       "id": "G6-rules-body-claimed-untouched",
       "file": "src/engine/cas.zig",
-      "from": ".body = slot, .hole = .{ .old = cut, .new = slot } };",
+      "from": ".body = slot, .hole = .{ .old = cut, .new = hole } };",
       "to": ".body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.start, .end = slot.start } } };",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
@@ -1244,8 +1244,8 @@
     {
       "id": "R3-checks-use-strict-exemption-removed",
       "file": "src/engine/checks.zig",
-      "from": "    return !isDirective(profile, tree, node);",
-      "to": "    return !isDirective(profile, tree, node) or true;",
+      "from": "return !isDirective(profile, tree, node) and !isDocstring(profile, tree, node);",
+      "to": "return !isDocstring(profile, tree, node);",
       "kills": [
         "no_comment allows a use strict directive only in the directive prologue"
       ]
@@ -1274,8 +1274,8 @@
     {
       "id": "R6-checks-span-boundary-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
-      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (profile.isComment(node.kind()) or isProseStatement(profile, tree, node)) {",
+      "from": "if (node.endByte() <= span.start or node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (isShebang(tree, node)) continue;",
+      "to": "if (node.endByte() <= span.start and node.startByte() >= span.end) {\n            walker.skipChildren();\n            continue;\n        }\n        if (isShebang(tree, node)) continue;",
       "kills": [
         "no_comment ignores comments outside the span",
         "no_comment flags a comment inside the span even when others sit outside it"
@@ -1372,7 +1372,7 @@
       "expect_status": "survived",
       "note": "defense in depth for body replacement: a 594-case differential spike (ASI, regex/division, template, comment, U+2028, shared declarators, class and object members) found no body that passes every other guard and fails only this one; it is the load-bearing guard for the planned insertion target",
       "file": "src/engine/cas.zig",
-      "from": "    try expectUntouchedOutside(before.*, after.*, cut, slot);\n",
+      "from": "    try expectUntouchedOutside(before.*, after.*, cut, hole);\n",
       "to": "    _ = before;\n",
       "filter": [
         "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour",
@@ -1404,8 +1404,8 @@
         "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour"
       ],
       "file": "src/engine/cas.zig",
-      "from": "if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;",
-      "to": "if (candidate.ref.eql(wanted.ref)) return true;"
+      "from": "if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;",
+      "to": "if (candidate.ref.sameMember(wanted.ref)) return true;"
     },
     {
       "id": "EC12-cas-body-trim-removed",
@@ -1587,7 +1587,7 @@
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "            a.ambiguous = true;\n            b.ambiguous = true;\n",
+      "from": "    for (items, clashing) |*item, clash| item.ambiguous = clash;\n",
       "to": ""
     },
     {
@@ -1596,8 +1596,8 @@
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "        if (found != null) return error.AmbiguousSymbol;\n",
-      "to": ""
+      "from": "            if (found != null) return error.AmbiguousSymbol;\n            found = symbol;\n",
+      "to": "            found = symbol;\n"
     },
     {
       "id": "ES3-sym-unnamed-container-skipped",
@@ -1935,8 +1935,8 @@
     {
       "id": "NS2-insert-existing-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    if (before.item(insertion.ref)) |_| return error.SymbolExists else",
-      "to": "    if (before.item(insertion.ref)) |_| {} else",
+      "from": "    if (before.itemExact(insertion.ref)) |_| return error.SymbolExists else",
+      "to": "    if (before.itemExact(insertion.ref)) |_| {} else",
       "kills": [
         "insert refuses a symbol that already exists, even as a duplicate"
       ]
@@ -2519,8 +2519,8 @@
     {
       "id": "SP20-ledger-rule-drops-where",
       "file": "src/platform/rules.zig",
-      "from": ", .where = decision.where });",
-      "to": " });",
+      "from": ".check = check, .where = decision.where, .text",
+      "to": ".check = check, .text",
       "kills": [
         "scope: a rule whose where names another file does not block the proposal",
         "scope: a rule scoped to src/queue.js reports nothing although the text occurs 17 times elsewhere",
@@ -2691,8 +2691,8 @@
     {
       "id": "NL1-literal-option-name-ignored",
       "file": "src/engine/checks.zig",
-      "from": "keyName(shape, tree, key), name)) continue;",
-      "to": "keyName(shape, tree, key), name) and false) continue;",
+      "from": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) continue;",
+      "to": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and false) continue;",
       "kills": [
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal matches a quoted key but not a computed one",
@@ -2708,8 +2708,8 @@
     {
       "id": "NL2-literal-value-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (!isLiteral(shape, tree, value)) continue;",
-      "to": "if (!isLiteral(shape, tree, value) and false) continue;",
+      "from": "if (!isLiteral(shape, tree, pair.value)) continue;",
+      "to": "if (!isLiteral(shape, tree, pair.value) and false) continue;",
       "kills": [
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
@@ -2739,8 +2739,8 @@
     {
       "id": "NL4-literal-pair-outside-span-reported",
       "file": "src/engine/checks.zig",
-      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        const fields = literalFields(shape, node)",
-      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        const fields = literalFields(shape, node)",
+      "from": "if (node.startByte() < span.start or node.endByte() > span.end) continue;\n        if (isOneOf(node.kind(), shape.equals_pairs)) {",
+      "to": "if ((node.startByte() < span.start or node.endByte() > span.end) and false) continue;\n        if (isOneOf(node.kind(), shape.equals_pairs)) {",
       "kills": [
         "no_literal reports only pairs inside the span",
         "scope: a no_literal rule scoped to one symbol reports only its literal options"
@@ -2832,8 +2832,8 @@
     {
       "id": "NL10-literal-quoted-key-escape-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (key.namedChildCount() != 1) return \"\";",
-      "to": "if (key.namedChildCount() == 0) return \"\";",
+      "from": "if (key.namedChildCount() != 1) return \"\";\n    return tree.text(key.namedChild(0).?);",
+      "to": "if (key.namedChildCount() == 0) return \"\";\n    return tree.text(key.namedChild(0).?);",
       "kills": [
         "no_literal matches a quoted key but not a computed one"
       ],
@@ -2886,8 +2886,8 @@
     {
       "id": "NL14-literal-pair-kind-ignored",
       "file": "src/engine/checks.zig",
-      "from": "if (isKind(node, shape.pair)) return .{ .key",
-      "to": "if (true) return .{ .key",
+      "from": "if (isKind(node, shape.pair)) {\n        if (shape.pair_parent",
+      "to": "if (true) {\n        if (shape.pair_parent",
       "filter": [
         "no_literal"
       ],
@@ -3370,8 +3370,8 @@
     {
       "id": "CR10-typecheck-stage-swallows-crash",
       "file": "src/platform/runner.zig",
-      "from": "if (!checked.passed()) return .{ .typecheck = checked };",
-      "to": "if (!checked.passed() and checked.outcome != .crashed) return .{ .typecheck = checked };",
+      "from": "if (!checked.passed()) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };",
+      "to": "if (!checked.passed() and checked.outcome != .crashed) return .{ .typecheck = try withoutGateDir(gpa, checked, cwd) };",
       "kills": [
         "crash: a typecheck that crashes rejects as typecheck_crashed and leaves disk untouched",
         "crash: a typecheck that crashes rejects a whole batch as typecheck_crashed and leaves disk untouched"
@@ -4511,12 +4511,21 @@
       ]
     },
     {
-      "id": "RN3-a-shard-left-out",
+      "id": "RN3-queue-left-after-every-shard-crashed",
       "file": "tools/test_runner.zig",
-      "from": "const shards = gpa.alloc(ShardRun, options.jobs) catch oom();",
-      "to": "const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom();",
+      "from": "if (!crashed or remaining == 0 or remaining >= left) break;",
+      "to": "if (true) break;",
       "kills": [
-        "runner: --jobs runs every selected test once across its shards"
+        "runner: tests left in the queue still run after every shard crashed, and each crash is named and recorded"
+      ]
+    },
+    {
+      "id": "RN15-crashing-shard-loses-its-record",
+      "file": "tools/test_runner.zig",
+      "from": "if (record_file != null) recordClaim(&record_writer.interface, index) catch |err| {",
+      "to": "if (false) recordClaim(&record_writer.interface, index) catch |err| {",
+      "kills": [
+        "runner: tests left in the queue still run after every shard crashed, and each crash is named and recorded"
       ]
     },
     {
@@ -5572,6 +5581,15 @@
       "to": "            _ = referenced;",
       "kills": [
         "delete references: a name only a comment elsewhere mentions is deleted when the language service finds no reference"
+      ]
+    },
+    {
+      "id": "TS5-start-held-to-request-timeout",
+      "file": "src/platform/tsserver.zig",
+      "from": "\"}\", self.options.start_timeout_ms);",
+      "to": "\"}\", self.options.timeout_ms);",
+      "kills": [
+        "tsserver: a start slower than the request timeout is not a hang"
       ]
     },
     {
@@ -8083,8 +8101,8 @@
     {
       "id": "MP14-tests-mixed-with-code",
       "file": "src/engine/map.zig",
-      "from": "            const family: Family = if (isTestPath(table, state.path)) .tests else .code;",
-      "to": "            const family: Family = if (isTestPath(table, state.path) and false) .tests else .code;",
+      "from": "            const family: Family = if (isTestFile(state, self.options.fallback)) .tests else .code;",
+      "to": "            const family: Family = if (isTestFile(state, self.options.fallback) and false) .tests else .code;",
       "kills": [
         "map: test files are kept in test regions apart from the code they exercise"
       ]
@@ -9482,8 +9500,8 @@
     {
       "id": "MR1-message-rule-reaches-the-code-gate",
       "file": "src/platform/rules.zig",
-      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
-      "to": "        if (isFrozen(rule)) continue;\n",
+      "from": "        if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
+      "to": "        if (isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
       "kills": [
         "a message rule is kept out of the code gate, which would otherwise fail closed on it"
       ],
@@ -10498,8 +10516,8 @@
     {
       "id": "FZ7-frozen-rule-run-as-a-tree-check",
       "file": "src/platform/rules.zig",
-      "from": "        if (isMessage(rule) or isFrozen(rule)) continue;\n",
-      "to": "        if (isMessage(rule)) continue;\n",
+      "from": "        if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(profile.name)) continue;\n",
+      "to": "        if (isMessage(rule) or !rule.lang.covers(profile.name)) continue;\n",
       "kills": [
         "frozen: the code rules that read a tree take a frozen rule as nothing to check"
       ]
@@ -10545,7 +10563,7 @@
       "id": "P1e-journal-recover-restores-over-any-target",
       "file": "src/platform/disk.zig",
       "from": "    const ours = new_hash orelse return guard.renameReplacing(gpa, target_abs);\n",
-      "to": "    if (true) return guard.renameReplacing(gpa, target_abs);\n    const ours = new_hash orelse return;\n",
+      "to": "    if (new_hash == null or new_hash != null) return guard.renameReplacing(gpa, target_abs);\n    const ours = new_hash orelse return;\n",
       "kills": [
         "journal base: recover does not put the old bytes back over a file the user edited after the crash",
         "journal base: recover does not put the old bytes back over a file the user created where the crash left none"
@@ -12839,8 +12857,8 @@
     {
       "id": "PY-NL2-keyword-argument-ignored",
       "file": "src/engine/checks.zig",
-      "from": "    if (shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
-      "to": "    if (false and shape.named_argument.len != 0 and isKind(node, shape.named_argument)) return",
+      "from": "if (isOneOf(node.kind(), shape.named_arguments)) {\n        return .{ .key = node.childByField",
+      "to": "if (false and isOneOf(node.kind(), shape.named_arguments)) {\n        return .{ .key = node.childByField",
       "kills": [
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ]
@@ -12848,7 +12866,7 @@
     {
       "id": "PY-NL3-bare-dict-key-taken-as-option-name",
       "file": "src/engine/checks.zig",
-      "from": "        if (!fields.bare_key and !isKind(key, shape.quoted_key)) continue;\n",
+      "from": "        if (!pair.bare_key and !isKind(pair.key, shape.quoted_key)) continue;\n",
       "to": "",
       "kills": [
         "python: no_literal leaves computed, named, interpolated and differently named values alone"
@@ -12956,8 +12974,8 @@
     {
       "id": "PY-FI1-python-import-shape-ignored",
       "file": "src/engine/checks.zig",
-      "from": "        if (m.from_statement) |from_statement| {\n",
-      "to": "        if (@as(?[]const u8, null)) |from_statement| {\n",
+      "from": "} else if (m.from_statement) |from_statement| {",
+      "to": "} else if (@as(?[]const u8, null)) |from_statement| {",
       "kills": [
         "python presets flag the construct itself and not a name, string or comment that mentions it"
       ]
@@ -13340,8 +13358,8 @@
     {
       "id": "PY-PF3-decorator-outside-class-read",
       "file": "src/engine/lang/python/profile.zig",
-      "from": "    if (!std.mem.eql(u8, owner.kind(), \"block\") or !std.mem.eql(u8, class.kind(), \"class_definition\")) return .{};\n",
-      "to": "    if (!std.mem.eql(u8, owner.kind(), \"block\")) return .{};\n    _ = class;\n",
+      "from": "    const in_class = if (class) |c| std.mem.eql(u8, owner.?.kind(), \"block\") and std.mem.eql(u8, c.kind(), \"class_definition\") else false;\n",
+      "to": "    const in_class = if (class != null) std.mem.eql(u8, owner.?.kind(), \"block\") else false;\n",
       "kills": [
         "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
       ]
@@ -13369,8 +13387,8 @@
     {
       "id": "PY-PF6-property-not-getter",
       "file": "src/engine/lang/python/profile.zig",
-      "from": "            .property => traits.accessor = .get,\n",
-      "to": "            .property => {},\n",
+      "from": "            .property, .getter => traits.accessor = .get,\n",
+      "to": "            .property, .getter => {},\n",
       "kills": [
         "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
       ]
@@ -13962,10 +13980,10 @@
     {
       "id": "B18-ansi-digits-count",
       "file": "src/platform/test_outcome.zig",
-      "from": "        if (line[index] == 0x1b) {",
+      "from": "        if (c == 0x1b) {",
       "to": "        if (false) {",
       "kills": [
-        "a passing run is summed up by its count lines, oldest first and under the size cap"
+        "every runner's real summary is what a run sums up to, and its noise never is"
       ]
     },
     {
@@ -14430,8 +14448,8 @@
     {
       "id": "JS1-item-span-escape-unchecked",
       "file": "src/engine/cas.zig",
-      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;",
-      "to": "    if (false) return error.BodyEscape;",
+      "from": "    if (exact.span.start == grown.start and exact.span.end == grown.end) return exact;\n    return after.memberAt(ref, grown);\n",
+      "to": "    return exact;\n",
       "expect_status": "survived",
       "note": "defense in depth: the item span check and expectSameShape each refuse every escape the other does, since the shape walk pins the item's enclosing node and the span check pins the item; JS2 removes the other guard and JS1B removes both"
     },
@@ -14446,8 +14464,8 @@
     {
       "id": "JS1B-item-span-and-shape-unchecked",
       "file": "src/engine/cas.zig",
-      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n    try expectSameShape(base.tree, next.tree, cut, slot);\n",
-      "to": "    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n",
+      "from": "    const placed = placedAt(after.*, ref, grown) orelse return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n    try expectSameShape(base.tree, next.tree, cut, slot);\n",
+      "to": "    const placed = after.itemExact(ref) catch return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n",
       "kills": [
         "a replaced item that grows into its neighbour or changes its name is refused"
       ]
@@ -14650,8 +14668,8 @@
     {
       "id": "NT4-no-tests-not-recorded-by-gate",
       "file": "src/platform/runner.zig",
-      "from": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = test_outcome.noTests(report);\n",
-      "to": "    var report = try runCommandWith(gpa, io, cwd, test_command, limits, cache);\n    report.no_tests = false;\n",
+      "from": "    var report = try withoutGateDir(gpa, try runCommandWith(gpa, io, cwd, test_command, limits, cache), cwd);\n    report.no_tests = test_outcome.noTests(report);\n",
+      "to": "    var report = try withoutGateDir(gpa, try runCommandWith(gpa, io, cwd, test_command, limits, cache), cwd);\n    report.no_tests = false;\n",
       "kills": [
         "a gated test run that collected no tests passes with a note instead of failing the write"
       ]
@@ -15221,8 +15239,8 @@
     {
       "id": "TO1-count-lines-not-scanned",
       "file": "src/platform/test_outcome.zig",
-      "from": "        if (countLines(report.stdout, &summary)) return summary;\n",
-      "to": "",
+      "from": "            end = if (start == 0) 0 else start - 1;",
+      "to": "            end = 0;",
       "kills": [
         "a failing run whose count lines sit above a long failure list is summed up by them, not by a stack frame"
       ]
@@ -15747,8 +15765,8 @@
     {
       "id": "L5I-venv-pytest-unseen",
       "file": "src/platform/test_command.zig",
-      "from": "        if (siteHasPytest(arena, io, dir, site)) return true;\n",
-      "to": "        _ = site;\n",
+      "from": "        if (siteHas(arena, io, dir, site, package)) return true;\n        const home = (try systemSiteHome",
+      "to": "        _ = .{ site, package };\n        const home = (try systemSiteHome",
       "kills": [
         "test detection: a project venv interpreter runs the Python tests, and a requirements-only project gets pytest or unittest"
       ]
@@ -16320,8 +16338,8 @@
     {
       "id": "SCR10-env-error-taken-as-failing-baseline",
       "file": "src/platform/baseline.zig",
-      "from": "        if (test_outcome.envError(report)) |reason| {",
-      "to": "        if (@as(?[]const u8, null)) |reason| {",
+      "from": "    if (test_outcome.envError(report)) |reason| {",
+      "to": "    if (@as(?[]const u8, null)) |reason| {",
       "kills": [
         "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
       ]
@@ -16526,8 +16544,7 @@
       "to": "",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
-        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },
     {

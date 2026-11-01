@@ -92,6 +92,7 @@ pub const Symbol = struct {
     declaration: Span,
     hash: Hash,
     ambiguous: bool = false,
+    signature: []const u8 = "",
 };
 
 pub const Declaration = declarations_mod.Declaration;
@@ -114,6 +115,7 @@ pub const Table = struct {
     symbols: []Symbol,
     declarations: []Declaration = &.{},
     statements: []Statement = &.{},
+    short_refs: bool = false,
 
     pub const BuildError = error{SourceHasErrors} || Allocator.Error;
     pub const ResolveError = error{ SymbolNotFound, AmbiguousSymbol };
@@ -137,13 +139,14 @@ pub const Table = struct {
             const symbol = try describe(arena.allocator(), profile, tree, function) orelse continue;
             try symbols.append(arena.allocator(), symbol);
         }
-        markAmbiguous(symbols.items);
+        try settleRefs(arena.allocator(), profile, tree, symbols.items);
         const declarations = try declarations_mod.collect(arena.allocator(), profile, tree);
+        try settleRefs(arena.allocator(), profile, tree, declarations);
         const taken = try arena.allocator().alloc(Ref, symbols.items.len + declarations.len);
         for (symbols.items, 0..) |symbol, i| taken[i] = symbol.ref;
         for (declarations, 0..) |declaration, i| taken[symbols.items.len + i] = declaration.ref;
         const statements = try statements_mod.collect(arena.allocator(), profile, tree, taken);
-        return .{ .arena = arena, .symbols = symbols.items, .declarations = declarations, .statements = statements };
+        return .{ .arena = arena, .symbols = symbols.items, .declarations = declarations, .statements = statements, .short_refs = profile.short_refs };
     }
 
     pub fn deinit(self: Table) void {
@@ -159,7 +162,17 @@ pub const Table = struct {
             if (found != null) return error.AmbiguousSymbol;
             found = symbol;
         }
-        return found orelse error.SymbolNotFound;
+        if (found) |symbol| return symbol;
+        for (self.declarations) |declaration| {
+            if (declaration.ref.eql(ref)) return error.SymbolNotFound;
+        }
+        for (self.statements) |statement| {
+            if (statement.ref.eql(ref)) return error.SymbolNotFound;
+        }
+        return switch (try self.shortMatch(ref)) {
+            .symbol => |symbol| symbol,
+            .declaration => error.SymbolNotFound,
+        };
     }
 
     pub fn declarationMatching(self: Table, ref: Ref, hash: Hash) ?*const Declaration {
@@ -170,17 +183,105 @@ pub const Table = struct {
     }
 
     pub fn item(self: Table, ref: Ref) ResolveError!Item {
+        return self.itemExact(ref) catch |err| switch (err) {
+            error.AmbiguousSymbol => err,
+            error.SymbolNotFound => switch (try self.shortMatch(ref)) {
+                .symbol => |symbol| symbolItem(symbol),
+                .declaration => |declaration| declarationItem(declaration),
+            },
+        };
+    }
+
+    pub fn memberAt(self: Table, ref: Ref, span: Span) ?Item {
+        for (self.symbols) |*symbol| {
+            if (self.sameOccupant(symbol.ref, ref) and sameSpan(symbol.declaration, span)) return symbolItem(symbol);
+        }
+        for (self.declarations) |*declaration| {
+            if (self.sameOccupant(declaration.ref, ref) and sameSpan(declaration.declaration, span)) return declarationItem(declaration);
+        }
+        return null;
+    }
+
+    fn sameOccupant(self: Table, placed: Ref, ref: Ref) bool {
+        return if (self.short_refs) placed.sameName(ref) else placed.sameMember(ref);
+    }
+
+    pub fn candidates(self: Table, gpa: Allocator, ref: Ref) Allocator.Error![]Candidate {
+        var out: std.ArrayList(Candidate) = .empty;
+        errdefer out.deinit(gpa);
+        for (self.symbols) |*symbol| {
+            if (symbol.ref.eql(ref)) try out.append(gpa, .{ .ref = symbol.ref, .line = symbol.node.startPoint().row + 1 });
+        }
+        for (self.declarations) |*declaration| {
+            if (declaration.ref.eql(ref)) try out.append(gpa, .{ .ref = declaration.ref, .line = declaration.node.startPoint().row + 1 });
+        }
+        for (self.statements) |*statement| {
+            if (statement.ref.eql(ref)) try out.append(gpa, .{ .ref = statement.ref, .line = statement.node.startPoint().row + 1 });
+        }
+        if (out.items.len != 0 or !self.short_refs) return out.toOwnedSlice(gpa);
+        const tier = self.tierOf(ref);
+        const class = self.classMatches(ref);
+        for (self.symbols) |*symbol| {
+            if (shortHit(ref, symbol, tier) and !(class and symbol.kind == .constructor)) try out.append(gpa, .{ .ref = symbol.ref, .line = symbol.node.startPoint().row + 1 });
+        }
+        for (self.declarations) |*declaration| {
+            if (shortHit(ref, declaration, tier)) try out.append(gpa, .{ .ref = declaration.ref, .line = declaration.node.startPoint().row + 1 });
+        }
+        return out.toOwnedSlice(gpa);
+    }
+
+    const Hit = union(enum) {
+        symbol: *const Symbol,
+        declaration: *const Declaration,
+    };
+
+    fn shortMatch(self: Table, ref: Ref) ResolveError!Hit {
+        if (!self.short_refs) return error.SymbolNotFound;
+        const tier = self.tierOf(ref);
+        const class = self.classMatches(ref);
+        var found: ?Hit = null;
+        for (self.symbols) |*symbol| {
+            if (!shortHit(ref, symbol, tier) or (class and symbol.kind == .constructor)) continue;
+            if (found != null) return error.AmbiguousSymbol;
+            found = .{ .symbol = symbol };
+        }
+        for (self.declarations) |*declaration| {
+            if (!shortHit(ref, declaration, tier)) continue;
+            if (found != null) return error.AmbiguousSymbol;
+            found = .{ .declaration = declaration };
+        }
+        return found orelse error.SymbolNotFound;
+    }
+
+    fn tierOf(self: Table, ref: Ref) Tier {
+        for (self.declarations) |declaration| {
+            if (ref.abbreviates(declaration.ref) and declaration.ref.accessor == ref.accessor) return .same_accessor;
+        }
+        for (self.symbols) |symbol| {
+            if (ref.abbreviates(symbol.ref) and symbol.ref.accessor == ref.accessor) return .same_accessor;
+        }
+        return .any_accessor;
+    }
+
+    fn classMatches(self: Table, ref: Ref) bool {
+        for (self.declarations) |declaration| {
+            if (declaration.kind == .class and ref.abbreviates(declaration.ref)) return true;
+        }
+        return false;
+    }
+
+    pub fn itemExact(self: Table, ref: Ref) ResolveError!Item {
         var found: ?Item = null;
         for (self.symbols) |*symbol| {
             if (!symbol.ref.eql(ref)) continue;
             if (found) |_| return error.AmbiguousSymbol;
-            found = .{ .ref = symbol.ref, .role = .symbol, .node = symbol.node, .span = symbol.declaration, .hash = symbol.hash, .body = symbol.body };
+            found = symbolItem(symbol);
         }
         if (found) |f| return f;
         for (self.declarations) |*declaration| {
             if (!declaration.ref.eql(ref)) continue;
             if (found) |_| return error.AmbiguousSymbol;
-            found = .{ .ref = declaration.ref, .role = .declaration, .node = declaration.node, .span = declaration.declaration, .hash = declaration.hash };
+            found = declarationItem(declaration);
         }
         if (found) |f| return f;
         for (self.statements) |*statement| {
@@ -204,12 +305,55 @@ pub const Table = struct {
     }
 };
 
-fn markAmbiguous(symbols: []Symbol) void {
-    for (symbols, 0..) |*a, i| {
-        for (symbols[i + 1 ..]) |*b| {
+pub const Candidate = struct { ref: Ref, line: u32 };
+
+const Tier = enum { same_accessor, any_accessor };
+
+fn shortHit(short: Ref, entry: anytype, tier: Tier) bool {
+    var full = entry.ref;
+    if (full.overload.len == 0) full.overload = entry.signature;
+    if (!short.abbreviates(full)) return false;
+    return tier == .any_accessor or short.accessor == full.accessor;
+}
+
+fn symbolItem(symbol: *const Symbol) Item {
+    return .{ .ref = symbol.ref, .role = .symbol, .node = symbol.node, .span = symbol.declaration, .hash = symbol.hash, .body = symbol.body };
+}
+
+fn declarationItem(declaration: *const Declaration) Item {
+    return .{ .ref = declaration.ref, .role = .declaration, .node = declaration.node, .span = declaration.declaration, .hash = declaration.hash };
+}
+
+fn sameSpan(a: Span, b: Span) bool {
+    return a.start == b.start and a.end == b.end;
+}
+
+fn settleRefs(arena: Allocator, profile: *const Profile, tree: ts.Tree, items: anytype) Allocator.Error!void {
+    if (profile.parameterKey) |key| {
+        for (items) |*item| {
+            if (item.ref.overload.len == 0) item.signature = try key(arena, tree, item.node, false) orelse "";
+        }
+        for ([_]bool{ false, true }) |full| {
+            const clashing = try arena.alloc(bool, items.len);
+            markClashes(items, clashing);
+            for (items, clashing) |*item, clash| {
+                if (!clash) continue;
+                if (try key(arena, tree, item.node, full)) |text| item.ref.overload = text;
+            }
+        }
+    }
+    const clashing = try arena.alloc(bool, items.len);
+    markClashes(items, clashing);
+    for (items, clashing) |*item, clash| item.ambiguous = clash;
+}
+
+fn markClashes(items: anytype, clashing: []bool) void {
+    @memset(clashing, false);
+    for (items, 0..) |a, i| {
+        for (items[i + 1 ..], i + 1..) |b, j| {
             if (!a.ref.eql(b.ref)) continue;
-            a.ambiguous = true;
-            b.ambiguous = true;
+            clashing[i] = true;
+            clashing[j] = true;
         }
     }
 }
@@ -218,15 +362,21 @@ fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: 
     const traits = profile.memberTraits(profile, tree, function.node, function.kind);
     const kind = symbolKind(function.kind, traits) orelse return null;
     const name = function.name orelse return null;
+    const label = try labelOf(arena, profile, tree, nameOwner(profile, function.node));
     const chain = try statements_mod.topLevelChain(arena, profile, tree, name);
-    if (chain == null and !isOneOf(name.kind(), profile.addressable_names)) return null;
+    if (label == null and chain == null and !isOneOf(name.kind(), profile.addressable_names)) return null;
     const outer = try containerPath(arena, profile, tree, function.node) orelse return null;
-    const container = if (chain) |c| try std.mem.concat(arena, []const u8, &.{ outer, c[0 .. c.len - 1] }) else outer;
+    const container = if (chain) |c| try std.mem.concat(arena, []const u8, &.{ outer, c[0 .. c.len - 1] }) else try qualifiedContainer(arena, profile, tree, function.node, outer);
     const declaration = declarationOf(profile, function);
+    const overload: []const u8 = if (traits.overload_stub) stub: {
+        const key = profile.parameterKey orelse break :stub "";
+        break :stub try key(arena, tree, function.node, false) orelse "";
+    } else "";
     return .{
         .ref = .{
             .container = container,
-            .name = if (chain) |c| c[c.len - 1] else tree.text(name),
+            .name = label orelse if (chain) |c| c[c.len - 1] else tree.text(name),
+            .overload = overload,
             .accessor = traits.accessor,
             .is_static = traits.is_static,
         },
@@ -238,18 +388,41 @@ fn describe(arena: Allocator, profile: *const Profile, tree: ts.Tree, function: 
     };
 }
 
+fn nameOwner(profile: *const Profile, node: ts.Node) ts.Node {
+    const named = profile.functionName(node.kind()) orelse return node;
+    var owner = node;
+    for (0..named.owner_depth) |_| owner = owner.parent() orelse return node;
+    return owner;
+}
+
+fn labelOf(arena: Allocator, profile: *const Profile, tree: ts.Tree, node: ts.Node) Allocator.Error!?[]const u8 {
+    const label = profile.memberLabel orelse return null;
+    return label(arena, tree, node);
+}
+
+fn qualifiedContainer(arena: Allocator, profile: *const Profile, tree: ts.Tree, node: ts.Node, container: []const []const u8) Allocator.Error![]const []const u8 {
+    const qualifier = profile.memberQualifier orelse return container;
+    const named = qualifier(node) orelse return container;
+    return std.mem.concat(arena, []const u8, &.{ container, &.{try profile_mod.compactSpelling(arena, tree.text(named))} });
+}
+
+fn memberKind(traits: MemberTraits) Kind {
+    return switch (traits.accessor) {
+        .get => .getter,
+        .set => .setter,
+        .delete, .add, .remove => .method,
+        .none => if (traits.is_constructor) .constructor else .method,
+    };
+}
+
 fn symbolKind(kind: FunctionKind, traits: MemberTraits) ?Kind {
     return switch (kind) {
-        .declaration => .function,
+        .declaration => if (traits.is_member) memberKind(traits) else .function,
         .generator_declaration, .generator_expression => .generator,
         .expression => .function_expression,
         .arrow => .arrow,
         .static_block => null,
-        .method => switch (traits.accessor) {
-            .get => .getter,
-            .set => .setter,
-            .none => if (traits.is_constructor) .constructor else .method,
-        },
+        .method => memberKind(traits),
     };
 }
 
@@ -272,8 +445,12 @@ fn containerRole(profile: *const Profile, node: ts.Node) ContainerRole {
 
 fn containerPath(arena: Allocator, profile: *const Profile, tree: ts.Tree, node: ts.Node) Allocator.Error!?[]const []const u8 {
     var reversed: std.ArrayList([]const u8) = .empty;
-    var current = node.parent();
+    var current = nameOwner(profile, node).parent();
     while (current) |ancestor| : (current = ancestor.parent()) {
+        if (try labelOf(arena, profile, tree, ancestor)) |label| {
+            try reversed.append(arena, label);
+            continue;
+        }
         const name = switch (containerRole(profile, ancestor)) {
             .transparent => continue,
             .unnamed => return null,
@@ -330,8 +507,10 @@ fn declarationOf(profile: *const Profile, function: Function) Extent {
     const site = bindingSite(profile, function.node);
     const own = site orelse function.node;
     var statement: ?ts.Node = null;
-    if (own.parent()) |parent| {
-        if (isOneOf(parent.kind(), profile.declaration_statements)) statement = parent;
+    var above = own.parent();
+    while (above) |parent| : (above = parent.parent()) {
+        if (!isOneOf(parent.kind(), profile.declaration_statements)) break;
+        statement = parent;
     }
     var outer = statement orelse own;
     if (outer.parent()) |parent| {
@@ -351,6 +530,7 @@ fn declaratorCount(profile: *const Profile, statement: ts.Node) u32 {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
         if (std.mem.eql(u8, profile.declarator, child.kind())) count += 1;
+        if (isOneOf(child.kind(), profile.declaration_statements)) count += declaratorCount(profile, child);
     }
     return count;
 }
@@ -359,6 +539,7 @@ fn firstDeclaratorStart(profile: *const Profile, statement: ts.Node) u32 {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
         if (std.mem.eql(u8, profile.declarator, child.kind())) return child.startByte();
+        if (isOneOf(child.kind(), profile.declaration_statements)) return firstDeclaratorStart(profile, child);
     }
     return statement.startByte();
 }

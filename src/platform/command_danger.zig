@@ -317,6 +317,7 @@ const R = struct {
     const branch_delete = "deletes a branch even if it is not merged (git branch -D)";
     const stash = "deletes stashed changes (git stash drop/clear)";
     const rewrite = "rewrites the repository's history";
+    const commit = "commits outside the gate: no receipt and rules are not checked; emetgate_commit does both";
     const sql = "drops or truncates a database, schema, table or collection";
     const disk = "formats, partitions or overwrites a disk";
     const power = "shuts down, restarts or logs off the machine";
@@ -618,6 +619,8 @@ fn gitCommand(arena: Allocator, words: []const []const u8) Allocator.Error!?Find
         (if (args.len != 0 and (std.mem.eql(u8, args[0], "drop") or std.mem.eql(u8, args[0], "clear"))) R.stash else null)
     else if (std.mem.eql(u8, sub, "filter-branch") or std.mem.eql(u8, sub, "filter-repo"))
         R.rewrite
+    else if (std.mem.eql(u8, sub, "commit") or std.mem.eql(u8, sub, "commit-tree") or std.mem.eql(u8, sub, "update-ref"))
+        R.commit
     else
         null;
     const reason = hit orelse return null;
@@ -791,6 +794,32 @@ test "command danger: destructive commands are flagged" {
     }) |command| try expectAsk(command);
 }
 
+test "command danger: a commit outside the gate asks, and says why; merges and pulls and text about commits do not" {
+    for ([_][]const u8{
+        "git commit -m x",
+        "git -C . commit -am x",
+        "npm test && git commit -m x",
+        "sh -c \"git commit -m x\"",
+        "git commit-tree HEAD^{tree} -m x",
+        "git update-ref refs/heads/main HEAD~1",
+        "git commit -m 'drop table users from docs'",
+    }) |command| try expectAsk(command);
+    for ([_][]const u8{
+        "git log --grep=commit",
+        "echo \"git commit\"",
+        "git status",
+        "git merge side",
+        "git rebase main",
+        "git pull",
+        "git cherry-pick abc",
+    }) |command| try expectPlain(command);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const found = (try classify(arena.allocator(), "git add -A && git commit -m weaken")).?;
+    try testing.expectEqualStrings(R.commit, found.reason);
+    try testing.expectEqualStrings("git commit -m weaken", found.fragment);
+}
+
 test "command danger: everyday commands are not flagged" {
     for ([_][]const u8{
         "ls -la",
@@ -802,7 +831,6 @@ test "command danger: everyday commands are not flagged" {
         "rg 'git push --force' docs",
         "echo 'rm -rf is dangerous'",
         "echo \"git reset --hard\"",
-        "git commit -m 'drop table users from docs'",
         "git log --grep='reset --hard'",
         "rm file.txt",
         "rm -- -rf",

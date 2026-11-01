@@ -1,4 +1,5 @@
 const std = @import("std");
+const ref_mod = @import("ref.zig");
 const facts = @import("facts.zig");
 const facts_store = @import("facts_store.zig");
 const answer = @import("answer.zig");
@@ -128,9 +129,7 @@ pub fn bindable(reason: facts.Reason) bool {
 }
 
 pub fn simpleName(subject: []const u8) []const u8 {
-    const plain = subject[0 .. std.mem.indexOfScalar(u8, subject, '@') orelse subject.len];
-    const dot = std.mem.lastIndexOfScalar(u8, plain, '.') orelse return plain;
-    return plain[dot + 1 ..];
+    return ref_mod.simpleName(subject);
 }
 
 fn ownerOf(store: *const Store, file: FileId, def_index: u32) Owner {

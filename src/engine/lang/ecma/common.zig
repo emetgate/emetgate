@@ -47,6 +47,7 @@ pub const dynamic_constructors = [_]DynamicConstructor{.{ .node = "new_expressio
 pub const strings = [_][]const u8{"string"};
 pub const prose_strings = [_][]const u8{ "string", "template_string" };
 pub const directives = [_][]const u8{ "\"use strict\"", "'use strict'" };
+pub const import_forms: profile_mod.ImportForms = .{ .calls = &.{ "require", "import" } };
 pub const literal_values: LiteralValues = .{
     .pair = "pair",
     .key_field = "key",

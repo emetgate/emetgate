@@ -12,13 +12,14 @@ const sandbox = @import("../platform/sandbox.zig");
 const output_digest = @import("output_digest.zig");
 const receipt_note = @import("receipt_note.zig");
 const run_trim = @import("run_trim.zig");
+const frozen_hold = @import("../platform/frozen_hold.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 
-pub const description = "Runs any shell command in the repo root (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes or drop data ask the user first.";
+pub const description = "Runs any shell command in the repo root (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
 
 pub const command_desc = "the shell command, as you would type it";
 pub const raw_desc = "return the output uncut, up to 64 KiB";
@@ -29,6 +30,11 @@ pub const test_timeout_s: u64 = 600;
 pub const max_timeout_s: u64 = 600;
 pub const max_output_bytes = 16 * 1024 * 1024;
 pub const timeout_fix = "the command ran past its time; pass timeout_s (at most 600), or run it in parts";
+
+pub const frozen_fix = "fix the code instead; a frozen path is changed by hand by the user";
+pub const frozen_failed_fix = "a frozen path could not be put back; frozen_failed names each one and why: restore it by hand before going on";
+pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; emetgate_commit still checks them";
+pub const hold_fix = "the command did not run: emetgate could not keep a copy of the frozen paths; emetgate doctor says why";
 
 pub const Request = struct {
     command: []const u8,
@@ -82,7 +88,7 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     const shell = try open_shell.find(gpa, root_abs);
     defer shell.deinit(gpa);
     const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version) catch |err| switch (err) {
-        error.SandboxUnavailable, error.SandboxBusy => {
+        error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);
             return true;
@@ -90,6 +96,7 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
         else => |e| return e,
     };
     defer ran.report.deinit(gpa);
+    defer ran.frozen.deinit(gpa);
     switch (ran.report.outcome) {
         .exited => |code| event.exit_code = code,
         else => event.fail(@tagName(ran.report.outcome)),
@@ -100,7 +107,7 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
-    try js.write("ran");
+    try js.write(if (ran.frozen.held()) "ran" else "frozen_not_restored");
     try js.objectField("command");
     try js.write(request.command);
     try js.objectField("shell");
@@ -111,9 +118,8 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     if (ran.report.outcome == .timed_out) {
         try js.objectField("timeout_s");
         try js.write(timeout_s);
-        try js.objectField("fix");
-        try js.write(timeout_fix);
     }
+    try writeFrozen(gpa, &js, ran.frozen, if (ran.report.outcome == .timed_out) timeout_fix else null);
     if (ran.report.no_tests) {
         try js.objectField("note");
         try js.write(test_outcome.no_tests_note);
@@ -151,7 +157,41 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     try js.write(body.text);
     try js.endObject();
     try w.writeByte('\n');
-    return false;
+    if (!ran.frozen.held()) event.fail("FrozenNotRestored");
+    return !ran.frozen.held();
+}
+
+pub fn writeFrozen(gpa: Allocator, js: *std.json.Stringify, frozen: frozen_hold.Report, other_fix: ?[]const u8) !void {
+    if (frozen.restored.len != 0) {
+        try js.objectField("frozen_restored");
+        try js.write(frozen.restored);
+    }
+    if (frozen.committed.len != 0) {
+        try js.objectField("frozen_committed");
+        try js.write(frozen.committed);
+    }
+    if (frozen.in_merge.len != 0) {
+        try js.objectField("frozen_in_merge");
+        try js.write(frozen.in_merge);
+    }
+    if (!frozen.held()) {
+        try js.objectField("frozen_failed");
+        try js.beginArray();
+        for (frozen.failed) |item| try js.write(item);
+        if (frozen.failure) |err| try js.write(frozen_hold.Failed{ .path = "(all)", .reason = @errorName(err) });
+        try js.endArray();
+    }
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(gpa);
+    if (other_fix) |text| try parts.append(gpa, text);
+    if (!frozen.held()) try parts.append(gpa, frozen_failed_fix);
+    if (frozen.restored.len != 0 or frozen.committed.len != 0) try parts.append(gpa, frozen_fix);
+    if (frozen.in_merge.len != 0) try parts.append(gpa, frozen_merge_fix);
+    if (parts.items.len == 0) return;
+    const fix = try std.mem.join(gpa, "; ", parts.items);
+    defer gpa.free(fix);
+    try js.objectField("fix");
+    try js.write(fix);
 }
 
 fn writeOutcome(js: *std.json.Stringify, report: sandbox.Report) !void {
@@ -190,7 +230,11 @@ fn writeNotRun(w: *Writer, command: []const u8, kind: open_shell.Kind, err: anye
     try js.objectField("shell");
     try js.write(kind.label());
     try js.objectField("fix");
-    try js.write(if (err == error.SandboxBusy) "another command or test run is still running; call again when it ends" else "emetgate could not start the shell; emetgate doctor says why");
+    try js.write(switch (err) {
+        error.SandboxBusy => "another command or test run is still running; call again when it ends",
+        error.FrozenHoldFailed => hold_fix,
+        else => "emetgate could not start the shell; emetgate doctor says why",
+    });
     try js.endObject();
     try w.writeByte('\n');
 }
