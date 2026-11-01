@@ -11,6 +11,7 @@ const MultiReader = std.Io.File.MultiReader;
 pub const host_script = @embedFile("tsserver_host.js");
 
 pub const default_timeout_ms: u64 = 30_000;
+pub const default_start_timeout_ms: u64 = 120_000;
 const max_response_bytes = 64 * 1024 * 1024;
 const max_listing_bytes = 64 * 1024 * 1024;
 
@@ -55,6 +56,7 @@ pub const Parsed = std.json.Parsed(Answer);
 
 pub const Options = struct {
     timeout_ms: u64 = default_timeout_ms,
+    start_timeout_ms: u64 = default_start_timeout_ms,
     node: []const u8 = "node",
 };
 
@@ -115,7 +117,7 @@ pub const Client = struct {
         };
         self.starts += 1;
         self.reader.init(self.gpa, self.io, self.streams.toStreams(), &.{self.service.?.stdout});
-        const pong = try self.exchange("{\"op\":\"ping\"", "}");
+        const pong = try self.exchangeWithin("{\"op\":\"ping\"", "}", self.options.start_timeout_ms);
         defer pong.deinit();
         self.version = try self.gpa.dupe(u8, pong.value.version);
     }
@@ -178,13 +180,17 @@ pub const Client = struct {
     }
 
     fn exchange(self: *Client, head: []const u8, tail: []const u8) !Parsed {
+        return self.exchangeWithin(head, tail, self.options.timeout_ms);
+    }
+
+    fn exchangeWithin(self: *Client, head: []const u8, tail: []const u8, timeout_ms: u64) !Parsed {
         const id = self.next_id;
         self.next_id += 1;
         const line = try std.fmt.allocPrint(self.gpa, "{s},\"id\":{d}{s}\n", .{ head, id, tail });
         defer self.gpa.free(line);
         errdefer |err| if (err != error.LanguageServiceFailed) self.stop();
         self.service.?.stdin.writeStreamingAll(self.io, line) catch return error.LanguageServiceExited;
-        const response = try self.readLine();
+        const response = try self.readLine(timeout_ms);
         defer self.gpa.free(response);
         const parsed = std.json.parseFromSlice(Answer, self.gpa, response, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch return error.LanguageServiceProtocol;
         errdefer parsed.deinit();
@@ -193,9 +199,9 @@ pub const Client = struct {
         return parsed;
     }
 
-    fn readLine(self: *Client) ![]u8 {
+    fn readLine(self: *Client, timeout_ms: u64) ![]u8 {
         const timeout: std.Io.Timeout = .{ .duration = .{
-            .raw = .{ .nanoseconds = @as(i96, self.options.timeout_ms) * std.time.ns_per_ms },
+            .raw = .{ .nanoseconds = @as(i96, timeout_ms) * std.time.ns_per_ms },
             .clock = .awake,
         } };
         const deadline = timeout.toDeadline(self.io).deadline;
