@@ -91,6 +91,14 @@ fn cutOf(base: *const Snapshot, declaration: ts.Node) Span {
     return .{ .start = start, .end = end };
 }
 
+fn usingsAdded(edits: []const PyEdit) usize {
+    var count: usize = 0;
+    for (edits) |edit| {
+        if (edit.start == edit.end and std.mem.startsWith(u8, std.mem.trimStart(u8, edit.text, " \t\r\n"), "using ")) count += 1;
+    }
+    return count;
+}
+
 fn tidiedCut(source: []const u8, cut: Span) Span {
     const blank = " \t\r\n";
     const kept = std.mem.trimEnd(u8, source[0..cut.start], blank);
@@ -286,7 +294,8 @@ fn cxOf(w: mb.Work) cs.Cx {
 pub fn plan(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snapshot, opened: *std.ArrayList(*Snapshot)) !mb.Plan {
     const arena = w.arena;
     if (!paths.isCsharpPath(request.target_abs)) return error.UnsupportedLanguage;
-    const ref = try symbol.Ref.parse(arena, request.ref_text);
+    const given = try symbol.Ref.parse(arena, request.ref_text);
+    const ref = try (try source.symbols()).canonical(given);
     const located = try locate(arena, source, ref, request.expected_hash);
     if (oneOf(located.declaration.kind(), &type_kinds)) return planType(w, request, source, target, located, opened);
     return planMember(w, request, source, target, located, opened);
@@ -344,7 +353,7 @@ fn planType(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snapsh
     if (changes) try cs.refuseStrings(cx, units, old, names, error.DynamicReference);
 
     const cut = cutOf(source, declaration);
-    const moved_text = source.source[cut.start..cut.end];
+    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];
     const r: cs.Retarget = .{ .old = old, .new = new, .names = names };
     const needed = try movedNeeds(arena, &index, source_unit, cut, target_unit, new, old, name);
 
@@ -357,14 +366,17 @@ fn planType(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snapsh
     try outputs.append(arena, undefined);
     var user_edits: std.ArrayList([]const TextEdit) = .empty;
     var users: usize = 0;
+    var imports_added: usize = needed.len;
     if (changes) {
         try cs.rewriteUser(arena, &index, source_unit, r, cut, &source_edits);
         if (target_unit) |t| try cs.rewriteUser(arena, &index, t, r, null, &target_edits);
+        imports_added += usingsAdded(source_edits.items) + usingsAdded(target_edits.items);
         for (units) |unit| {
             if (tsserver.sameFile(unit.abs, request.file_abs) or tsserver.sameFile(unit.abs, request.target_abs)) continue;
             var edits: std.ArrayList(PyEdit) = .empty;
             try cs.rewriteUser(arena, &index, unit, r, null, &edits);
             if (edits.items.len == 0) continue;
+            imports_added += usingsAdded(edits.items);
             const moved_edits = try toMoveEdits(arena, edits.items);
             const text = try mb.applyEdits(arena, unit.snapshot.source, moved_edits);
             try outputs.append(arena, .{ .abs = unit.abs, .before = unit.snapshot, .text = text, .holes = try mb.holesOf(arena, moved_edits) });
@@ -467,7 +479,7 @@ fn planType(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snapsh
         .order_change = false,
         .creates_target = target == null,
         .users = users,
-        .imports_added = needed.len,
+        .imports_added = imports_added,
         .moved_hash = moved_hash,
     }, opened);
     afters.clearRetainingCapacity();
@@ -792,7 +804,7 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
     if (containsName(target_members, member)) return error.TargetNameTaken;
 
     const cut = cutOf(source, declaration);
-    const moved_text = source.source[cut.start..cut.end];
+    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];
     for (try cs.mentions(arena, source_unit, null)) |mention| {
         if (mention.node.startByte() < cut.start or mention.node.endByte() > cut.end) continue;
         if (std.mem.eql(u8, mention.name, member)) continue;
@@ -816,6 +828,7 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
     var user_edits: std.ArrayList([]const TextEdit) = .empty;
     var users: usize = 0;
     var references: usize = 0;
+    var usings_added: usize = 0;
     const using_line = try std.fmt.allocPrint(arena, "using {s};", .{target_owner.namespace});
     for (units) |unit| {
         try refusals(arena, &index, unit, full_owner, owner.name, member, owner.namespace);
@@ -823,7 +836,10 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
         const is_target = tsserver.sameFile(unit.abs, request.target_abs);
         var refs = try memberRefs(arena, &index, unit, owner, target_owner, member, if (is_source) cut else null, if (is_source) name_span else null, if (is_source) owner_node else null);
         references += refs.edits.items.len;
-        if (refs.need_using) try cs.insertUsing(arena, unit, using_line, &refs.edits);
+        if (refs.need_using) {
+            try cs.insertUsing(arena, unit, using_line, &refs.edits);
+            usings_added += 1;
+        }
         if (is_source) {
             try source_edits.appendSlice(arena, refs.edits.items);
             continue;
@@ -928,7 +944,7 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
         .order_change = order_change,
         .creates_target = false,
         .users = users,
-        .imports_added = needed.len,
+        .imports_added = needed.len + usings_added,
         .moved_hash = moved_hash,
     }, opened);
     afters.clearRetainingCapacity();

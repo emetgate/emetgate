@@ -14158,6 +14158,42 @@
       ]
     },
     {
+      "id": "CSM1-short-type-ref-refused",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const ref = try (try source.symbols()).canonical(given);",
+      "to": "    const ref = given;",
+      "kills": [
+        "csharp move: a short type name the read tools accept moves too"
+      ]
+    },
+    {
+      "id": "CSM2-user-using-not-counted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            imports_added += usingsAdded(edits.items);",
+      "to": "            imports_added += 0;",
+      "kills": [
+        "csharp move: a short type name the read tools accept moves too"
+      ]
+    },
+    {
+      "id": "CSM3-type-brings-blank-line",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];\n    const r: cs.Retarget",
+      "to": "    const moved_text = source.source[cut.start..cut.end];\n    const r: cs.Retarget",
+      "kills": [
+        "csharp move: a type or member taken from the middle of a block brings no blank line along"
+      ]
+    },
+    {
+      "id": "CSM4-member-brings-blank-line",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];\n    for (try cs.mentions",
+      "to": "    const moved_text = source.source[cut.start..cut.end];\n    for (try cs.mentions",
+      "kills": [
+        "csharp move: a type or member taken from the middle of a block brings no blank line along"
+      ]
+    },
+    {
       "id": "DR7-doctor-does-not-detect",
       "file": "src/platform/doctor.zig",
       "from": "    const given = if (server.names_test) server.given else test_command.detect;",

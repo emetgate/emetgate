@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2702**
-- Mutations declared in `tests/mutations.json`: **1790**
-  - killed: **1741**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2704**
+- Mutations declared in `tests/mutations.json`: **1794**
+  - killed: **1745**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1130 mutation(s).
+1134 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1618,6 +1618,10 @@ python tools/verification_page.py --check
 | `DR3-doctor-signed-out-passes` | `src/platform/doctor.zig` | `if (signed_in) return .{ .name = "login", .status = .ok, .detai...` -> `if (signed_in or true) return .{ .name = "login", .status = .ok...` | doctor: a signed-out claude blocks lockdown with claude auth login, an unreadab... | killed |
 | `DR4-doctor-repo-config-flag-ignored` | `src/platform/doctor.zig` | `if (std.mem.eql(u8, arg.string, "--allow-repo-config")) found.a...` -> `` | doctor: the test command lockdown will use comes from the emetgate server's --t... | killed |
 | `DR5-doctor-no-test-command-only-warns` | `src/platform/doctor.zig` | `error.NoTestCommand => .{ .name = "tests", .status = .fail,` -> `error.NoTestCommand => .{ .name = "tests", .status = .warn,` | doctor: no test command blocks lockdown, and the fix names --test; doctor: an empty --tes... | killed |
+| `CSM1-short-type-ref-refused` | `src/platform/cs_symbol_move.zig` | `const ref = try (try source.symbols()).canonical(given);` -> `const ref = given;` | csharp move: a short type name the read tools accept moves too | killed |
+| `CSM2-user-using-not-counted` | `src/platform/cs_symbol_move.zig` | `imports_added += usingsAdded(edits.items);` -> `imports_added += 0;` | csharp move: a short type name the read tools accept moves too | killed |
+| `CSM3-type-brings-blank-line` | `src/platform/cs_symbol_move.zig` | `const moved_text = source.source[cut.start..mb.lineEndAfter(sou...` -> `const moved_text = source.source[cut.start..cut.end];     const...` | csharp move: a type or member taken from the middle of a block brings no blank ... | killed |
+| `CSM4-member-brings-blank-line` | `src/platform/cs_symbol_move.zig` | `const moved_text = source.source[cut.start..mb.lineEndAfter(sou...` -> `const moved_text = source.source[cut.start..cut.end];     for (...` | csharp move: a type or member taken from the middle of a block brings no blank ... | killed |
 | `DR7-doctor-does-not-detect` | `src/platform/doctor.zig` | `const given = if (server.names_test) server.given else test_com...` -> `const given = server.given;` | doctor: with no --test it reports the command lockdown will detect, with or wit... | killed |
 | `DR8-doctor-empty-test-detects` | `src/platform/doctor.zig` | `found.names_test = true;` -> `found.names_test = false;` | doctor: an empty --test is not detected, because lockdown adds no detection bes...; docto... | killed |
 | `DR9-doctor-no-tests-passes-silently` | `src/platform/doctor.zig` | `if (test_command.takeUnverified()) return noTestsFound();` -> `_ = test_command.takeUnverified();` | doctor: a repository with no tests to find warns that writes land unverified an... | killed |

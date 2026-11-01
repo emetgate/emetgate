@@ -156,7 +156,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     if (base.tree.root().hasError()) return error.SourceHasErrors;
     const given = try symbol.Ref.parse(gpa, request.ref_text);
     defer given.deinit(gpa);
-    const ref = try canonicalRef(base, given);
+    const ref = try (try base.symbols()).canonical(given);
     const target = try targetOf(gpa, base, ref, request.expected_hash);
     const old = ref.name;
     if (!renamableMember(old, base) or !rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
@@ -301,16 +301,6 @@ const Target = struct {
     function: bool,
     kind: ?symbol.DeclarationKind = null,
 };
-
-fn canonicalRef(base: *Snapshot, given: symbol.Ref) !symbol.Ref {
-    const table = try base.symbols();
-    if (!table.short_refs) return given;
-    const found = table.item(given) catch |err| switch (err) {
-        error.SymbolNotFound => return given,
-        error.AmbiguousSymbol => return err,
-    };
-    return found.ref;
-}
 
 fn renamableMember(name: []const u8, base: *Snapshot) bool {
     if (base.profile.memberLabel == null) return true;
