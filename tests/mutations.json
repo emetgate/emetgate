@@ -17052,6 +17052,123 @@
       "kills": [
         "a pipe reader waits for a writer that sends its bytes late instead of reading an empty pipe as the end"
       ]
+    },
+    {
+      "id": "CE1-epoch-move-keeps-the-mirror",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (context.stale()) m.reset();\n",
+      "to": "            _ = context.stale();\n",
+      "kills": [
+        "context epoch: a compaction makes the next read send the content, and a repeat after it is unchanged again"
+      ]
+    },
+    {
+      "id": "CE2-no-epoch-trusts-the-mirror",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "        const file = self.path orelse return true;\n",
+      "to": "        const file = self.path orelse return false;\n",
+      "kills": [
+        "context epoch: a watch with no path never lets a read answer unchanged"
+      ]
+    },
+    {
+      "id": "CE3-unreadable-epoch-trusts-the-mirror",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "max_epoch_bytes) catch return true;\n",
+      "to": "max_epoch_bytes) catch return false;\n",
+      "kills": [
+        "context epoch: with no epoch file the server sends the content every time"
+      ]
+    },
+    {
+      "id": "CE4-moved-epoch-is-not-stale",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "        if (seen == now) return !self.armed;\n",
+      "to": "        if (seen != now) return !self.armed;\n",
+      "kills": [
+        "context epoch: a compaction makes the next read send the content, and a repeat after it is unchanged again"
+      ]
+    },
+    {
+      "id": "CE5-a-move-does-not-arm",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "        self.armed = true;\n",
+      "to": "",
+      "kills": [
+        "context epoch: a file another session left behind does not arm the mirror until the epoch moves"
+      ]
+    },
+    {
+      "id": "CE6-left-behind-file-arms",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "            self.armed = self.ownSession(bytes);\n",
+      "to": "            self.armed = true;\n",
+      "kills": [
+        "context epoch: a file another session left behind does not arm the mirror until the epoch moves"
+      ]
+    },
+    {
+      "id": "CE7-bad-stdin-is-not-recorded",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "    const parsed = json_input.parseLeaky(std.json.Value, arena, input, .{}) catch return \"\";\n",
+      "to": "    const parsed = json_input.parseLeaky(std.json.Value, arena, input, .{}) catch @panic(\"bad hook input\");\n",
+      "kills": [
+        "context epoch: the session hook with empty or unreadable stdin still moves the epoch"
+      ]
+    },
+    {
+      "id": "CE8-hook-records-nothing",
+      "file": "src/protocol/context_epoch.zig",
+      "from": "    try record(gpa, io, file, input);\n",
+      "to": "    _ = io;\n    _ = input;\n",
+      "kills": [
+        "context epoch: the hook writes the file the environment names and writes nothing when it names none"
+      ]
+    },
+    {
+      "id": "CE9-settings-omit-the-session-hook",
+      "file": "src/platform/lockdown_slash.zig",
+      "from": "exe_abs, &session_args);\n",
+      "to": "exe_abs, &pretool_args);\n",
+      "kills": [
+        "lockdown slash: the hooks are commands in exec form that name this executable"
+      ]
+    },
+    {
+      "id": "CE10-launch-keeps-the-parent-context",
+      "file": "src/platform/lockdown.zig",
+      "from": "    try env.put(lockdown_slash.context_variable, context);\n",
+      "to": "",
+      "kills": [
+        "lockdown gives each claude launch its own context file under the state folder and removes it after"
+      ]
+    },
+    {
+      "id": "CE11-launch-leaves-its-context-file",
+      "file": "src/platform/lockdown.zig",
+      "from": "    defer std.Io.Dir.cwd().deleteFile(io, context) catch {};\n",
+      "to": "",
+      "kills": [
+        "lockdown gives each claude launch its own context file under the state folder and removes it after"
+      ]
+    },
+    {
+      "id": "CE12-served-policy-never-watches",
+      "file": "src/protocol/server.zig",
+      "from": "self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;\n",
+      "to": "self.policy.context = null;\n",
+      "kills": [
+        "context epoch: a served policy watches the epoch unless --mirror trusts it or no environment was given"
+      ]
+    },
+    {
+      "id": "CE13-mirror-flag-is-not-trust",
+      "file": "src/protocol/policy.zig",
+      "from": "            policy.mirror_trusted = policy.mirror_enabled;\n",
+      "to": "",
+      "kills": [
+        "context epoch: --mirror trusts the mirror without an epoch, the default and --no-mirror do not"
+      ]
     }
   ]
 }

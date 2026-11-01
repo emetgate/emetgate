@@ -27,7 +27,7 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
 
     try testing.expectEqual(@as(usize, 1), parsed.value.object.count());
     const events = parsed.value.object.get("hooks").?.object;
-    try testing.expectEqual(@as(usize, 2), events.count());
+    try testing.expectEqual(@as(usize, 3), events.count());
     const prompt_groups = events.get("UserPromptSubmit").?.array.items;
     try testing.expectEqual(@as(usize, 1), prompt_groups.len);
     try testing.expectEqual(@as(usize, 1), prompt_groups[0].object.count());
@@ -38,6 +38,11 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
     try testing.expectEqual(@as(usize, 2), tool_groups[0].object.count());
     try testing.expectEqualStrings("^mcp__.+__emetgate_run$", tool_groups[0].object.get("matcher").?.string);
     try expectHandler(tool_groups[0], "pretool");
+
+    const session_groups = events.get("SessionStart").?.array.items;
+    try testing.expectEqual(@as(usize, 1), session_groups.len);
+    try testing.expectEqual(@as(usize, 1), session_groups[0].object.count());
+    try expectHandler(session_groups[0], "session");
 }
 
 fn fileAt(dir: std.Io.Dir, sub_path: []const u8) ![]u8 {

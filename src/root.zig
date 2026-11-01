@@ -179,6 +179,7 @@ pub const open_run = @import("protocol/open_run.zig");
 pub const read_tools = @import("protocol/read_tools.zig");
 pub const read_budget = @import("protocol/read_budget.zig");
 pub const mirror = @import("protocol/mirror.zig");
+pub const context_epoch = @import("protocol/context_epoch.zig");
 pub const outline = @import("protocol/outline.zig");
 pub const read_cache = @import("protocol/read_cache.zig");
 pub const raw_reply = @import("protocol/raw_reply.zig");

@@ -534,6 +534,10 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     argv[0] = resolved;
     var env = try childEnviron(gpa, parent_env);
     defer env.deinit();
+    const context = try lockdown_slash.launchContext(gpa, io, slash.dir);
+    defer gpa.free(context);
+    defer std.Io.Dir.cwd().deleteFile(io, context) catch {};
+    try env.put(lockdown_slash.context_variable, context);
     if (init_repo) {
         try initRepo(gpa, io, dir_abs, parent_env);
         std.Io.File.stderr().writeStreamingAll(io, git_init_notice) catch {};

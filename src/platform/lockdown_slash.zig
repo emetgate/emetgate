@@ -8,6 +8,11 @@ pub const hook_args = [_][]const u8{ "hook", "prompt" };
 pub const hook_event = "UserPromptSubmit";
 pub const pretool_args = [_][]const u8{ "hook", "pretool" };
 pub const pretool_event = "PreToolUse";
+pub const session_args = [_][]const u8{ "hook", "session" };
+pub const session_event = "SessionStart";
+pub const context_variable = "EMETGATE_CONTEXT";
+pub const context_dir = "context";
+pub const context_extension = ".epoch";
 pub const run_tool = "emetgate_run";
 pub const pretool_matcher = "^mcp__.+__" ++ run_tool ++ "$";
 pub const local_app_data_variable = "LOCALAPPDATA";
@@ -35,6 +40,12 @@ pub fn stateDir(gpa: Allocator, local_app_data: []const u8, exe_abs: []const u8)
     return std.fmt.allocPrint(gpa, "{s}\\emetgate\\lockdown\\{s}", .{ local_app_data, &key });
 }
 
+pub fn launchContext(gpa: Allocator, io: std.Io, state_dir: []const u8) ![]u8 {
+    var nonce: [16]u8 = undefined;
+    io.random(&nonce);
+    return std.fmt.allocPrint(gpa, "{s}\\{s}\\{x}{s}", .{ state_dir, context_dir, &nonce, context_extension });
+}
+
 pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
@@ -46,6 +57,8 @@ pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     try writeHook(&js, null, exe_abs, &hook_args);
     try js.objectField(pretool_event);
     try writeHook(&js, pretool_matcher, exe_abs, &pretool_args);
+    try js.objectField(session_event);
+    try writeHook(&js, null, exe_abs, &session_args);
     try js.endObject();
     try js.endObject();
     return out.toOwnedSlice();
