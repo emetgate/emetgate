@@ -187,6 +187,49 @@ pub const TestBlock = struct {
     parent: u32,
 };
 
+pub const MapKind = enum(u8) { route, command, event };
+
+pub const MapEntry = struct {
+    kind: MapKind,
+    tag: []const u8,
+    text: []const u8 = "",
+    def: u32 = none,
+    group: u32 = none,
+    receiver: []const u8 = "",
+    handler: []const u8 = "",
+    handler_start: u32 = 0,
+    handler_end: u32 = 0,
+    line: u32,
+    absolute: bool = false,
+    file_named: bool = false,
+    stated: bool = false,
+};
+
+pub const MapGroup = struct {
+    name: []const u8,
+    prefix: []const u8 = "",
+    base: []const u8 = "",
+    area: []const u8 = "",
+    class_like: bool = false,
+    top: bool = true,
+};
+
+pub const MapMount = struct {
+    parent: []const u8 = "",
+    parent_group: u32 = none,
+    child: []const u8,
+    prefix: []const u8 = "",
+    module: bool = false,
+    overrides: bool = false,
+};
+
+pub const MapFacts = struct {
+    test_content: bool = false,
+    entries: []const MapEntry = &.{},
+    groups: []const MapGroup = &.{},
+    mounts: []const MapMount = &.{},
+};
+
 pub const FileFacts = struct {
     defs: []const Def,
     refs: []const Ref,
@@ -202,6 +245,7 @@ pub const FileFacts = struct {
     parse_errors: bool,
     outline: []const Outline = &.{},
     tests: []const TestBlock = &.{},
+    map: MapFacts = .{},
 };
 
 const Copier = struct {
@@ -268,6 +312,29 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         slot.* = t;
         slot.title = try c.str(t.title);
     }
+    const map_entries = try arena.alloc(MapEntry, from.map.entries.len);
+    for (from.map.entries, map_entries) |m, *slot| {
+        slot.* = m;
+        slot.tag = try c.str(m.tag);
+        slot.text = try c.str(m.text);
+        slot.receiver = try c.str(m.receiver);
+        slot.handler = try c.str(m.handler);
+    }
+    const map_groups = try arena.alloc(MapGroup, from.map.groups.len);
+    for (from.map.groups, map_groups) |m, *slot| {
+        slot.* = m;
+        slot.name = try c.str(m.name);
+        slot.prefix = try c.str(m.prefix);
+        slot.base = try c.str(m.base);
+        slot.area = try c.str(m.area);
+    }
+    const map_mounts = try arena.alloc(MapMount, from.map.mounts.len);
+    for (from.map.mounts, map_mounts) |m, *slot| {
+        slot.* = m;
+        slot.parent = try c.str(m.parent);
+        slot.child = try c.str(m.child);
+        slot.prefix = try c.str(m.prefix);
+    }
     c.strings.deinit(arena);
     return .{
         .defs = defs,
@@ -284,6 +351,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         .parse_errors = from.parse_errors,
         .outline = try arena.dupe(Outline, from.outline),
         .tests = tests,
+        .map = .{ .test_content = from.map.test_content, .entries = map_entries, .groups = map_groups, .mounts = map_mounts },
     };
 }
 

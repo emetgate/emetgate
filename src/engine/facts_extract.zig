@@ -1003,5 +1003,8 @@ pub fn extract(arena: Allocator, snapshot: *const Snapshot) Error!facts.FileFact
     const lines: facts_spine.Lines = .{ .starts = self.line_starts, .bytes = snapshot.source };
     found.outline = try facts_outline.collect(arena, profile, snapshot.tree, lines, found.defs);
     found.tests = try facts_tests.collect(arena, profile, snapshot.tree, lines);
+    if (profile.map) |table| {
+        if (table.extract) |collect| found.map = try collect(arena, snapshot.tree, found.defs);
+    }
     return found;
 }

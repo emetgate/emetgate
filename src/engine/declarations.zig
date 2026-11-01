@@ -92,7 +92,7 @@ const Collector = struct {
     fn statement(self: *Collector, node: ts.Node, scope: []const []const u8) !void {
         const shapes = self.profile.declarations;
         if (shapeOf(shapes.types, node.kind())) |shape| return self.typeDeclaration(node, shape, scope);
-        if (oneOf(node.kind(), shapes.variable_statements)) return self.variables(node);
+        if (scope.len == 0 and oneOf(node.kind(), shapes.variable_statements)) return self.variables(node);
     }
 
     fn within(self: *Collector, node: ts.Node, scope: []const []const u8) ![]const []const u8 {

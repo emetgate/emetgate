@@ -611,7 +611,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 | Tool | Purpose |
 |---|---|
-| `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used |
+| `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used. Test code is left out in every language: a TS, JS, Python or C# file is test code by its folder and file name, a Python file also when it imports `pytest`, `nose` or `hypothesis`, declares a `TestCase` subclass or calls `unittest.main`, and a C# file also when it carries xUnit, NUnit or MSTest attributes or imports. So a test named in the question is reported as not a symbol |
 | `emetgate_evidence` | The full code of up to 6 names. A name defined in several files returns every definition; `file.name` picks the definition in that file; an accessor is found by its bare name. A name that is not a symbol is reported with the closest symbols, and names past the limit are listed |
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, plus every adopted rule that covers the file (read-only) |
@@ -1500,7 +1500,7 @@ A member call binds through `this`, a class used statically, a namespace import,
 type, a constructor parameter property or a constant made with `new`. The last three are
 labelled `typed`, the others `proven`. Everything else stays `unresolved` with its reason.
 
-The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v4`: versioned, with a
+The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v7`: versioned, with a
 BLAKE3 checksum, written to a temporary file and moved into place. A refresh lists the
 tracked files, compares directory stamps, re-reads only changed files (a file stamped within
 2 s of the store's write time is always re-hashed), extracts a file again only when its

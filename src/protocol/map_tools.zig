@@ -167,7 +167,7 @@ pub const Session = struct {
             }
         }
         for (repo.store.files.items, 0..) |state, id| {
-            if (state.status != .indexed or isTest(state.path)) continue;
+            if (state.status != .indexed or map.isTestFile(&state, null)) continue;
             const path = try arena.dupe(u8, state.path);
             for (state.facts.defs, 0..) |d, di| {
                 if (!rank.candidate(d)) continue;
@@ -193,7 +193,7 @@ pub const Session = struct {
         for (store.files.items, 0..) |*state, id| {
             if (state.status != .indexed) continue;
             try self.term_files.append(arena, .{ .file = @intCast(id), .hash = state.content_hash });
-            if (isTest(state.path)) continue;
+            if (map.isTestFile(state, null)) continue;
             const abs = try std.fs.path.join(self.gpa, &.{ self.root, state.path });
             defer self.gpa.free(abs);
             const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, abs, self.gpa, .limited(max_term_file)) catch continue;
@@ -291,6 +291,12 @@ pub const Session = struct {
         return out.items;
     }
 
+    fn isTestPick(self: *const Session, path: []const u8) bool {
+        const store = &self.repo.?.store;
+        const id = store.fileId(path) orelse return isTest(path);
+        return map.isTestFile(&store.files.items[id], null);
+    }
+
     fn named(self: *Session, arena: Allocator, raw: []const u8) ![]const Fn {
         const open = std.mem.indexOfScalar(u8, raw, '(') orelse raw.len;
         const text = std.mem.trim(u8, raw[0..open], " \t");
@@ -378,7 +384,7 @@ pub const Session = struct {
         for (names) |n| {
             var any = false;
             for (try self.named(arena, n)) |f| {
-                if (isTest(f.path)) continue;
+                if (self.isTestPick(f.path)) continue;
                 any = true;
                 if (self.container(f)) {
                     try containers.writer.print("{s}:{d} {s}\n", .{ f.path, self.defLine(f), f.qname });
@@ -392,7 +398,7 @@ pub const Session = struct {
         const graph_asked = asksGraph(question);
         for (try questionIdentifiers(arena, question)) |ident| {
             for (try self.named(arena, ident)) |f| {
-                if (isTest(f.path) or self.container(f)) continue;
+                if (self.isTestPick(f.path) or self.container(f)) continue;
                 try addPicked(arena, &picks, &at, f, 1, true);
                 if (graph_asked) try graphed.append(arena, f);
             }
