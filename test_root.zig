@@ -180,6 +180,7 @@ pub const rules_command = src.rules_command;
 pub const console_raw = src.console_raw;
 pub const doc_fold = src.doc_fold;
 pub const output_digest = src.output_digest;
+pub const failure_text = src.failure_text;
 pub const diff_digest = src.diff_digest;
 pub const baseline = src.baseline;
 pub const test_results = src.test_results;

@@ -6,6 +6,7 @@ const node_cas = @import("../engine/node_cas.zig");
 const sandbox = @import("../platform/sandbox.zig");
 const test_outcome = @import("../platform/test_outcome.zig");
 const output_digest = @import("output_digest.zig");
+const failure_text = @import("failure_text.zig");
 const diagnostics = @import("diagnostics.zig");
 const rules = @import("../platform/rules.zig");
 const scan = @import("../platform/scan.zig");
@@ -660,9 +661,14 @@ fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
         try js.objectField("baseline");
         try js.write(n.baseline.text());
     }
-    if (n.tests.len == 0) return;
-    try js.objectField("tests");
-    try js.write(n.tests.text());
+    if (n.tests.len != 0) {
+        try js.objectField("tests");
+        try js.write(n.tests.text());
+    }
+    if (n.baseline.failures().len != 0) {
+        try js.objectField("failures");
+        try js.write(n.baseline.failures());
+    }
 }
 
 pub const shadow_path_warning = "the shadow root has a path segment starting with a dot; tools that refuse dot directories (the send package behind express res.sendFile is one) fail there; start emetgate with --shadow-root <dir> on a path without one";
@@ -1505,13 +1511,23 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
         try js.objectField("diagnostics_dropped");
         try js.write(from_out.len + from_err.len - shown);
     }
-    const digested = try output_digest.digest(gpa, report.stdout, report.stderr);
-    defer gpa.free(digested.text);
-    try js.objectField("output");
-    try js.write(digested.text);
-    if (digested.dropped_lines != 0) {
-        try js.objectField("output_dropped_lines");
-        try js.write(digested.dropped_lines);
+    const noted = if (note) |n| n.baseline.failures().len != 0 else false;
+    const stage: failure_text.Stage = if (std.mem.eql(u8, command_field, "typecheck_cmd")) .typecheck else .tests;
+    const judged = !noted and !std.mem.eql(u8, reason, "test_env_error") and !std.mem.eql(u8, reason, "leftover_processes");
+    const failures = if (judged) try failure_text.render(gpa, stage, report.stdout, report.stderr, &.{}) else null;
+    defer if (failures) |f| gpa.free(f.text);
+    if (failures != null and failures.?.text.len != 0) {
+        try js.objectField("failures");
+        try js.write(failures.?.text);
+    } else if (!noted) {
+        const digested = try output_digest.digest(gpa, report.stdout, report.stderr);
+        defer gpa.free(digested.text);
+        try js.objectField("output");
+        try js.write(digested.text);
+        if (digested.dropped_lines != 0) {
+            try js.objectField("output_dropped_lines");
+            try js.write(digested.dropped_lines);
+        }
     }
     try writeShadowNote(&js, note);
     try js.endObject();
@@ -1906,6 +1922,97 @@ test "a committed reply carries the test summary, compact or full" {
         errdefer std.debug.print("{s}\n", .{buffer.written()});
         try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"tests\":\"12 passing (40ms)\"") != null);
     }
+}
+
+const pytest_failed =
+    \\============================= test session starts =============================
+    \\collected 2 items
+    \\
+    \\test_calc.py F.                                                          [100%]
+    \\
+    \\================================== FAILURES ===================================
+    \\__________________________________ test_add ___________________________________
+    \\
+    \\    def test_add():
+    \\>       assert add(2, 2) == 3
+    \\E       assert 4 == 3
+    \\E        +  where 4 = add(2, 2)
+    \\
+    \\test_calc.py:4: AssertionError
+    \\=========================== short test summary info ===========================
+    \\FAILED test_calc.py::test_add - assert 4 == 3
+    \\========================= 1 failed, 1 passed in 0.05s =========================
+    \\
+;
+
+test "a rejected reply carries each failing test's output in failures instead of a raw digest" {
+    const runs = [_]struct { stdout: []const u8, has: []const []const u8 }{
+        .{ .stdout = pytest_failed, .has = &.{ "test_calc.py::test_add", "E       assert 4 == 3", "test_calc.py:4: AssertionError" } },
+        .{ .stdout = failure_text.dotnet_run_localized, .has = &.{ "Calc.Tests.CalcTests.Subtracts", "Expected: 1", "UnitTest1.cs:line 7" } },
+        .{ .stdout = failure_text.dotnet_run_english, .has = &.{"Expected: "} },
+    };
+    for (runs) |run| {
+        const report: sandbox.Report = .{
+            .outcome = .{ .exited = 1 },
+            .duration_ns = 0,
+            .stdout = @constCast(run.stdout),
+            .stderr = @constCast(""),
+            .truncated = false,
+            .killed_leftovers = false,
+        };
+        var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buffer.deinit();
+        try writeRejected(testing.allocator, &buffer.writer, "test", report, null);
+        const json = buffer.written();
+        errdefer std.debug.print("{s}\n", .{json});
+        try testing.expect(std.mem.indexOf(u8, json, "\"reason\":\"tests_failed\"") != null);
+        try testing.expect(std.mem.indexOf(u8, json, "\"failures\":\"") != null);
+        try testing.expect(std.mem.indexOf(u8, json, "\"output\":") == null);
+        for (run.has) |needle| try testing.expect(std.mem.indexOf(u8, json, needle) != null);
+    }
+}
+
+test "a write with failing tests it did not block names their output in failures, and a passing one does not" {
+    const failing: sandbox.Report = .{
+        .outcome = .{ .exited = 1 },
+        .duration_ns = 0,
+        .stdout = @constCast(failure_text.pytest_run),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var trace: runner.Trace = .{};
+    runner.noteSummary(&trace, failing);
+    trace.baseline.debt = true;
+    try trace.baseline.keepFailures(testing.allocator, .tests, failing, &.{"tests/test_a.py::test_eq"});
+    const note = shadowNote("D:\\shadows", trace);
+    for ([_]bool{ false, true }) |full| {
+        var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer buffer.deinit();
+        try writeCommitted(&buffer.writer, "add", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), note, full);
+        const json = buffer.written();
+        errdefer std.debug.print("{s}\n", .{json});
+        try testing.expect(std.mem.indexOf(u8, json, "\"failures\":\"tests/test_a.py::test_eq\\n") != null);
+        try testing.expect(std.mem.indexOf(u8, json, "AssertionError") != null);
+    }
+
+    const passing: sandbox.Report = .{
+        .outcome = .{ .exited = 0 },
+        .duration_ns = 0,
+        .stdout = @constCast("..........                                                    [100%]\n10 passed in 0.12s\n"),
+        .stderr = @constCast(""),
+        .truncated = false,
+        .killed_leftovers = false,
+    };
+    var clean: runner.Trace = .{};
+    runner.noteSummary(&clean, passing);
+    try clean.baseline.keepFailures(testing.allocator, .tests, passing, &.{});
+    var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeCommitted(&buffer.writer, "add", .{ .present = symbol.hashOf("a") }, symbol.hashOf("b"), shadowNote("D:\\shadows", clean), false);
+    errdefer std.debug.print("{s}\n", .{buffer.written()});
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "\"tests\":\"10 passed in 0.12s\"") != null);
+    try testing.expect(std.mem.indexOf(u8, buffer.written(), "failures") == null);
 }
 
 test "rejected payload surfaces parsed diagnostics and escapes control bytes" {

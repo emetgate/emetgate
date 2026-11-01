@@ -126,6 +126,8 @@ test "regression gate: a test written first is accepted as debt, commit is refus
     try testing.expect(!first.is_error);
     try testing.expect(std.mem.indexOf(u8, first.string("failing_tests"), "test_calc.py") != null);
     try testing.expect(std.mem.indexOf(u8, first.string("failing_tests"), "refused") != null);
+    try testing.expect(std.mem.indexOf(u8, first.string("failures"), "test_calc.py") != null);
+    try testing.expect(std.mem.indexOf(u8, first.string("failures"), "No module named 'calc'") != null);
     try testing.expect(first.field("verified") == null);
 
     var refused = try repo.call("emetgate_commit", .{ .message = "add calc test" });
@@ -143,6 +145,7 @@ test "regression gate: a test written first is accepted as debt, commit is refus
     errdefer std.debug.print("{s}\n", .{fixed.text});
     try testing.expect(!fixed.is_error);
     try testing.expect(fixed.field("failing_tests") == null);
+    try testing.expect(fixed.field("failures") == null);
 
     var landed = try repo.call("emetgate_commit", .{ .message = "add calc" });
     defer landed.deinit();
@@ -160,6 +163,9 @@ test "regression gate: a write that breaks a test that passed is rejected and na
     errdefer std.debug.print("{s}\n", .{broken.text});
     try testing.expect(broken.is_error);
     try testing.expectEqualStrings("test_calc.py::test_add", broken.string("regressed"));
+    try testing.expect(std.mem.startsWith(u8, broken.string("failures"), "test_calc.py::test_add\n"));
+    try testing.expect(std.mem.indexOf(u8, broken.string("failures"), "assert -1 == 3") != null);
+    try testing.expect(broken.field("output") == null);
     try repo.expectFile("calc.py", calc_ok);
 }
 
@@ -173,6 +179,8 @@ test "regression gate: a test that failed before the session neither blocks a wr
     try testing.expect(!write.is_error);
     try testing.expect(std.mem.indexOf(u8, write.string("failing_tests"), "test_broken.py::test_broken") != null);
     try testing.expect(std.mem.indexOf(u8, write.string("failing_tests"), "not blocked") != null);
+    try testing.expect(std.mem.startsWith(u8, write.string("failures"), "test_broken.py::test_broken\n"));
+    try testing.expect(std.mem.indexOf(u8, write.string("failures"), "assert False") != null);
     try testing.expect(write.field("verified") == null);
 
     var landed = try repo.call("emetgate_commit", .{ .message = "add other" });

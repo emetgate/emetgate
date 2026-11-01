@@ -4,6 +4,7 @@ const shadow = @import("shadow.zig");
 const runner = @import("runner.zig");
 const test_outcome = @import("test_outcome.zig");
 const output_digest = @import("../protocol/output_digest.zig");
+const failure_text = @import("../protocol/failure_text.zig");
 const test_results = @import("test_results.zig");
 const test_debt = @import("test_debt.zig");
 const test_command_mod = @import("test_command.zig");
@@ -18,9 +19,24 @@ pub const Note = struct {
     regressed: bool = false,
     buf: [600]u8 = undefined,
     len: usize = 0,
+    failure_buf: [failure_text.cap]u8 = undefined,
+    failure_len: usize = 0,
 
     pub fn text(self: *const Note) []const u8 {
         return self.buf[0..self.len];
+    }
+
+    pub fn failures(self: *const Note) []const u8 {
+        return self.failure_buf[0..self.failure_len];
+    }
+
+    pub fn keepFailures(self: *Note, gpa: Allocator, stage: failure_text.Stage, report: sandbox.Report, first: []const []const u8) !void {
+        const rendered = try failure_text.render(gpa, stage, report.stdout, report.stderr, first);
+        defer gpa.free(rendered.text);
+        var end = @min(rendered.text.len, self.failure_buf.len);
+        while (end > 0 and end < rendered.text.len and rendered.text[end] & 0xC0 == 0x80) end -= 1;
+        @memcpy(self.failure_buf[0..end], rendered.text[0..end]);
+        self.failure_len = end;
     }
 
     fn keep(self: *Note, digest: []const u8) void {
@@ -38,6 +54,7 @@ pub const Note = struct {
 };
 
 pub const unverified_prefix = "the test command could not run, so no test judged this edit: ";
+pub const same_failures = "the same failures were there before this edit; each one's output is in failures";
 
 pub const Change = struct {
     rel: []const u8,
@@ -247,9 +264,14 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
             n.append(reason);
         } else {
             n.failing = true;
-            const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
-            defer gpa.free(digest.text);
-            n.keep(digest.text);
+            try n.keepFailures(gpa, if (stage == .typecheck) .typecheck else .tests, report, &.{});
+            if (n.failures().len != 0) {
+                n.keep(same_failures);
+            } else {
+                const digest = try output_digest.digest(gpa, report.stdout, report.stderr);
+                defer gpa.free(digest.text);
+                n.keep(digest.text);
+            }
         }
     }
     var accepted = report;
@@ -276,6 +298,7 @@ fn judged(gpa: Allocator, io: std.Io, changes: []const Change, gate: Gate, repor
             try test_debt.names(&text.writer, blocked.items);
             n.regressed = true;
             n.keep(text.written());
+            try n.keepFailures(gpa, .tests, report, blocked.items);
         }
         return .{ .tests = report };
     }
@@ -286,6 +309,7 @@ fn judged(gpa: Allocator, io: std.Io, changes: []const Change, gate: Gate, repor
         try test_debt.summary(&text.writer, failing, owed.len);
         n.debt = true;
         n.keep(text.written());
+        try n.keepFailures(gpa, .tests, report, owed);
     }
     if (gate.commits and owed.len != 0) return .{ .tests = report };
     test_debt.stage(gate.root, failing);
