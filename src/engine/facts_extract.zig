@@ -112,6 +112,10 @@ const Extractor = struct {
     def_at_node: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     binding_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     typed_at: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    built_from: std.AutoHashMapUnmanaged(u32, u32) = .empty,
+    binder_index: std.AutoHashMapUnmanaged(u32, usize) = .empty,
+    receiver_binder: ?u32 = null,
+    rebound_names: std.StringHashMapUnmanaged(void) = .empty,
     skipped_uses: std.AutoHashMapUnmanaged(u32, void) = .empty,
     scoped_bindings: std.AutoHashMapUnmanaged(u32, void) = .empty,
     path: std.ArrayList(Step) = .empty,
@@ -253,9 +257,20 @@ const Extractor = struct {
         for (self.every.uses, 0..) |use, i| try self.use_at.put(self.arena, use.span.start, @intCast(i));
     }
 
+    fn boundIndex(self: *const Extractor, at: u32) ?usize {
+        const binder = self.every.uses[at].binder orelse return null;
+        return if (self.isGlobalType(binder)) null else binder;
+    }
+
+    fn isGlobalType(self: *const Extractor, binder: usize) bool {
+        if (!self.f.global_types) return false;
+        const def = self.def_at_name.get(self.every.binders[binder].span.start) orelse return false;
+        return self.defs.items[def].kind.isType();
+    }
+
     fn binderOfUse(self: *const Extractor, start: u32) ?u32 {
         const at = self.use_at.get(start) orelse return null;
-        const binder = self.every.uses[at].binder orelse return null;
+        const binder = self.boundIndex(at) orelse return null;
         return self.every.binders[binder].span.start;
     }
 
@@ -270,7 +285,7 @@ const Extractor = struct {
         for (imported) |entry| {
             if (self.f.using_directive == null) self.module_mode = true;
             const spec: u32 = @intCast(self.specs.items.len);
-            try self.specs.append(self.arena, .{ .text = try self.keep(entry.spec), .line = self.lineAt(entry.statement.start), .kind = entry.spec_kind, .scope = try self.keep(entry.spec_scope), .global = entry.global });
+            try self.specs.append(self.arena, .{ .text = try self.keep(entry.spec), .line = self.lineAt(entry.statement.start), .kind = entry.spec_kind, .scope = try self.keep(entry.spec_scope), .global = entry.global, .start = entry.holder.start, .end = entry.holder.end, .alias = if (entry.spec_kind == .using_alias) try self.keep(entry.namespace orelse "") else "" });
             switch (entry.form) {
                 .bare => {},
                 .import => {
@@ -340,15 +355,21 @@ const Extractor = struct {
 
     fn typeRefOfName(self: *Extractor, node: ts.Node) Error!?u32 {
         const kind = node.kind();
+        if (self.f.nullable_type) |nullable| if (std.mem.eql(u8, kind, nullable)) {
+            const inner = node.childByField("type") orelse return null;
+            return self.typeRefOfName(inner);
+        };
+        if (try self.globalType(node)) |global| return global;
         if (std.mem.eql(u8, kind, self.profile.identifier) or oneOf(kind, self.g.type_kinds)) {
-            const binder = self.binderOfUse(node.startByte()) orelse return self.globalType(node);
+            if (self.isTypeParameter(node)) return null;
+            const binder = self.binderOfUse(node.startByte()) orelse return null;
             const target = self.targetOfBinder(binder) orelse return null;
             return try self.addType(.{ .target = target });
         }
         if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) {
             const module = node.childByField(self.f.qualified_module_field) orelse return null;
             const name = node.childByField(self.f.qualified_name_field) orelse return null;
-            return try self.memberTypeRef(module, try self.text(name));
+            return try self.memberTypeRef(module, try self.text(self.leafOf(name)));
         };
         if (std.mem.eql(u8, kind, self.f.member)) {
             const object = node.childByField(self.f.object_field) orelse return null;
@@ -356,17 +377,102 @@ const Extractor = struct {
             return try self.memberTypeRef(object, try self.text(property));
         }
         if (self.f.generic_type) |generic| if (std.mem.eql(u8, kind, generic)) {
-            const name = node.childByField(self.f.generic_name_field) orelse return null;
+            const name = self.genericName(node) orelse return null;
             return self.typeRefOfName(name);
         };
         return null;
     }
 
-    fn globalType(self: *Extractor, node: ts.Node) Error!?u32 {
+    fn genericName(self: *const Extractor, node: ts.Node) ?ts.Node {
+        if (self.f.generic_name_field.len == 0) return node.namedChild(0);
+        return node.childByField(self.f.generic_name_field);
+    }
+
+    fn isGeneric(self: *const Extractor, kind: []const u8) bool {
+        const generic = self.f.generic_type orelse return false;
+        return std.mem.eql(u8, kind, generic);
+    }
+
+    fn leafOf(self: *const Extractor, node: ts.Node) ts.Node {
+        if (!self.f.global_types or !self.isGeneric(node.kind())) return node;
+        return self.genericName(node) orelse node;
+    }
+
+    fn dottedGlobal(self: *Extractor, node: ts.Node) Error!?[]const u8 {
         if (!self.f.global_types) return null;
-        if (!std.mem.eql(u8, node.kind(), self.profile.identifier)) return null;
-        if (!self.use_at.contains(node.startByte())) return null;
-        return try self.addType(.{ .target = .{ .unresolved = .global }, .member = try self.text(node) });
+        var parts: std.ArrayList([]const u8) = .empty;
+        var current = node;
+        while (true) {
+            const kind = current.kind();
+            if (self.isGeneric(kind)) {
+                current = self.genericName(current) orelse return null;
+                continue;
+            }
+            if (std.mem.eql(u8, kind, self.profile.identifier)) {
+                if (!self.use_at.contains(current.startByte()) or self.binderOfUse(current.startByte()) != null or self.isTypeParameter(current)) return null;
+                try parts.append(self.arena, self.raw(current));
+                break;
+            }
+            const qualified = if (self.f.qualified_type) |q| std.mem.eql(u8, kind, q) else false;
+            const is_member = std.mem.eql(u8, kind, self.f.member);
+            if (!qualified and !is_member) return null;
+            const name = current.childByField(if (qualified) self.f.qualified_name_field else self.f.property_field) orelse return null;
+            const leaf = self.leafOf(name);
+            if (!std.mem.eql(u8, leaf.kind(), self.profile.identifier)) return null;
+            try parts.append(self.arena, self.raw(leaf));
+            const inner = current.childByField(if (qualified) self.f.qualified_module_field else self.f.object_field) orelse return null;
+            current = self.strip(inner);
+        }
+        std.mem.reverse([]const u8, parts.items);
+        return try self.keep(try std.mem.join(self.arena, ".", parts.items));
+    }
+
+    fn isTypeParameter(self: *const Extractor, node: ts.Node) bool {
+        const list_kind = self.f.type_parameter_list orelse return false;
+        const name = self.raw(node);
+        var current = node.parent();
+        while (current) |at| : (current = at.parent()) {
+            if (self.profile.functionKind(at.kind()) == null and !oneOf(at.kind(), self.f.classes)) continue;
+            var i: u32 = 0;
+            while (at.namedChild(i)) |child| : (i += 1) {
+                if (!std.mem.eql(u8, child.kind(), list_kind)) continue;
+                var k: u32 = 0;
+                while (child.namedChild(k)) |parameter| : (k += 1) {
+                    const declared = parameter.childByField("name") orelse continue;
+                    if (std.mem.eql(u8, self.raw(declared), name)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    fn addGlobal(self: *Extractor, node: ts.Node, path: []const u8, called: bool, value: bool) Error!u32 {
+        var parts: std.ArrayList([]const u8) = .empty;
+        var enclosing: u32 = none;
+        var child = node;
+        var current = node.parent();
+        while (current) |ancestor| : ({
+            child = ancestor;
+            current = ancestor.parent();
+        }) {
+            if (enclosing == none) if (self.def_at_node.get(ancestor.startByte())) |d| {
+                if (self.defs.items[d].kind.isType()) if (ancestor.childByField("body")) |body| {
+                    if (body.eql(child)) enclosing = d;
+                };
+            };
+            if (!oneOf(ancestor.kind(), self.f.namespaces)) continue;
+            const name = ancestor.childByField("name") orelse continue;
+            try parts.append(self.arena, self.raw(name));
+        }
+        if (symbol.fileScopedName(self.profile, node)) |name| try parts.append(self.arena, self.raw(name));
+        std.mem.reverse([]const u8, parts.items);
+        const scope_name = try self.keep(try std.mem.join(self.arena, ".", parts.items));
+        return self.addType(.{ .target = .{ .unresolved = .global }, .member = path, .scope = scope_name, .at = node.startByte(), .enclosing = enclosing, .called = called, .value = value });
+    }
+
+    fn globalType(self: *Extractor, node: ts.Node) Error!?u32 {
+        const path = (try self.dottedGlobal(node)) orelse return null;
+        return try self.addGlobal(node, path, false, false);
     }
 
     fn memberTypeRef(self: *Extractor, owner: ts.Node, member_name: []const u8) Error!?u32 {
@@ -399,6 +505,8 @@ const Extractor = struct {
 
     fn collectShapes(self: *Extractor) Error!void {
         var written: std.AutoHashMapUnmanaged(u32, void) = .empty;
+        for (self.every.binders, 0..) |binder, i| try self.binder_index.put(self.arena, binder.span.start, i);
+        if (self.f.sole_binder_types) try self.collectReboundNames();
         var walker = traversal.Walker.init(self.snapshot.tree.root());
         defer walker.deinit();
         while (walker.next()) |entry| {
@@ -419,8 +527,10 @@ const Extractor = struct {
                 if (!std.mem.eql(u8, site.node, kind)) continue;
                 const name = node.childByField(site.name_field) orelse continue;
                 if (!std.mem.eql(u8, name.kind(), self.profile.identifier) or self.typed_at.contains(name.startByte())) continue;
+                self.receiver_binder = null;
                 const built = (try self.builtType(node, name, site)) orelse continue;
                 try self.typed_at.put(self.arena, name.startByte(), built);
+                if (self.receiver_binder) |receiver| try self.built_from.put(self.arena, name.startByte(), receiver);
             }
             for (self.f.writes) |site| {
                 if (!std.mem.eql(u8, site.parent, kind)) continue;
@@ -438,16 +548,15 @@ const Extractor = struct {
             if (node.isNamed() and oneOf(kind, self.f.classes)) try self.classShape(node);
         }
         if (self.f.sole_binder_types) try self.dropRebound(&written);
+        try self.collectReturns();
     }
 
     fn dropRebound(self: *Extractor, written: *const std.AutoHashMapUnmanaged(u32, void)) Error!void {
         const root = self.snapshot.tree.root();
-        var index_at: std.AutoHashMapUnmanaged(u32, usize) = .empty;
-        for (self.every.binders, 0..) |binder, i| try index_at.put(self.arena, binder.span.start, i);
         var doomed: std.ArrayList(u32) = .empty;
         var keys = self.typed_at.keyIterator();
         while (keys.next()) |start| {
-            const i = index_at.get(start.*) orelse {
+            const i = self.binder_index.get(start.*) orelse {
                 try doomed.append(self.arena, start.*);
                 continue;
             };
@@ -455,11 +564,31 @@ const Extractor = struct {
             if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);
         }
         for (doomed.items) |start| _ = self.typed_at.remove(start);
+        var dropped = true;
+        while (dropped) {
+            dropped = false;
+            var from = self.built_from.iterator();
+            while (from.next()) |entry| {
+                if (self.typed_at.contains(entry.value_ptr.*)) continue;
+                if (self.typed_at.remove(entry.key_ptr.*)) dropped = true;
+            }
+        }
+    }
+
+    fn collectReboundNames(self: *Extractor) Error!void {
+        var walker = traversal.Walker.init(self.snapshot.tree.root());
+        defer walker.deinit();
+        while (walker.next()) |entry| {
+            if (!oneOf(entry.node.kind(), self.g.rebinding_statements)) continue;
+            var i: u32 = 0;
+            while (entry.node.namedChild(i)) |child| : (i += 1) try self.rebound_names.put(self.arena, self.raw(child), {});
+        }
     }
 
     fn soleBinder(self: *const Extractor, index: usize) bool {
         const binders = self.every.binders;
         const names = self.every.binder_names;
+        if (self.rebound_names.contains(names[index])) return false;
         var i = index;
         while (i > 0 and std.mem.eql(u8, names[i - 1], names[index])) i -= 1;
         while (i < binders.len and std.mem.eql(u8, names[i], names[index])) : (i += 1) {
@@ -494,9 +623,107 @@ const Extractor = struct {
         }
         if (self.f.calls_construct and std.mem.eql(u8, value.kind(), self.profile.call.node)) {
             const callee = value.childByField(self.profile.call.function_field) orelse return null;
-            return self.typeRefOfName(callee);
+            return self.calledType(callee);
         }
         return null;
+    }
+
+    fn calledType(self: *Extractor, callee: ts.Node) Error!?u32 {
+        if (try self.dottedGlobal(callee)) |path| return try self.addGlobal(callee, path, true, true);
+        if (std.mem.eql(u8, callee.kind(), self.f.member)) {
+            const object = self.strip(callee.childByField(self.f.object_field) orelse return null);
+            const property = callee.childByField(self.f.property_field) orelse return null;
+            const receiver = if (std.mem.eql(u8, object.kind(), self.profile.identifier)) self.typedLocal(object) else try self.constructionOf(object);
+            if (receiver) |owner| return try self.addType(.{ .target = .{ .member_of_type = owner }, .member = try self.text(self.leafOf(property)), .called = true });
+        }
+        const bare = self.leafOf(callee);
+        if (std.mem.eql(u8, bare.kind(), self.profile.identifier)) {
+            const binder = self.binderOfUse(bare.startByte()) orelse return null;
+            if (self.f.sole_binder_types and !self.isSoleBinder(binder)) return null;
+        }
+        const named = (try self.typeRefOfName(callee)) orelse return null;
+        self.types.items[named].called = true;
+        return named;
+    }
+
+    fn typedLocal(self: *Extractor, identifier_node: ts.Node) ?u32 {
+        const binder = self.binderOfUse(identifier_node.startByte()) orelse return null;
+        const typed = self.typed_at.get(binder) orelse return null;
+        self.receiver_binder = binder;
+        return typed;
+    }
+
+    fn isSoleBinder(self: *const Extractor, binder: u32) bool {
+        const index = self.binder_index.get(binder) orelse return false;
+        return self.soleBinder(index);
+    }
+
+    fn sameType(self: *const Extractor, a: u32, b: u32) bool {
+        const left = self.types.items[a];
+        const right = self.types.items[b];
+        return std.meta.eql(left.target, right.target) and left.called == right.called and std.mem.eql(u8, left.member, right.member);
+    }
+
+    fn collectReturns(self: *Extractor) Error!void {
+        if (self.f.return_sites.len == 0) return;
+        var names: std.AutoHashMapUnmanaged(u64, u32) = .empty;
+        for (self.defs.items[1..]) |d| {
+            const slot = try names.getOrPutValue(self.arena, overloadKey(d), 0);
+            slot.value_ptr.* += 1;
+        }
+        var walker = traversal.Walker.init(self.snapshot.tree.root());
+        defer walker.deinit();
+        while (walker.next()) |entry| {
+            const node = entry.node;
+            for (self.f.return_sites) |site| {
+                if (!std.mem.eql(u8, site.parent, node.kind())) continue;
+                const name = node.childByField("name") orelse continue;
+                const d = self.def_at_name.get(name.startByte()) orelse continue;
+                if (names.get(overloadKey(self.defs.items[d])) != 1) continue;
+                self.defs.items[d].returns = (try self.returnsOf(node, name, d, site.field)) orelse none;
+            }
+        }
+    }
+
+    fn returnsOf(self: *Extractor, node: ts.Node, name: ts.Node, def: u32, field: []const u8) Error!?u32 {
+        if (hasToken(node, "async") or !self.plainlyDecorated(node)) return null;
+        if (self.f.sole_binder_types and !self.isSoleBinder(name.startByte())) return null;
+        if (node.childByField(field) != null) return self.annotatedType(node, field);
+        const statement = self.f.return_statement orelse return null;
+        if (self.defs.items[def].parent != 0) return null;
+        const body = node.childByField("body") orelse return null;
+        var returned: ?u32 = null;
+        var walker = traversal.Walker.init(body);
+        defer walker.deinit();
+        while (walker.next()) |entry| {
+            const kind = entry.node.kind();
+            if (self.profile.functionKind(kind) != null or oneOf(kind, self.f.classes)) {
+                walker.skipChildren();
+                continue;
+            }
+            if (oneOf(kind, self.f.generator_kinds)) return null;
+            if (!std.mem.eql(u8, kind, statement)) continue;
+            const value = self.strip(entry.node.namedChild(0) orelse return null);
+            const found = (if (std.mem.eql(u8, value.kind(), self.profile.identifier)) self.typedLocal(value) else try self.constructionOf(value)) orelse return null;
+            if (returned) |first| {
+                if (!self.sameType(first, found)) return null;
+            } else {
+                returned = found;
+            }
+        }
+        return returned;
+    }
+
+    fn plainlyDecorated(self: *const Extractor, node: ts.Node) bool {
+        const holder = node.parent() orelse return true;
+        if (!oneOf(holder.kind(), self.f.member_wrappers)) return true;
+        var i: u32 = 0;
+        while (holder.namedChild(i)) |child| : (i += 1) {
+            if (child.eql(node)) continue;
+            const inner = child.namedChild(0) orelse return false;
+            if (!oneOf(self.raw(inner), self.f.plain_decorators)) return false;
+        }
+        return true;
     }
 
     fn classShape(self: *Extractor, class: ts.Node) Error!void {
@@ -652,7 +879,7 @@ const Extractor = struct {
     fn roleAt(self: *const Extractor, depth: usize, field: ?[]const u8) facts.RefKind {
         var at = depth;
         var own_field = field;
-        while (at > 0 and oneOf(self.path.items[at - 1].node.kind(), self.profile.transparent_wrappers)) {
+        while (at > 0 and (oneOf(self.path.items[at - 1].node.kind(), self.profile.transparent_wrappers) or (self.f.global_types and self.isGeneric(self.path.items[at - 1].node.kind())))) {
             own_field = self.path.items[at - 1].field;
             at -= 1;
         }
@@ -720,7 +947,7 @@ const Extractor = struct {
 
     fn receiverOf(self: *const Extractor, object: ts.Node) ?Enclosing {
         const at = self.use_at.get(object.startByte()) orelse return null;
-        const binder_index = self.every.uses[at].binder orelse return null;
+        const binder_index = self.boundIndex(at) orelse return null;
         return self.receiverAt(self.every.binders[binder_index].span.start);
     }
 
@@ -752,6 +979,7 @@ const Extractor = struct {
 
     fn memberTarget(self: *Extractor, object: ts.Node) Error!facts.Target {
         const kind = object.kind();
+        if (try self.dottedGlobal(object)) |path| return .{ .member_of_type = try self.addGlobal(object, path, false, true) };
         if (std.mem.eql(u8, kind, self.g.new_expression)) {
             const constructor = object.childByField(self.g.new_constructor_field) orelse return .{ .unresolved = .property_needs_type };
             const constructed = (try self.typeRefOfName(constructor)) orelse return .{ .unresolved = .property_needs_type };
@@ -771,7 +999,8 @@ const Extractor = struct {
         }
         if (std.mem.eql(u8, kind, self.profile.identifier)) {
             const at = self.use_at.get(object.startByte()) orelse return .{ .unresolved = .property_needs_type };
-            const binder_index = self.every.uses[at].binder orelse {
+            if (self.isTypeParameter(object)) return .{ .unresolved = .property_needs_type };
+            const binder_index = self.boundIndex(at) orelse {
                 const global = (try self.globalType(object)) orelse return .{ .unresolved = .global };
                 return .{ .member_of_type = global };
             };
@@ -798,7 +1027,7 @@ const Extractor = struct {
 
     fn member(self: *Extractor, node: ts.Node, depth: usize, field: ?[]const u8) Error!void {
         const object_node = node.childByField(self.f.object_field) orelse return;
-        const property = node.childByField(self.f.property_field) orelse return;
+        const property = self.leafOf(node.childByField(self.f.property_field) orelse return);
         const role = self.roleAt(depth, field);
         const name = try self.text(property);
         const start = property.startByte();
@@ -814,7 +1043,7 @@ const Extractor = struct {
             is_static = class.is_static;
         } else switch (target) {
             .member_of_def => |d| is_static = self.defs.items[d].kind == .class,
-            .member_of_type => is_static = std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null,
+            .member_of_type => is_static = (std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null) or (try self.dottedGlobal(object)) != null,
             else => {},
         }
         switch (target) {
@@ -856,12 +1085,16 @@ const Extractor = struct {
         }
     }
 
-    fn qualifiedType(self: *Extractor, node: ts.Node) Error!void {
+    fn qualifiedType(self: *Extractor, node: ts.Node, depth: usize, field: ?[]const u8) Error!void {
         const module = node.childByField(self.f.qualified_module_field) orelse return;
-        const name = node.childByField(self.f.qualified_name_field) orelse return;
+        const name = self.leafOf(node.childByField(self.f.qualified_name_field) orelse return);
         const start = name.startByte();
         try self.skipped_uses.put(self.arena, start, {});
         const from = try self.ownerAt(node.startByte());
+        if (try self.dottedGlobal(node)) |path| {
+            const kind: facts.RefKind = if (self.roleAt(depth, field) == .new) .new else .type;
+            return self.addRef(.{ .from = from, .kind = kind, .name = try self.text(name), .start = start, .line = lineOf(name), .target = .{ .global_type = try self.addGlobal(node, path, false, false) } });
+        }
         if (!std.mem.eql(u8, module.kind(), self.profile.identifier)) return;
         const binder = self.binderOfUse(module.startByte()) orelse return;
         const target: facts.Target = if (self.binding_at.get(binder)) |b| .{ .member_of_binding = b } else if (self.def_at_name.get(binder)) |d| .{ .member_of_def = d } else return;
@@ -912,9 +1145,17 @@ const Extractor = struct {
         const role: facts.RefKind = if (is_type) .type else if (self.isExportSpecifier(depth, field)) .import else self.roleAt(depth, field);
         const from = try self.ownerAt(start);
         if (self.inError()) return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .unresolved = .parse_error } });
-        const binder_index = use.binder orelse {
-            if (!role.invokes()) return;
+        if (self.isTypeParameter(node)) {
+            if (role.invokes()) try self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .unresolved = .local_value } });
+            return;
+        }
+        const binder_index = self.boundIndex(at) orelse {
+            if (!role.invokes() and use.binder == null) return;
             if (oneOf(name, self.g.module_callees)) return;
+            if (self.f.global_types) {
+                const global = try self.addGlobal(node, name, role == .call, role == .call);
+                return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .global_type = global } });
+            }
             const dynamic = oneOf(name, self.g.eval_callees) or (role == .new and oneOf(name, self.g.constructor_callees));
             return self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = .{ .unresolved = if (dynamic) .dynamic_call else .global } });
         };
@@ -924,6 +1165,19 @@ const Extractor = struct {
             return;
         };
         try self.addRef(.{ .from = from, .kind = role, .name = name, .start = start, .line = lineOf(node), .target = target });
+    }
+
+    fn usingStatic(self: *Extractor, directive: ts.Node) Error!void {
+        if (!hasToken(directive, "static") or directive.childByField("name") != null) return;
+        const count = directive.namedChildCount();
+        if (count == 0) return;
+        const named = directive.namedChild(count - 1).?;
+        const path = (try self.dottedGlobal(named)) orelse return;
+        const qualified = if (self.f.qualified_type) |q| std.mem.eql(u8, named.kind(), q) else false;
+        const name = if (qualified) self.leafOf(named.childByField(self.f.qualified_name_field) orelse return) else self.leafOf(named);
+        const global = try self.addGlobal(named, path, false, false);
+        self.types.items[global].at = none;
+        try self.addRef(.{ .from = 0, .kind = .type, .name = try self.text(name), .start = name.startByte(), .line = lineOf(name), .target = .{ .global_type = global } });
     }
 
     fn subscriptRead(self: *Extractor, node: ts.Node, depth: usize, field: ?[]const u8) void {
@@ -945,11 +1199,16 @@ const Extractor = struct {
                 walker.skipChildren();
                 continue;
             }
+            if (self.f.using_directive) |using| if (std.mem.eql(u8, kind, using)) {
+                try self.usingStatic(node);
+                walker.skipChildren();
+                continue;
+            };
             if (std.mem.eql(u8, kind, self.f.member)) try self.member(node, depth, entry.field);
             for (self.f.initializers) |*initializer| {
                 if (std.mem.eql(u8, kind, initializer.entry)) try self.initializedMember(node, depth, initializer);
             }
-            if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node);
+            if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node, depth, entry.field);
             if (std.mem.eql(u8, kind, self.profile.call.node)) try self.call(node);
             if (std.mem.eql(u8, kind, self.g.subscript)) self.subscriptRead(node, depth, entry.field);
             if (node.childCount() == 0) {
@@ -991,6 +1250,10 @@ fn looseLess(_: void, a: facts.Loose, b: facts.Loose) bool {
 fn refLess(_: void, a: facts.Ref, b: facts.Ref) bool {
     if (a.start != b.start) return a.start < b.start;
     return @intFromEnum(a.kind) < @intFromEnum(b.kind);
+}
+
+fn overloadKey(d: facts.Def) u64 {
+    return std.hash.Wyhash.hash(d.parent, d.name);
 }
 
 fn hasToken(node: ts.Node, token: []const u8) bool {

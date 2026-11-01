@@ -433,7 +433,7 @@ test "rename facts: a C# call through a type name that the enclosing namespace a
         defer ref.deinit(testing.allocator);
         break :blk (try table.resolve(ref)).hash;
     };
-    try testing.expectError(error.RenameUnresolved, rename_batch.plan(testing.allocator, testing.io, case.runtime, case.repo.root_abs, .{
+    try testing.expectError(error.IncompleteRename, rename_batch.plan(testing.allocator, testing.io, case.runtime, case.repo.root_abs, .{
         .file_abs = file,
         .ref_text = "Demo.Helpers.Helper@static",
         .expected_hash = hash,
@@ -960,4 +960,83 @@ test "rename facts: a top-level __all__ entry naming a nested function of the sa
     var case = try Case.init(&.{.{ .rel = "m.py", .text = "__all__ = [\"helper\"]\n\n\ndef outer():\n    def helper():\n        return 1\n    return helper()\n" }});
     defer case.deinit();
     try testing.expectError(error.DynamicReference, case.plan("m.py", "outer.helper", "assist", true));
+}
+
+test "rename facts: a Python method through a local built by a function with one provable return type is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "cart.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\ndef make_cart():\n    return Cart()\n\n\ndef relay():\n    c = make_cart()\n    return c\n\n\ndef annotated() -> Cart:\n    return make_cart()\n\n\ndef both(x):\n    if x:\n        return Cart()\n    return Cart()\n\n\nclass Factory:\n    def make(self) -> Cart:\n        return Cart()\n\n    @staticmethod\n    def fresh() -> Cart:\n        return Cart()\n\n\nclass Sub(Factory):\n    pass\n" },
+        .{ .rel = "use.py", .text = "import cart\nfrom cart import Factory, Sub, annotated, both, make_cart, relay\n\n\ndef a():\n    c = make_cart()\n    return c.total()\n\n\ndef b():\n    c = annotated()\n    return c.total()\n\n\ndef d():\n    f = Factory()\n    c = f.make()\n    return c.total()\n\n\ndef e():\n    return make_cart().total()\n\n\ndef g():\n    c = cart.make_cart()\n    return c.total()\n\n\ndef h():\n    c = relay()\n    return c.total()\n\n\ndef i():\n    c = both(1)\n    return c.total()\n\n\ndef j():\n    c = Sub().make()\n    return c.total()\n\n\ndef k(f: Factory):\n    c = f.make()\n    return c.total()\n\n\ndef l():\n    c = Factory.fresh()\n    return c.total()\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    const planned = try case.planWith("cart.py", "Cart.total", "grand", true, &sites);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "use.py", "import cart\nfrom cart import Factory, Sub, annotated, both, make_cart, relay\n\n\ndef a():\n    c = make_cart()\n    return c.grand()\n\n\ndef b():\n    c = annotated()\n    return c.grand()\n\n\ndef d():\n    f = Factory()\n    c = f.make()\n    return c.grand()\n\n\ndef e():\n    return make_cart().grand()\n\n\ndef g():\n    c = cart.make_cart()\n    return c.grand()\n\n\ndef h():\n    c = relay()\n    return c.grand()\n\n\ndef i():\n    c = both(1)\n    return c.grand()\n\n\ndef j():\n    c = Sub().make()\n    return c.grand()\n\n\ndef k(f: Factory):\n    c = f.make()\n    return c.grand()\n\n\ndef l():\n    c = Factory.fresh()\n    return c.grand()\n");
+}
+
+test "rename facts: a Python method through a local whose type cannot be proven refuses and names every site" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "import outside\nfrom outside import wrap\n\n\nclass Cart:\n    def total(self):\n        return 1\n\n\nclass Other:\n    def total(self):\n        return 2\n\n\nasync def later():\n    return Cart()\n\n\n@wrap\ndef decorated():\n    return Cart()\n\n\ndef gen():\n    yield Cart()\n\n\ndef either(x):\n    if x:\n        return Cart()\n    return Other()\n\n\ndef nothing():\n    return None\n\n\ndef bare():\n    return\n\n\ndef param(x):\n    return x\n\n\ndef spelled() -> \"Cart\":\n    return Cart()\n\n\ndef swapped():\n    return Cart()\n\n\nswapped = param\n\n\ndef rebound():\n    return Cart()\n\n\ndef rebind():\n    global rebound\n    rebound = param\n\n\ndef twice():\n    return Cart()\n\n\ndef twice():\n    return Other()\n\n\ndef nested():\n    def inner():\n        return Other()\n    return inner\n\n\ndef rebound_local(x):\n    y = Cart()\n    if x:\n        y = Other()\n    return y\n\n\nclass Builder:\n    def build(self):\n        return Cart()\n\n\ndef go1():\n    c = later()\n    return c.total()\n\n\ndef go2():\n    c = decorated()\n    return c.total()\n\n\ndef go3():\n    c = gen()\n    return c.total()\n\n\ndef go4():\n    c = either(1)\n    return c.total()\n\n\ndef go5():\n    c = nothing()\n    return c.total()\n\n\ndef go6():\n    c = bare()\n    return c.total()\n\n\ndef go7():\n    c = param(1)\n    return c.total()\n\n\ndef go8():\n    c = spelled()\n    return c.total()\n\n\ndef go9():\n    c = swapped()\n    return c.total()\n\n\ndef go10():\n    c = rebound()\n    return c.total()\n\n\ndef go11():\n    c = twice()\n    return c.total()\n\n\ndef go12():\n    c = nested()\n    return c.total()\n\n\ndef go13():\n    c = rebound_local(1)\n    return c.total()\n\n\ndef go14():\n    c = Builder().build()\n    return c.total()\n\n\ndef go15(make):\n    c = make()\n    return c.total()\n\n\ndef go16():\n    c = outside.make()\n    return c.total()\n\n\ndef go17():\n    c = Cart()\n    c = Other()\n    return c.total()\n\n\ndef go18():\n    other = Cart()\n    c = other.total()\n    d = c\n    return d.total()\n" }});
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqual(@as(usize, 18), sites.count);
+    try testing.expectEqualStrings("m.py:94, m.py:99, m.py:104, m.py:109, m.py:114, m.py:119, m.py:124, m.py:129, m.py:134, m.py:139", sites.list()[0..@min(sites.list().len, 96)]);
+}
+
+test "rename facts: a Python local stops being typed when the function it was built from is rebound" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\ndef make():\n    return Cart()\n\n\ndef go(x):\n    y = make()\n    if x:\n        y = x\n    c = y\n    return y.total()\n" }});
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqualStrings("m.py:15", sites.list());
+}
+
+test "rename facts: a C# method through var from a call with a declared return type is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Cart.cs", .text = "namespace Shop.Models\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n        public Cart Self() { return this; }\n    }\n\n    public static class Factory\n    {\n        public static Cart Make() { return new Cart(); }\n        public static Cart Maybe() { return null; }\n    }\n\n    public class Builder\n    {\n        public Cart Build() { return new Cart(); }\n        public Cart? Nullable() { return null; }\n    }\n\n    public class G<T>\n    {\n        public int Size() { return 1; }\n        public Cart Item() { return new Cart(); }\n    }\n}\n" },
+        .{ .rel = "Use.cs", .text = "using Shop.Models;\nusing static Shop.Models.Factory;\n\nnamespace Shop.App\n{\n    public class Use\n    {\n        private Cart Local() { return new Cart(); }\n\n        public int A() { var c = Shop.Models.Factory.Make(); return c.Total(); }\n        public int B() { var c = Factory.Make(); return c.Total(); }\n        public int D() { var f = new Builder(); var c = f.Build(); return c.Total(); }\n        public int E() { var c = new Builder().Nullable(); return c.Total(); }\n        public int F() { var c = Make(); return c.Total(); }\n        public int H() { var c = Local(); return c.Total(); }\n        public int I() { return Factory.Make().Total(); }\n        public int J() { var g = new G<int>(); var c = g.Item(); return c.Total(); }\n        public int K() { var c = Factory.Make().Self(); return c.Total(); }\n        public int L() { var c = new Shop.Models.Cart(); return c.Total(); }\n    }\n}\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    const planned = try case.planWith("Cart.cs", "Shop.Models.Cart.Total", "Grand", true, &sites);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "Use.cs", "using Shop.Models;\nusing static Shop.Models.Factory;\n\nnamespace Shop.App\n{\n    public class Use\n    {\n        private Cart Local() { return new Cart(); }\n\n        public int A() { var c = Shop.Models.Factory.Make(); return c.Grand(); }\n        public int B() { var c = Factory.Make(); return c.Grand(); }\n        public int D() { var f = new Builder(); var c = f.Build(); return c.Grand(); }\n        public int E() { var c = new Builder().Nullable(); return c.Grand(); }\n        public int F() { var c = Make(); return c.Grand(); }\n        public int H() { var c = Local(); return c.Grand(); }\n        public int I() { return Factory.Make().Grand(); }\n        public int J() { var g = new G<int>(); var c = g.Item(); return c.Grand(); }\n        public int K() { var c = Factory.Make().Self(); return c.Grand(); }\n        public int L() { var c = new Shop.Models.Cart(); return c.Grand(); }\n    }\n}\n");
+}
+
+test "rename facts: a C# method through var whose type cannot be proven refuses and names every site" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Models.cs", .text = "using System.Threading.Tasks;\n\nnamespace Shop.Models\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n    }\n\n    public class T\n    {\n        public int Total() { return 1; }\n    }\n\n    public static class Maker\n    {\n        public static Cart Two() { return new Cart(); }\n        public static Cart Two(int x) { return new Cart(); }\n        public static U Pick<U>() { return default(U); }\n        public static dynamic Loose() { return null; }\n        public static async Task<Cart> Later() { await Task.Yield(); return new Cart(); }\n    }\n\n    public class G<T>\n    {\n        public T Get() { return default(T); }\n    }\n\n    public class Base { }\n}\n" },
+        .{ .rel = "Use.cs", .text = "using Shop.Models;\nusing Elsewhere;\n\nnamespace Shop.App\n{\n    public class Use : Outside\n    {\n        public int A() { var c = Maker.Two(); return c.Total(); }\n        public int B() { var c = Maker.Pick<Cart>(); return c.Total(); }\n        public int D() { var c = Maker.Loose(); return c.Total(); }\n        public int E() { var c = Maker.Later(); return c.Total(); }\n        public int F() { var c = new G<Cart>().Get(); return c.Total(); }\n        public int H() { dynamic c = new Cart(); return c.Total(); }\n        public int I() { var c = Unknown(); return c.Total(); }\n        public int J() { var c = Missing.Make(); return c.Total(); }\n    }\n}\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("Models.cs", "Shop.Models.Cart.Total", "Grand", true, &sites));
+    try testing.expectEqual(@as(usize, 8), sites.count);
+}
+
+test "rename facts: a C# type parameter is never the class of the same name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "T.cs", .text = "public class T\n{\n    public static T Make() { return null; }\n    public int Total() { return 1; }\n}\n" },
+        .{ .rel = "G.cs", .text = "public class G<T>\n{\n    public T Get() { return default(T); }\n    public T Fresh() { return T.Make(); }\n}\n" },
+        .{ .rel = "Use.cs", .text = "public class Use\n{\n    public int A() { var c = new G<int>().Get(); return c.Total(); }\n}\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("T.cs", "T.Total", "Grand", true, &sites));
+    try testing.expectEqualStrings("Use.cs:3", sites.list());
+}
+
+test "rename facts: a C# type parameter hides a class of the same name in its own file" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "T.cs", .text = "public class T\n{\n    public static T Make() { return null; }\n    public int Total() { return 1; }\n}\n\npublic class G<T>\n{\n    public T Get() { return default(T); }\n    public int Viewed(T item) { return item.Total(); }\n    public T Built() { return T.Make(); }\n}\n\npublic class H\n{\n    public static T Pick<T>() { return default(T); }\n    public int A() { var c = new G<int>().Get(); return c.Total(); }\n    public int B() { var c = Pick<int>(); return c.Total(); }\n}\n" }});
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("T.cs", "T.Total", "Grand", true, &sites));
+    try testing.expectEqualStrings("T.cs:10, T.cs:17, T.cs:18", sites.list());
 }
