@@ -17,6 +17,8 @@ const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const runner = @import("runner.zig");
 const paths = @import("module_paths.zig");
+const py_symbol_move = @import("py_symbol_move.zig");
+const cs_symbol_move = @import("cs_symbol_move.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -32,16 +34,17 @@ pub const Request = struct {
     ref_text: []const u8,
     expected_hash: symbol.Hash,
     target_abs: []const u8,
+    target_type: ?[]const u8 = null,
     interface_change: bool = false,
     order_change: bool = false,
 };
 
-pub const Resolver = enum { language_service, text };
+pub const Resolver = enum { language_service, text, module_graph };
 
 pub const Fault = enum { alter_moved_text, drop_user_import, alter_other_symbol };
 pub var injected_fault: ?Fault = null;
 
-fn faulted(fault: Fault) bool {
+pub fn faulted(fault: Fault) bool {
     return builtin.is_test and injected_fault == fault;
 }
 
@@ -83,17 +86,18 @@ pub const Plan = struct {
     }
 };
 
-const TextEdit = struct {
+pub const TextEdit = struct {
     start: u32,
     end: u32,
     text: []const u8,
 };
 
 fn lessEdit(_: void, a: TextEdit, b: TextEdit) bool {
-    return a.start < b.start;
+    if (a.start != b.start) return a.start < b.start;
+    return a.end == a.start and b.end != b.start;
 }
 
-fn applyEdits(arena: Allocator, source: []const u8, edits: []TextEdit) ![]u8 {
+pub fn applyEdits(arena: Allocator, source: []const u8, edits: []TextEdit) ![]u8 {
     std.mem.sort(TextEdit, edits, {}, lessEdit);
     var out: std.ArrayList(u8) = .empty;
     var cursor: u32 = 0;
@@ -107,7 +111,7 @@ fn applyEdits(arena: Allocator, source: []const u8, edits: []TextEdit) ![]u8 {
     return out.items;
 }
 
-fn holesOf(arena: Allocator, edits: []const TextEdit) ![]symbol.Hole {
+pub fn holesOf(arena: Allocator, edits: []const TextEdit) ![]symbol.Hole {
     var out: std.ArrayList(symbol.Hole) = .empty;
     var shift: i64 = 0;
     for (edits) |e| {
@@ -125,7 +129,7 @@ fn holesOf(arena: Allocator, edits: []const TextEdit) ![]symbol.Hole {
     return out.items;
 }
 
-fn lineEndAfter(source: []const u8, end: u32) u32 {
+pub fn lineEndAfter(source: []const u8, end: u32) u32 {
     var at: usize = end;
     while (at < source.len and (source[at] == ' ' or source[at] == '\t')) at += 1;
     if (at < source.len and source[at] == '\r') at += 1;
@@ -213,7 +217,7 @@ fn withoutLocals(arena: Allocator, named: []const Named, drop: []const []const u
     return out.items;
 }
 
-const Moved = struct {
+pub const Moved = struct {
     name: []const u8,
     offset: u32,
     cut: Span,
@@ -222,7 +226,7 @@ const Moved = struct {
     function: bool,
 };
 
-fn locateMoved(gpa: Allocator, base: *Snapshot, ref: symbol.Ref, expected: symbol.Hash) !Moved {
+pub fn locateMoved(gpa: Allocator, base: *Snapshot, ref: symbol.Ref, expected: symbol.Hash) !Moved {
     if (ref.container.len != 0) return error.NotTopLevel;
     const table = try base.symbols();
     var offset: u32 = undefined;
@@ -271,7 +275,7 @@ fn locateMoved(gpa: Allocator, base: *Snapshot, ref: symbol.Ref, expected: symbo
     };
 }
 
-fn topBinders(resolution: scope.Resolution, root: ts.Node) usize {
+pub fn topBinders(resolution: scope.Resolution, root: ts.Node) usize {
     var count: usize = 0;
     for (resolution.binders) |b| {
         if (b.scope.start == root.startByte() and b.scope.end == root.endByte()) count += 1;
@@ -286,7 +290,7 @@ const User = struct {
     item: Named,
 };
 
-const Work = struct {
+pub const Work = struct {
     gpa: Allocator,
     arena: Allocator,
     io: std.Io,
@@ -295,7 +299,7 @@ const Work = struct {
     existing: paths.Existing,
 };
 
-fn loadSnapshot(w: Work, abs: []const u8) !*Snapshot {
+pub fn loadSnapshot(w: Work, abs: []const u8) !*Snapshot {
     const snapshot = try Snapshot.load(w.runtime, w.io, .cwd(), abs);
     errdefer snapshot.destroy();
     if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
@@ -418,7 +422,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    if (tsserver.sameFile(request.file_abs, request.target_abs)) return error.SameFile;
+    const same_file = tsserver.sameFile(request.file_abs, request.target_abs);
+    if (same_file and !(paths.isCsharpPath(request.file_abs) and request.target_type != null)) return error.SameFile;
     const target_profile = registry.forPath(request.target_abs) orelse return error.UnsupportedLanguage;
     if (target_profile.modules == null) return error.UnsupportedLanguage;
     const target_exists = blk: {
@@ -434,9 +439,11 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const source = try loadSnapshot(w, request.file_abs);
     try opened.append(arena, source);
     if (source.profile.modules == null or source.profile.rename == null) return error.UnsupportedLanguage;
-    const target: ?*Snapshot = if (target_exists) try loadSnapshot(w, request.target_abs) else null;
+    const target: ?*Snapshot = if (target_exists and !same_file) try loadSnapshot(w, request.target_abs) else null;
     if (target) |t| try opened.append(arena, t);
 
+    if (paths.isPythonPath(request.file_abs)) return py_symbol_move.plan(w, request, source, target, &opened);
+    if (paths.isCsharpPath(request.file_abs)) return cs_symbol_move.plan(w, request, source, target, &opened);
     const ref = try symbol.Ref.parse(arena, request.ref_text);
     const moved = try locateMoved(arena, source, ref, request.expected_hash);
     const name = moved.name;
@@ -693,7 +700,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     return result;
 }
 
-const Output = struct {
+pub const Output = struct {
     abs: []const u8,
     before: ?*Snapshot,
     text: []const u8,
@@ -703,7 +710,7 @@ const Output = struct {
     holes: ?[]const symbol.Hole = null,
 };
 
-const Summary = struct {
+pub const Summary = struct {
     resolver: Resolver,
     fallback: ?anyerror,
     interface_change: bool,
@@ -729,7 +736,7 @@ fn typeOnlyBinder(snapshot: *const Snapshot, binder: Span) bool {
     return site.namespace == .type;
 }
 
-fn usesOutside(arena: Allocator, snapshot: *Snapshot, name: []const u8, cut: Span, binder: ?Span) !bool {
+pub fn usesOutside(arena: Allocator, snapshot: *Snapshot, name: []const u8, cut: Span, binder: ?Span) !bool {
     const resolution = try scope.resolveName(arena, snapshot, name);
     for (resolution.uses) |use| {
         if (use.span.start >= cut.start and use.span.end <= cut.end) continue;
@@ -756,7 +763,7 @@ fn targetImportsSame(w: Work, found: []const Import, target_abs: []const u8, loc
     return false;
 }
 
-fn proveMoved(after: *Snapshot, ref: symbol.Ref, expected: symbol.Hash, function: bool) !symbol.Hash {
+pub fn proveMoved(after: *Snapshot, ref: symbol.Ref, expected: symbol.Hash, function: bool) !symbol.Hash {
     const table = after.symbols() catch return error.MutationSyntaxInvalid;
     if (function) {
         const found = table.resolve(ref) catch return error.ContentHashMismatch;
@@ -767,7 +774,7 @@ fn proveMoved(after: *Snapshot, ref: symbol.Ref, expected: symbol.Hash, function
     return found.hash;
 }
 
-fn proveUnchanged(before: *Snapshot, after: *Snapshot, cut: Span, allow_moved: bool) !void {
+pub fn proveUnchanged(before: *Snapshot, after: *Snapshot, cut: Span, allow_moved: bool) !void {
     const a = try before.symbols();
     const b = after.symbols() catch return error.MutationSyntaxInvalid;
     var kept: usize = 0;
@@ -792,6 +799,19 @@ fn proveUnchanged(before: *Snapshot, after: *Snapshot, cut: Span, allow_moved: b
     }
     if (allow_moved) return;
     if (b.symbols.len != kept or b.declarations.len != kept_declarations) return error.BodyChanged;
+}
+
+pub fn buildFromGraph(gpa: Allocator, root: []const u8, outputs: []const Output, afters: []const *Snapshot, summary: Summary, opened: *std.ArrayList(*Snapshot)) !Plan {
+    const result = try build(gpa, root, outputs, afters, summary);
+    for (result.prepared) |p| {
+        const base = p.base orelse continue;
+        for (opened.items, 0..) |held, i| {
+            if (held != base) continue;
+            _ = opened.swapRemove(i);
+            break;
+        }
+    }
+    return result;
 }
 
 fn build(gpa: Allocator, root: []const u8, outputs: []const Output, afters: []const *Snapshot, summary: Summary) !Plan {

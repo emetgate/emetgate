@@ -383,6 +383,7 @@ pub const Workspace = struct {
         defer _ = self.resolve_scratch.reset(.retain_capacity);
         const scratch = self.resolve_scratch.allocator();
         if (module_paths.isPythonPath(importer)) return (try self.resolvePython(store, importer, spec)) orelse .external;
+        if (module_paths.isCsharpPath(importer)) return resolveCsharp(scratch, store, spec);
         if (module_paths.isRelative(spec)) {
             const dir = std.fs.path.dirnamePosix(importer) orelse "";
             const joined = (try join(scratch, dir, spec)) orelse return .external;
@@ -446,6 +447,21 @@ pub const Workspace = struct {
         return self.resolve(store, store.file(importer).path, spec);
     }
 };
+
+pub fn csharpName(spec: []const u8) []const u8 {
+    var name = std.mem.trim(u8, spec, " \t\r\n");
+    if (std.mem.indexOf(u8, name, "::")) |at| name = name[at + 2 ..];
+    if (std.mem.indexOfScalar(u8, name, '<')) |at| name = name[0..at];
+    return std.mem.trim(u8, name, " \t\r\n");
+}
+
+fn resolveCsharp(scratch: Allocator, store: *const Store, spec: []const u8) Allocator.Error!SpecTarget {
+    const name = csharpName(spec);
+    const types = try store.declaring(scratch, name, .type);
+    if (types.len != 0) return .{ .file = types[0] };
+    const namespaces = try store.declaring(scratch, name, .namespace);
+    return if (namespaces.len != 0) .namespace else .external;
+}
 
 fn underDir(path: []const u8, dir: []const u8) bool {
     if (dir.len == 0) return true;

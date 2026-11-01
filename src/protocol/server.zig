@@ -133,19 +133,20 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_move",
-        .description = "Moves a top-level declaration to target_file, rewriting imports, gated. Exports need interface_change:true, side effects order_change:true.",
+        .description = "Moves a top-level declaration, a C# type, or a static C# member with target_type to target_file, rewriting imports and references, gated. Exports need interface_change:true, side effects order_change:true.",
         .props = &.{
-            .{ .name = "file", .desc = "TS or JS file declaring it" },
+            .{ .name = "file", .desc = "TS, JS, Python or C# file declaring it" },
             .{ .name = "symbol", .desc = "" },
             .{ .name = "hash", .desc = "" },
             .{ .name = "target_file", .desc = "" },
+            .{ .name = "target_type", .desc = "C#: the type receiving a static member", .optional = true },
             .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "order_change", .desc = "", .optional = true, .ty = "boolean" },
         },
     },
     .{
         .name = "emetgate_move_file",
-        .description = "Moves a TS/JS file, rewriting relative imports, gated; one named in package.json or tsconfig paths needs interface_change:true.",
+        .description = "Moves a TS, JS, Python or C# file, rewriting importers, gated; a C# namespace follows only when it follows the folders, and the reply says when it stays. One named in package.json, tsconfig paths or pyproject needs interface_change:true.",
         .props = &.{
             .{ .name = "from", .desc = "" },
             .{ .name = "to", .desc = "must not exist" },

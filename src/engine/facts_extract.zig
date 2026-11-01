@@ -247,9 +247,9 @@ const Extractor = struct {
     fn collectImports(self: *Extractor) Error!void {
         const imported = try modules.imports(self.arena, self.snapshot);
         for (imported) |entry| {
-            self.module_mode = true;
+            if (self.f.using_directive == null) self.module_mode = true;
             const spec: u32 = @intCast(self.specs.items.len);
-            try self.specs.append(self.arena, .{ .text = try self.keep(entry.spec), .line = self.lineAt(entry.statement.start), .kind = .static });
+            try self.specs.append(self.arena, .{ .text = try self.keep(entry.spec), .line = self.lineAt(entry.statement.start), .kind = entry.spec_kind, .scope = try self.keep(entry.spec_scope), .global = entry.global });
             switch (entry.form) {
                 .bare => {},
                 .import => {
@@ -297,7 +297,7 @@ const Extractor = struct {
         const separator: []const u8 = if (package[package.len - 1] == '.') "" else ".";
         const joined = try std.mem.concat(self.arena, u8, &.{ package, separator, name });
         self.bindings.items[binding].submodule = @intCast(self.specs.items.len);
-        try self.specs.append(self.arena, .{ .text = joined, .line = self.lineAt(start), .kind = .static });
+        try self.specs.append(self.arena, .{ .text = joined, .line = self.lineAt(start), .kind = .submodule });
     }
 
     fn addImportRef(self: *Extractor, name: []const u8, start: u32, binding: u32) Error!void {
@@ -957,6 +957,7 @@ const Extractor = struct {
             .dynamic_reads = self.dynamic_reads,
             .module_mode = self.module_mode,
             .parse_errors = self.snapshot.tree.root().hasError(),
+            .namespaces = if (self.f.using_directive != null) (try modules.csharpModule(self.arena, self.snapshot)).declared else &.{},
         };
     }
 };

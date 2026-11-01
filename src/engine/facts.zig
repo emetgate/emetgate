@@ -114,12 +114,19 @@ pub const Ref = struct {
     static: bool = false,
 };
 
-pub const SpecKind = enum(u8) { static, dynamic };
+pub const SpecKind = enum(u8) { static, dynamic, submodule, using, using_static, using_alias };
 
 pub const Spec = struct {
     text: []const u8,
     line: u32,
     kind: SpecKind,
+    scope: []const u8 = "",
+    global: bool = false,
+};
+
+pub const Declared = struct {
+    namespace: []const u8,
+    name: []const u8,
 };
 
 pub const namespace_name = "*";
@@ -202,6 +209,7 @@ pub const FileFacts = struct {
     parse_errors: bool,
     outline: []const Outline = &.{},
     tests: []const TestBlock = &.{},
+    namespaces: []const Declared = &.{},
 };
 
 const Copier = struct {
@@ -236,6 +244,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
     for (from.specs, specs) |s, *slot| {
         slot.* = s;
         slot.text = try c.str(s.text);
+        slot.scope = try c.str(s.scope);
     }
     const bindings = try arena.alloc(Binding, from.bindings.len);
     for (from.bindings, bindings) |b, *slot| {
@@ -268,6 +277,11 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         slot.* = t;
         slot.title = try c.str(t.title);
     }
+    const namespaces = try arena.alloc(Declared, from.namespaces.len);
+    for (from.namespaces, namespaces) |n, *slot| {
+        slot.namespace = try c.str(n.namespace);
+        slot.name = try c.str(n.name);
+    }
     c.strings.deinit(arena);
     return .{
         .defs = defs,
@@ -284,6 +298,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         .parse_errors = from.parse_errors,
         .outline = try arena.dupe(Outline, from.outline),
         .tests = tests,
+        .namespaces = namespaces,
     };
 }
 

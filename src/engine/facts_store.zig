@@ -39,6 +39,7 @@ pub const SpecTarget = union(enum) {
     external,
     not_found,
     unindexed,
+    namespace,
 };
 
 pub const Resolver = struct {
@@ -101,6 +102,8 @@ pub const empty_facts: facts.FileFacts = .{
     .parse_errors = false,
 };
 
+pub const DeclaredKind = enum(u32) { namespace, type };
+
 pub const LooseKey = struct {
     file: u32,
     gen: u32,
@@ -158,6 +161,7 @@ pub const Store = struct {
     unresolved_by_name: std.StringHashMapUnmanaged(std.ArrayList(RefKey)) = .empty,
     loose_by_name: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
     token_files: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
+    namespace_names: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
     rdeps: std.AutoHashMapUnmanaged(FileId, std.ArrayList(FileId)) = .empty,
     importers: std.AutoHashMapUnmanaged(FileId, std.ArrayList(FileId)) = .empty,
     root: facts.Hash = std.mem.zeroes(facts.Hash),
@@ -177,6 +181,7 @@ pub const Store = struct {
         deinitLists(RefKey, self.gpa, &self.unresolved_by_name);
         deinitLists(LooseKey, self.gpa, &self.loose_by_name);
         deinitLists(LooseKey, self.gpa, &self.token_files);
+        deinitLists(LooseKey, self.gpa, &self.namespace_names);
         deinitIdLists(self.gpa, &self.rdeps);
         deinitIdLists(self.gpa, &self.importers);
         self.paths.deinit();
@@ -310,6 +315,43 @@ pub const Store = struct {
             if (!entry.found_existing) entry.value_ptr.* = .empty;
             try entry.value_ptr.append(self.gpa, .{ .file = id, .gen = state.facts_gen, .count = 0 });
         }
+        for (state.facts.namespaces) |declared| try self.addNamespaceNames(id, state.facts_gen, declared);
+    }
+
+    fn addNamespaceName(self: *Store, id: FileId, gen: u32, name: []const u8, kind: DeclaredKind) !void {
+        if (name.len == 0) return;
+        const interned = try self.internName(name);
+        const entry = try self.namespace_names.getOrPut(self.gpa, interned);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.gpa, .{ .file = id, .gen = gen, .count = @intFromEnum(kind) });
+    }
+
+    fn addNamespaceNames(self: *Store, id: FileId, gen: u32, declared: facts.Declared) !void {
+        var end = declared.namespace.len;
+        while (end != 0) {
+            try self.addNamespaceName(id, gen, declared.namespace[0..end], .namespace);
+            end = std.mem.lastIndexOfScalar(u8, declared.namespace[0..end], '.') orelse 0;
+        }
+        if (declared.name.len == 0) return;
+        if (declared.namespace.len == 0) return self.addNamespaceName(id, gen, declared.name, .type);
+        const full = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ declared.namespace, declared.name });
+        defer self.gpa.free(full);
+        try self.addNamespaceName(id, gen, full, .type);
+    }
+
+    pub fn declaring(self: *const Store, gpa: Allocator, name: []const u8, kind: DeclaredKind) ![]FileId {
+        var out: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
+        defer out.deinit(gpa);
+        const list = self.namespace_names.get(name) orelse return gpa.alloc(FileId, 0);
+        for (list.items) |key| {
+            if (key.count != @intFromEnum(kind)) continue;
+            const state = &self.files.items[key.file];
+            if (state.status != .indexed or state.facts_gen != key.gen) continue;
+            try out.put(gpa, key.file, {});
+        }
+        const ids = try gpa.dupe(FileId, out.keys());
+        std.mem.sort(FileId, ids, self, pathLess);
+        return ids;
     }
 
     pub fn markUnindexed(self: *Store, id: FileId, status: Status, note: []const u8, tokens: []const []const u8) !bool {
@@ -471,6 +513,7 @@ pub const Store = struct {
                     if (first_failure == null) first_failure = .unindexed_module;
                     continue;
                 },
+                .namespace => continue,
             };
             const found = try self.resolveExport(target, name, visit);
             switch (found) {
@@ -492,6 +535,7 @@ pub const Store = struct {
             .external => return self.submoduleOf(id, binding, .{ .unresolved = .external_module }, visit),
             .not_found => return self.submoduleOf(id, binding, .{ .unresolved = .module_not_found }, visit),
             .unindexed => return .{ .unresolved = .unindexed_module },
+            .namespace => return .{ .unresolved = .global },
         };
         if (std.mem.eql(u8, binding.imported, facts.namespace_name)) {
             try visit.files.append(self.gpa, target);
@@ -632,9 +676,21 @@ pub const Store = struct {
         if (state.status != .indexed) return;
         const spec_targets = try self.gpa.alloc(SpecTarget, state.facts.specs.len);
         errdefer self.gpa.free(spec_targets);
-        for (state.facts.specs, spec_targets) |spec, *slot| slot.* = try resolver.resolve(self, id, spec.text);
+        for (state.facts.specs, spec_targets) |spec, *slot| slot.* = try self.resolveSpec(id, spec, resolver);
         self.gpa.free(state.spec_targets);
         state.spec_targets = spec_targets;
+    }
+
+    fn resolveSpec(self: *Store, id: FileId, spec: facts.Spec, resolver: Resolver) !SpecTarget {
+        var scope = spec.scope;
+        while (scope.len != 0) {
+            const joined = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ scope, spec.text });
+            defer self.gpa.free(joined);
+            const target = try resolver.resolve(self, id, joined);
+            if (target != .external) return target;
+            scope = scope[0 .. std.mem.lastIndexOfScalar(u8, scope, '.') orelse 0];
+        }
+        return resolver.resolve(self, id, spec.text);
     }
 
     pub fn link(self: *Store, id: FileId, resolver: Resolver) !void {
@@ -720,6 +776,12 @@ pub const Store = struct {
             const more = try self.dependents(self.gpa, id);
             defer self.gpa.free(more);
             for (more) |d| try todo.put(self.gpa, d, {});
+            const profile = self.files.items[id].profile orelse continue;
+            const f = profile.facts orelse continue;
+            if (f.using_directive == null) continue;
+            for (self.files.items, 0..) |*state, other| {
+                if (state.status == .indexed and state.profile == profile and state.facts.specs.len != 0) try todo.put(self.gpa, @intCast(other), {});
+            }
         }
         for (todo.keys()) |id| try self.resolveSpecs(id, resolver);
         for (todo.keys()) |id| try self.linkRefs(id);
@@ -824,7 +886,16 @@ fn signatureOf(found: facts.FileFacts) facts.Hash {
     hasher.update("\x01specs");
     for (found.specs) |s| {
         hasher.update(s.text);
-        hasher.update(&.{ 0, @intFromEnum(s.kind) });
+        hasher.update(&.{ 0, @intFromEnum(s.kind), @intFromBool(s.global) });
+        hasher.update(s.scope);
+        hasher.update(&.{0});
+    }
+    hasher.update("\x01namespaces");
+    for (found.namespaces) |n| {
+        hasher.update(n.namespace);
+        hasher.update(&.{0});
+        hasher.update(n.name);
+        hasher.update(&.{0});
     }
     hasher.update("\x01bindings");
     for (found.bindings) |b| {

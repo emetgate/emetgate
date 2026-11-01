@@ -4,6 +4,7 @@ const emetgate = @import("emetgate");
 const fact_store = emetgate.fact_store;
 const fact_file = emetgate.fact_file;
 const facts = emetgate.facts;
+const facts_store = emetgate.facts_store;
 const facts_query = emetgate.facts_query;
 const facts_evidence = emetgate.facts_evidence;
 const evidence = emetgate.evidence;
@@ -641,4 +642,95 @@ test "fact store: a saved store keeps the submodule a Python from-import may nam
     const sub = loaded.bindings[1].submodule;
     try testing.expect(sub != facts.none);
     try testing.expectEqualStrings("p.m", loaded.specs[sub].text);
+}
+
+fn targetOf(repo: *fact_store.Repo, path: []const u8, spec_text: []const u8) !facts_store.SpecTarget {
+    for (repo.store.files.items) |state| {
+        if (!std.mem.eql(u8, state.path, path)) continue;
+        for (state.facts.specs, state.spec_targets) |spec, target| {
+            if (std.mem.eql(u8, spec.text, spec_text)) return target;
+        }
+    }
+    return error.TestExpectedEqual;
+}
+
+test "fact store: csharp usings resolve to a namespace, a type's file or outside the repo" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "src/Cart.cs", .data = "namespace Shop.Models;\n\npublic static class Cart\n{\n    public static int Make() { return 1; }\n}\n" },
+        .{ .path = "src/Use.cs", .data = "using System;\nusing Shop.Models;\nusing static Shop.Models.Cart;\nusing C = Shop.Models.Cart;\n\nnamespace Shop;\n\npublic class Use\n{\n    public int Go() { return Make(); }\n}\n" },
+        .{ .path = "src/Scoped.cs", .data = "namespace Shop\n{\n    using Models;\n\n    public class Scoped\n    {\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expect(try targetOf(repo, "src/Use.cs", "System") == .external);
+    try testing.expect(try targetOf(repo, "src/Use.cs", "Shop.Models") == .namespace);
+    const static_target = try targetOf(repo, "src/Use.cs", "Shop.Models.Cart");
+    try testing.expect(static_target == .file);
+    try testing.expectEqualStrings("src/Cart.cs", repo.store.file(static_target.file).path);
+    try testing.expect(try targetOf(repo, "src/Scoped.cs", "Models") == .namespace);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const declaring = try repo.store.declaring(arena.allocator(), "Shop.Models", .namespace);
+    try testing.expectEqual(@as(usize, 1), declaring.len);
+    try testing.expectEqualStrings("src/Cart.cs", repo.store.file(declaring[0]).path);
+}
+
+test "fact store: a csharp using follows a namespace that appears or disappears on refresh" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "src/Cart.cs", .data = "namespace Shop.Models;\n\npublic class Cart\n{\n}\n" },
+        .{ .path = "src/Use.cs", .data = "using Shop.Models;\n\npublic class Use\n{\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expect(try targetOf(repo, "src/Use.cs", "Shop.Models") == .namespace);
+    _ = try repo.updateSource("src/Cart.cs", "namespace Shop.Other;\n\npublic class Cart\n{\n}\n");
+    try testing.expect(try targetOf(repo, "src/Use.cs", "Shop.Models") == .external);
+}
+
+test "fact store: csharp usings survive a store round trip" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "src/Cart.cs", .data = "namespace Shop.Models;\n\npublic class Cart\n{\n}\n" },
+        .{ .path = "src/Use.cs", .data = "using Shop.Models;\n\npublic class Use\n{\n}\n" },
+    });
+    defer fixture.deinit();
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        _ = try repo.refresh();
+    }
+    const again = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer again.deinit();
+    _ = try again.refresh();
+    try testing.expect(try targetOf(again, "src/Use.cs", "Shop.Models") == .namespace);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expectEqual(@as(usize, 1), (try again.store.declaring(arena.allocator(), "Shop.Models", .namespace)).len);
+}
+
+test "fact store: a python name inside a module resolves to the module, not to a repo-external package" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "pkg/__init__.py", .data = "" },
+        .{ .path = "pkg/cart.py", .data = "class Cart:\n    pass\n" },
+        .{ .path = "pkg/app.py", .data = "from pkg.cart import Cart\nimport os\n\ndef run():\n    return Cart(), os.getcwd()\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const cart = try targetOf(repo, "pkg/app.py", "pkg.cart");
+    try testing.expect(cart == .file);
+    try testing.expectEqualStrings("pkg/cart.py", repo.store.file(cart.file).path);
+    try testing.expect(try targetOf(repo, "pkg/app.py", "os") == .external);
 }

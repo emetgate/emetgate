@@ -2,6 +2,9 @@ const std = @import("std");
 const repo_mod = @import("../platform/repo.zig");
 const io_seam = @import("../platform/io_seam.zig");
 const fact_store = @import("../platform/fact_store.zig");
+const fact_modules = @import("../platform/fact_modules.zig");
+const facts = @import("../engine/facts.zig");
+const facts_store = @import("../engine/facts_store.zig");
 const worker_pool = @import("../platform/worker_pool.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_evidence = @import("../engine/facts_evidence.zig");
@@ -192,6 +195,7 @@ fn modules(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
     for (repo.store.files.items) |state| {
         if (state.status != .indexed or !std.mem.startsWith(u8, state.path, prefix)) continue;
         for (state.facts.specs, state.spec_targets) |spec, target| {
+            if (spec.kind == .submodule and target != .file) continue;
             var js: std.json.Stringify = .{ .writer = out };
             try js.beginObject();
             try js.objectField("file");
@@ -205,11 +209,34 @@ fn modules(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {
             }
             try js.objectField("status");
             try js.write(@tagName(target));
+            if (target == .namespace) {
+                const ids = try namespaceFiles(repo, spec);
+                defer repo.store.gpa.free(ids);
+                try js.objectField("files");
+                try js.beginArray();
+                for (ids) |id| try js.write(repo.store.file(id).path);
+                try js.endArray();
+            }
             try js.endObject();
             try out.writeByte('\n');
         }
     }
     return 0;
+}
+
+fn namespaceFiles(repo: *fact_store.Repo, spec: facts.Spec) ![]facts_store.FileId {
+    const gpa = repo.store.gpa;
+    const name = fact_modules.csharpName(spec.text);
+    var scope = spec.scope;
+    while (scope.len != 0) {
+        const joined = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ scope, name });
+        defer gpa.free(joined);
+        const ids = try repo.store.declaring(gpa, joined, .namespace);
+        if (ids.len != 0) return ids;
+        gpa.free(ids);
+        scope = scope[0 .. std.mem.lastIndexOfScalar(u8, scope, '.') orelse 0];
+    }
+    return repo.store.declaring(gpa, name, .namespace);
 }
 
 fn defs(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {

@@ -38,7 +38,7 @@ pub const Existing = struct {
     virtual: []const []const u8 = &.{},
     removed: []const []const u8 = &.{},
 
-    fn has(self: Existing, path: []const u8) bool {
+    pub fn has(self: Existing, path: []const u8) bool {
         for (self.removed) |r| if (tsserver.sameFile(r, path)) return false;
         for (self.virtual) |v| if (tsserver.sameFile(v, path)) return true;
         std.Io.Dir.cwd().access(self.io, path, .{}) catch return false;
@@ -89,6 +89,10 @@ pub fn isPythonPath(path: []const u8) bool {
         if (std.ascii.endsWithIgnoreCase(path, ext)) return true;
     }
     return false;
+}
+
+pub fn isCsharpPath(path: []const u8) bool {
+    return std.ascii.endsWithIgnoreCase(path, ".cs");
 }
 
 pub fn resolveJoinedPython(gpa: Allocator, lookup: anytype, joined: []const u8, separator: u8) !?[]u8 {

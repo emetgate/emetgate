@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 6;
+pub const version: u32 = 7;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
@@ -189,6 +189,8 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.str(s.text);
         try e.varint(s.line);
         try e.byte(@intFromEnum(s.kind));
+        try e.str(s.scope);
+        try e.byte(@intFromBool(s.global));
     }
     try e.varint(f.bindings.len);
     for (f.bindings) |b| {
@@ -249,6 +251,11 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.varint(if (t.parent == none) 0 else i - t.parent);
         previous = t.start;
     }
+    try e.varint(f.namespaces.len);
+    for (f.namespaces) |n| {
+        try e.str(n.namespace);
+        try e.str(n.name);
+    }
 }
 
 fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
@@ -289,11 +296,13 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         r.target = try d.target();
         r.static = try d.flag();
     }
-    const specs = try a.alloc(facts.Spec, try d.count(3));
+    const specs = try a.alloc(facts.Spec, try d.count(5));
     for (specs) |*s| {
         s.text = try d.str();
         s.line = try d.int();
         s.kind = try d.enumOf(facts.SpecKind);
+        s.scope = try d.str();
+        s.global = try d.flag();
     }
     const bindings = try a.alloc(facts.Binding, try d.count(5));
     for (bindings) |*b| {
@@ -369,7 +378,13 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         if (t.parent != none and (tests[t.parent].start > t.start or tests[t.parent].end < t.end)) return error.Corrupt;
         previous = t.start;
     }
+    const namespaces = try a.alloc(facts.Declared, try d.count(2));
+    for (namespaces) |*n| {
+        n.namespace = try d.str();
+        n.name = try d.str();
+    }
     const found: facts.FileFacts = .{
+        .namespaces = namespaces,
         .defs = defs,
         .refs = refs,
         .specs = specs,
@@ -468,6 +483,7 @@ pub fn encode(gpa: Allocator, repo: *fact_store.Repo) ![]u8 {
                     .external => try e.byte(1),
                     .not_found => try e.byte(2),
                     .unindexed => try e.byte(3),
+                    .namespace => try e.byte(4),
                 };
                 try e.varint(state.deps.len);
                 for (state.deps) |dep| try e.varint(dep);
@@ -594,6 +610,7 @@ pub fn decode(repo: *fact_store.Repo, body: []const u8) DecodeError!void {
                     1 => .external,
                     2 => .not_found,
                     3 => .unindexed,
+                    4 => .namespace,
                     else => return error.Corrupt,
                 };
             }

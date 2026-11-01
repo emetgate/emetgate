@@ -17161,6 +17161,42 @@
       "kills": [
         "context epoch: --mirror trusts the mirror without an epoch, the default and --no-mirror do not"
       ]
+    },
+    {
+      "id": "PY1-trailing-dot-import-is-a-module",
+      "file": "src/platform/py_modules.zig",
+      "from": "    if (name.len == 0) return arena.dupe(u8, spec);\n",
+      "to": "",
+      "kills": [
+        "python move: importers of every form follow a function to its new module"
+      ]
+    },
+    {
+      "id": "PY2-attribute-assignment-runs-at-import",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "        return !std.mem.eql(u8, left.kind(), \"identifier\");\n",
+      "to": "        return std.mem.eql(u8, left.kind(), \"\");\n",
+      "kills": [
+        "python move: code that runs at import needs order_change"
+      ]
+    },
+    {
+      "id": "PY3-default-argument-runs-at-import",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .eager_parameters = true,\n",
+      "to": "",
+      "kills": [
+        "python move: code that runs at import needs order_change"
+      ]
+    },
+    {
+      "id": "CS1-a-mention-must-resolve-the-same",
+      "file": "src/platform/cs_modules.zig",
+      "from": "        if (!expected.eql(now)) return if (now == .ns or now == .ambiguous) error.CsAmbiguousType else error.IncompleteMove;\n",
+      "to": "        if (!expected.eql(now) and false) return error.IncompleteMove;\n",
+      "kills": [
+        "csharp move_file: a using that would make another name ambiguous is refused"
+      ]
     }
   ]
 }

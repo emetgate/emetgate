@@ -19,6 +19,28 @@ fn grammar() *const ts.Language {
     return tree_sitter_python().?;
 }
 
+const quiet_statements = [_][]const u8{ "string", "concatenated_string", "comment", "ellipsis", "pass_statement", "import_statement", "import_from_statement", "future_import_statement", "function_definition", "type_alias_statement" };
+
+fn loudStatement(statement: ts.Node) bool {
+    const kind = statement.kind();
+    for (quiet_statements) |quiet| {
+        if (std.mem.eql(u8, kind, quiet)) return false;
+    }
+    if (std.mem.eql(u8, kind, "assignment")) {
+        const left = statement.namedChild(0) orelse return true;
+        return !std.mem.eql(u8, left.kind(), "identifier");
+    }
+    if (std.mem.eql(u8, kind, "class_definition")) {
+        const body = statement.childByField("body") orelse return true;
+        var i: u32 = 0;
+        while (body.namedChild(i)) |member| : (i += 1) {
+            if (loudStatement(member)) return true;
+        }
+        return false;
+    }
+    return true;
+}
+
 const function_nodes = [_]FunctionNode{
     .{ .node = "function_definition", .kind = .declaration },
     .{ .node = "lambda", .kind = .arrow },
@@ -83,6 +105,8 @@ pub const profile: Profile = .{
     .bodyless_terminator = null,
     .empty_body = "...",
     .expression_statement = "expression_statement",
+    .loud_statement = loudStatement,
+    .eager_parameters = true,
     .prose_strings = &.{},
     .directives = &.{},
     .literal_values = literal_values,
