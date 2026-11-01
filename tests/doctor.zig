@@ -71,10 +71,12 @@ test "doctor: the test command lockdown will use comes from the emetgate server'
     const found = try doctor.serverTest(testing.allocator, config);
     defer testing.allocator.free(found.given);
     try testing.expectEqualStrings("npm test", found.given);
+    try testing.expect(found.names_test);
     try testing.expect(found.allow_repo_config);
 
     const bare = try doctor.serverTest(testing.allocator, "{\"mcpServers\": {\"emetgate\": {\"command\": \"emetgate\", \"args\": [\"mcp\"]}}}");
     try testing.expectEqualStrings("", bare.given);
+    try testing.expect(!bare.names_test);
     try testing.expect(!bare.allow_repo_config);
 
     try testing.expectError(error.McpConfigInvalid, doctor.serverTest(testing.allocator, "{not json"));
@@ -184,7 +186,7 @@ test "doctor: in a repository with a Unicode, spaced path the repo, tests, write
     try testing.expect(hasLine(text, "FAIL  claude    "));
 }
 
-test "doctor: a repository with no test command fails the tests check before lockdown starts" {
+test "doctor: a repository with no tests to find warns that writes land unverified and does not fail" {
     var place = try Place.make("no tests");
     defer place.deinit();
     try git_fixture.initRepo(place.dir);
@@ -193,7 +195,46 @@ test "doctor: a repository with no test command fails the tests check before loc
     try testing.expectEqual(@as(u8, 1), try place.run(&out.writer));
     const text = out.written();
     try testing.expect(hasLine(text, "ok    .mcp.json none here"));
-    try testing.expect(hasLine(text, "FAIL  tests     no test command"));
+    try testing.expect(hasLine(text, "warn  tests     none found"));
+    try testing.expect(std.mem.indexOf(u8, text, "unverified_no_tests") != null);
+    try testing.expect(!hasLine(text, "FAIL  tests"));
+}
+
+test "doctor: with no --test it reports the command lockdown will detect, with or without an .mcp.json" {
+    const configs = [_]?[]const u8{
+        null,
+        "{\"mcpServers\": {\"emetgate\": {\"command\": \"emetgate\", \"args\": [\"mcp\"]}}}",
+        "{\"mcpServers\": {\"emetgate\": {\"command\": \"emetgate\", \"args\": [\"mcp\", \"--detect-test\"]}}}",
+    };
+    for (configs) |config| {
+        var place = try Place.make("detected tests");
+        defer place.deinit();
+        try git_fixture.initRepo(place.dir);
+        var dir = try std.Io.Dir.cwd().openDir(testing.io, place.dir, .{});
+        defer dir.close(testing.io);
+        try dir.writeFile(testing.io, .{ .sub_path = "go.mod", .data = "module x\n" });
+        if (config) |data| try dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = data });
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        _ = try place.run(&out.writer);
+        const text = out.written();
+        try testing.expect(std.mem.indexOf(u8, text, "tests     \"go test ./...\"") != null);
+        try testing.expect(!hasLine(text, "FAIL  tests"));
+    }
+}
+
+test "doctor: an empty --test is not detected, because lockdown adds no detection beside it" {
+    var place = try Place.make("empty test");
+    defer place.deinit();
+    try git_fixture.initRepo(place.dir);
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, place.dir, .{});
+    defer dir.close(testing.io);
+    try dir.writeFile(testing.io, .{ .sub_path = "go.mod", .data = "module x\n" });
+    try dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = "{\"mcpServers\": {\"emetgate\": {\"command\": \"emetgate\", \"args\": [\"mcp\", \"--test\", \"\"]}}}" });
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    _ = try place.run(&out.writer);
+    try testing.expect(hasLine(out.written(), "FAIL  tests     no test command"));
 }
 
 test "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up" {

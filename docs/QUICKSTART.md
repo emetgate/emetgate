@@ -31,9 +31,9 @@ Open a **new** terminal, then `emetgate --version` should print the version.
 
 You also need [Claude Code](https://docs.claude.com/en/docs/claude-code) signed in (`irm https://claude.ai/install.ps1 | iex`, then `claude auth login`) and [Git](https://git-scm.com/download/win) (`winget install --id Git.Git -e`).
 
-## 3. Tell emetgate how to run your tests
+## 3. Check how your tests run
 
-Every write the model makes is applied to a copy of your repository and kept only if your tests pass there. Without a test command, lockdown still starts, but every write is refused with `NoTestCommand`. In the root of your repository:
+Every write the model makes is applied to a copy of your repository and kept only if your tests pass there. Lockdown finds the test command itself, in the root of your repository: `scripts.test` in `package.json`, `build.zig`, `Cargo.toml`, `go.mod`, a Python project, a .NET solution or project. If it finds none, writes still land, marked `unverified_no_tests`. To name the command yourself:
 
 ```powershell
 claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
