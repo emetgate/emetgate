@@ -9,6 +9,8 @@ const Io = std.Io;
 const expect_mutant_env = "EMETGATE_EXPECT_MUTANT";
 const mutant_probe = "runner: the active mutant is the one the runner was given";
 const idle_mutant: u32 = 4_000_000_007;
+const crash_probe_env = "EMETGATE_CRASH_PROBE";
+const crash_probe = "runner: crash probe ";
 
 const sample = [_][]const u8{ "a.test.one", "a.test.two", "b.test.three", "b.test.four", "c.test.five", "c.test.six", "c.test.seven" };
 
@@ -253,6 +255,48 @@ test "runner: --jobs runs every selected test once across its shards" {
         const line = try std.fmt.allocPrint(arena, "{d}/{d} tests passed; 0 skipped; 0 failed; 0 leaked; mutant {d}; {s} shard(s)", .{ wanted, wanted, runner.emetgate_mutant, jobs });
         try testing.expect(std.mem.indexOf(u8, result.stderr, line) != null);
     }
+}
+
+fn crashWhenAsked() !void {
+    const asked = testing.environ.getAlloc(testing.allocator, crash_probe_env) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => return,
+        else => return err,
+    };
+    testing.allocator.free(asked);
+    @panic("crash probe");
+}
+
+test "runner: crash probe one" {
+    try crashWhenAsked();
+}
+
+test "runner: crash probe two" {
+    try crashWhenAsked();
+}
+
+test "runner: crash probe three" {
+    try crashWhenAsked();
+}
+
+test "runner: crash probe four" {
+    try crashWhenAsked();
+}
+
+test "runner: tests left in the queue still run after every shard crashed, and each crash is named and recorded" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var env = try testing.environ.createMap(arena);
+    try env.put(crash_probe_env, "1");
+    const result = try selfRun(arena, &.{ "--jobs", "2", "--filter", crash_probe }, &env);
+    errdefer std.debug.print("{s}\n", .{result.stderr});
+    try testing.expectEqual(@as(?u8, 1), exitCode(result.term));
+    for ([_][]const u8{ "one", "two", "three", "four" }) |name| {
+        const line = try std.fmt.allocPrint(arena, "error: 'tests.test_runner_harness.test.{s}{s}' failed: crashed in shard", .{ crash_probe, name });
+        try testing.expect(std.mem.indexOf(u8, result.stderr, line) != null);
+    }
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "no shard ran") == null);
+    try testing.expect(std.mem.indexOf(u8, result.stderr, "more than one shard ran") == null);
 }
 
 fn probeMutant() u32 {

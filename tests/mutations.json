@@ -4511,12 +4511,21 @@
       ]
     },
     {
-      "id": "RN3-a-shard-left-out",
+      "id": "RN3-queue-left-after-every-shard-crashed",
       "file": "tools/test_runner.zig",
-      "from": "const shards = gpa.alloc(ShardRun, options.jobs) catch oom();",
-      "to": "const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom();",
+      "from": "if (!crashed or remaining == 0 or remaining >= left) break;",
+      "to": "if (true) break;",
       "kills": [
-        "runner: --jobs runs every selected test once across its shards"
+        "runner: tests left in the queue still run after every shard crashed, and each crash is named and recorded"
+      ]
+    },
+    {
+      "id": "RN15-crashing-shard-loses-its-record",
+      "file": "tools/test_runner.zig",
+      "from": "if (record_file != null) recordClaim(&record_writer.interface, index) catch |err| {",
+      "to": "if (false) recordClaim(&record_writer.interface, index) catch |err| {",
+      "kills": [
+        "runner: tests left in the queue still run after every shard crashed, and each crash is named and recorded"
       ]
     },
     {
@@ -10545,7 +10554,7 @@
       "id": "P1e-journal-recover-restores-over-any-target",
       "file": "src/platform/disk.zig",
       "from": "    const ours = new_hash orelse return guard.renameReplacing(gpa, target_abs);\n",
-      "to": "    if (true) return guard.renameReplacing(gpa, target_abs);\n    const ours = new_hash orelse return;\n",
+      "to": "    if (new_hash == null or new_hash != null) return guard.renameReplacing(gpa, target_abs);\n    const ours = new_hash orelse return;\n",
       "kills": [
         "journal base: recover does not put the old bytes back over a file the user edited after the crash",
         "journal base: recover does not put the old bytes back over a file the user created where the crash left none"
@@ -16526,8 +16535,7 @@
       "to": "",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
-        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },
     {
