@@ -72,6 +72,7 @@ pub fn loggedIn(gpa: Allocator, stdout: []const u8) ?bool {
 
 pub const ServerTest = struct {
     given: []const u8 = "",
+    names_test: bool = false,
     allow_repo_config: bool = false,
 };
 
@@ -90,7 +91,9 @@ pub fn serverTest(gpa: Allocator, mcp_config: []const u8) !ServerTest {
         for (args, 0..) |arg, i| {
             if (arg != .string) continue;
             if (std.mem.eql(u8, arg.string, "--allow-repo-config")) found.allow_repo_config = true;
-            if (std.mem.eql(u8, arg.string, "--test") and i + 1 < args.len and args[i + 1] == .string) {
+            if (!std.mem.eql(u8, arg.string, "--test")) continue;
+            found.names_test = true;
+            if (i + 1 < args.len and args[i + 1] == .string) {
                 found.given = try gpa.dupe(u8, args[i + 1].string);
             }
         }
@@ -99,13 +102,19 @@ pub fn serverTest(gpa: Allocator, mcp_config: []const u8) !ServerTest {
     return .{};
 }
 
+const name_test_command = "claude mcp add --scope project emetgate -- emetgate mcp --test \"npm test\"";
+
 pub fn testFailure(err: anyerror) Check {
     return switch (err) {
-        error.NoTestCommand => .{ .name = "tests", .status = .fail, .detail = "no test command: lockdown starts, but every write is refused with NoTestCommand", .fix = "claude mcp add --scope project emetgate -- emetgate mcp --test \"npm test\"" },
+        error.NoTestCommand => .{ .name = "tests", .status = .fail, .detail = "no test command: lockdown starts, but every write is refused with NoTestCommand", .fix = name_test_command },
         error.UntrustedRepoConfig => .{ .name = "tests", .status = .fail, .detail = ".emetgaterc.json names the test command, but the server is not started with --allow-repo-config", .fix = "claude mcp add --scope project emetgate -- emetgate mcp --allow-repo-config" },
         error.InvalidConfig => .{ .name = "tests", .status = .fail, .detail = ".emetgaterc.json is not valid JSON", .fix = "repair .emetgaterc.json, e.g. {\"test_cmd\": \"npm test\"}" },
         else => .{ .name = "tests", .status = .fail, .detail = @errorName(err) },
     };
+}
+
+pub fn noTestsFound() Check {
+    return .{ .name = "tests", .status = .warn, .detail = "none found: writes land without a test run, marked unverified_no_tests", .fix = name_test_command };
 }
 
 pub fn mcpConfigFailure(err: anyerror) Check {
@@ -238,17 +247,19 @@ fn mcpAndTests(arena: Allocator, io: std.Io, probe: Probe, root: ?[]const u8, ch
         };
         try checks.append(arena, .{ .name = ".mcp.json", .status = .ok, .detail = "one emetgate server" });
     } else |err| switch (err) {
-        error.FileNotFound => try checks.append(arena, .{ .name = ".mcp.json", .status = .ok, .detail = "none here; lockdown uses its own (emetgate mcp, no --test)" }),
+        error.FileNotFound => try checks.append(arena, .{ .name = ".mcp.json", .status = .ok, .detail = "none here; lockdown uses its own and finds the tests itself" }),
         else => {
             try checks.append(arena, mcpConfigFailure(err));
             return .{ .name = "tests", .status = .fail, .detail = "skipped: .mcp.json could not be read" };
         },
     }
     if (root == null) return .{ .name = "tests", .status = .fail, .detail = "skipped: needs a git repository" };
-    const command = test_command.resolveTestCommand(arena, io, config_path, server.given, server.allow_repo_config) catch |err| return testFailure(err);
+    const given = if (server.names_test) server.given else test_command.detect;
+    const command = test_command.resolveTestCommand(arena, io, config_path, given, server.allow_repo_config) catch |err| return testFailure(err);
+    if (test_command.takeUnverified()) return noTestsFound();
     const program = firstWord(command);
     _ = exe_path.resolve(arena, program, root) catch {
-        return .{ .name = "tests", .status = .warn, .detail = std.fmt.allocPrint(arena, "\"{s}\": {s} is not on PATH", .{ command, program }) catch command, .fix = "install it, or change --test in .mcp.json" };
+        return .{ .name = "tests", .status = .warn, .detail = std.fmt.allocPrint(arena, "\"{s}\": {s} is not on PATH", .{ command, program }) catch command, .fix = name_test_command };
     };
     return .{ .name = "tests", .status = .ok, .detail = std.fmt.allocPrint(arena, "\"{s}\"", .{command}) catch command };
 }

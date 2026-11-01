@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2640**
-- Mutations declared in `tests/mutations.json`: **1783**
-  - killed: **1734**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2642**
+- Mutations declared in `tests/mutations.json`: **1786**
+  - killed: **1737**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1123 mutation(s).
+1126 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1617,7 +1617,10 @@ python tools/verification_page.py --check
 | `DR2-doctor-failure-exits-zero` | `src/platform/doctor.zig` | `for (checks) \|check\| if (check.status == .fail) return 1;` -> `for (checks) \|check\| if (check.status == .fail) return 0;` | doctor: exit is non-zero only when a check fails, a warning alone does not block; doctor:... | killed |
 | `DR3-doctor-signed-out-passes` | `src/platform/doctor.zig` | `if (signed_in) return .{ .name = "login", .status = .ok, .detai...` -> `if (signed_in or true) return .{ .name = "login", .status = .ok...` | doctor: a signed-out claude blocks lockdown with claude auth login, an unreadab... | killed |
 | `DR4-doctor-repo-config-flag-ignored` | `src/platform/doctor.zig` | `if (std.mem.eql(u8, arg.string, "--allow-repo-config")) found.a...` -> `` | doctor: the test command lockdown will use comes from the emetgate server's --t... | killed |
-| `DR5-doctor-no-test-command-only-warns` | `src/platform/doctor.zig` | `error.NoTestCommand => .{ .name = "tests", .status = .fail,` -> `error.NoTestCommand => .{ .name = "tests", .status = .warn,` | doctor: no test command blocks lockdown, and the fix names --test; doctor: a repository w... | killed |
+| `DR5-doctor-no-test-command-only-warns` | `src/platform/doctor.zig` | `error.NoTestCommand => .{ .name = "tests", .status = .fail,` -> `error.NoTestCommand => .{ .name = "tests", .status = .warn,` | doctor: no test command blocks lockdown, and the fix names --test; doctor: an empty --tes... | killed |
+| `DR7-doctor-does-not-detect` | `src/platform/doctor.zig` | `const given = if (server.names_test) server.given else test_com...` -> `const given = server.given;` | doctor: with no --test it reports the command lockdown will detect, with or wit... | killed |
+| `DR8-doctor-empty-test-detects` | `src/platform/doctor.zig` | `found.names_test = true;` -> `found.names_test = false;` | doctor: an empty --test is not detected, because lockdown adds no detection bes...; docto... | killed |
+| `DR9-doctor-no-tests-passes-silently` | `src/platform/doctor.zig` | `if (test_command.takeUnverified()) return noTestsFound();` -> `_ = test_command.takeUnverified();` | doctor: a repository with no tests to find warns that writes land unverified an... | killed |
 | `DR6-doctor-code-page-never-warns` | `src/platform/doctor.zig` | `if (code_page == 0 or code_page == utf8_code_page) return` -> `if (code_page == 0 or true) return` | doctor: a non-UTF-8 console code page is a warning with chcp 65001 | killed |
 | `DR7-doctor-claude-not-found-no-hint` | `src/platform/doctor.zig` | `error.ClaudeNotFound => "claude (Claude Code) is not on PATH; i...` -> `` | doctor: a startup error names what is wrong and the exact fix command on one li... | killed |
 | `DR8-doctor-tests-looked-up-outside-repo` | `src/platform/doctor.zig` | `if (root == null) return .{ .name = "tests", .status = .fail, ....` -> `` | doctor: outside a git repository the repo check fails and doctor exits 1 with t... | killed |

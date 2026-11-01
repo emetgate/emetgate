@@ -14125,7 +14125,7 @@
         "doctor: exit is non-zero only when a check fails, a warning alone does not block",
         "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix",
         "doctor: in a repository with a Unicode, spaced path the repo, tests, write, state and sandbox checks pass",
-        "doctor: a repository with no test command fails the tests check before lockdown starts",
+        "doctor: a repository with no tests to find warns that writes land unverified and does not fail",
         "doctor: an .mcp.json with two emetgate servers fails before the test command is looked up"
       ]
     },
@@ -14154,7 +14154,35 @@
       "to": "        error.NoTestCommand => .{ .name = \"tests\", .status = .warn,",
       "kills": [
         "doctor: no test command blocks lockdown, and the fix names --test",
-        "doctor: a repository with no test command fails the tests check before lockdown starts"
+        "doctor: an empty --test is not detected, because lockdown adds no detection beside it"
+      ]
+    },
+    {
+      "id": "DR7-doctor-does-not-detect",
+      "file": "src/platform/doctor.zig",
+      "from": "    const given = if (server.names_test) server.given else test_command.detect;",
+      "to": "    const given = server.given;",
+      "kills": [
+        "doctor: with no --test it reports the command lockdown will detect, with or without an .mcp.json"
+      ]
+    },
+    {
+      "id": "DR8-doctor-empty-test-detects",
+      "file": "src/platform/doctor.zig",
+      "from": "            found.names_test = true;",
+      "to": "            found.names_test = false;",
+      "kills": [
+        "doctor: an empty --test is not detected, because lockdown adds no detection beside it",
+        "doctor: the test command lockdown will use comes from the emetgate server's --test in .mcp.json"
+      ]
+    },
+    {
+      "id": "DR9-doctor-no-tests-passes-silently",
+      "file": "src/platform/doctor.zig",
+      "from": "    if (test_command.takeUnverified()) return noTestsFound();",
+      "to": "    _ = test_command.takeUnverified();",
+      "kills": [
+        "doctor: a repository with no tests to find warns that writes land unverified and does not fail"
       ]
     },
     {
