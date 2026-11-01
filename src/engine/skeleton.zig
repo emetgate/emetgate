@@ -23,7 +23,7 @@ const Terminator = enum {
 const Cut = struct {
     start: u32,
     end: u32,
-    terminator: Terminator,
+    text: []const u8,
 };
 
 pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Profile, tree: ts.Tree) Error![]u8 {
@@ -39,11 +39,11 @@ pub fn skeletonize(gpa: std.mem.Allocator, parser: ts.Parser, profile: *const Pr
     for (functions) |function| {
         const cut = planCut(profile, tree.source, function) orelse continue;
         if (cut.start < copied) continue;
-        out.appendSliceAssumeCapacity(tree.source[copied..cut.start]);
-        out.appendSliceAssumeCapacity(cut.terminator.text(profile));
+        try out.appendSlice(gpa, tree.source[copied..cut.start]);
+        try out.appendSlice(gpa, cut.text);
         copied = cut.end;
     }
-    out.appendSliceAssumeCapacity(tree.source[copied..]);
+    try out.appendSlice(gpa, tree.source[copied..]);
 
     const skeleton = try out.toOwnedSlice(gpa);
     errdefer gpa.free(skeleton);
@@ -137,14 +137,25 @@ fn afterNewline(source: []const u8, at: u32) u32 {
     return if (i < source.len and source[i] == '\n') i + 1 else at;
 }
 
+fn expressionCut(profile: *const Profile, source: []const u8, function: symbol.Function) ?Cut {
+    const clause = profile.expression_body orelse return null;
+    if (!std.mem.eql(u8, clause, function.body.kind())) return null;
+    const body_start = function.body.startByte();
+    const start = if (followsComment(profile, function.body)) body_start else trimTrailingWhitespace(source, body_start);
+    const entry = profile.functionNode(function.node.kind()) orelse return null;
+    const replacement = entry.skeleton orelse return .{ .start = start, .end = function.body.endByte(), .text = "" };
+    return .{ .start = start, .end = function.node.endByte(), .text = replacement };
+}
+
 fn planCut(profile: *const Profile, source: []const u8, function: symbol.Function) ?Cut {
+    if (expressionCut(profile, source, function)) |cut| return cut;
     if (!std.mem.eql(u8, profile.block, function.body.kind())) return null;
     const terminator: Terminator = if (followsComment(profile, function.body)) .empty_body else terminatorFor(profile, function);
     const body_start = function.body.startByte();
     return .{
         .start = if (terminator == .bodyless) trimTrailingWhitespace(source, body_start) else body_start,
         .end = function.body.endByte(),
-        .terminator = terminator,
+        .text = terminator.text(profile),
     };
 }
 

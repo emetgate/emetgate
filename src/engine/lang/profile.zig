@@ -15,6 +15,9 @@ pub const FunctionKind = enum {
 pub const FunctionNode = struct {
     node: []const u8,
     kind: FunctionKind,
+    body_field: []const u8 = "body",
+    body_only: ?[]const u8 = null,
+    skeleton: ?[]const u8 = null,
 };
 
 pub const Binding = struct {
@@ -29,6 +32,7 @@ pub const FunctionName = struct {
     node: []const u8,
     owner_depth: u8 = 0,
     field: ?[]const u8,
+    token: ?[]const u8 = null,
 };
 
 pub const Container = struct {
@@ -188,6 +192,7 @@ pub const DeclarationShape = struct {
     node: []const u8,
     kind: DeclarationKind,
     name_field: []const u8,
+    name_token: ?[]const u8 = null,
 };
 
 pub const Declarations = struct {
@@ -236,6 +241,8 @@ pub const MemberTraits = struct {
     is_static: bool = false,
     is_constructor: bool = false,
     receiver: bool = true,
+    is_member: bool = false,
+    overload_stub: bool = false,
 };
 
 pub const FieldSite = struct {
@@ -324,6 +331,8 @@ pub const Facts = struct {
     class_body_field: []const u8 = "body",
     test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},
+    docstrings: bool = false,
+    xml_docs: bool = false,
 };
 
 pub const TestDefinition = struct {
@@ -363,6 +372,25 @@ pub const MapTable = struct {
     close_brackets: []const u8,
 };
 
+pub fn compactSpelling(arena: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var pending = false;
+    for (text) |c| {
+        if (std.ascii.isWhitespace(c)) {
+            pending = out.items.len != 0;
+            continue;
+        }
+        if (pending and isWordByte(out.items[out.items.len - 1]) and isWordByte(c)) try out.append(arena, ' ');
+        pending = false;
+        try out.append(arena, c);
+    }
+    return out.items;
+}
+
+fn isWordByte(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
+}
+
 pub const Profile = struct {
     name: []const u8,
     extensions: []const []const u8,
@@ -400,6 +428,14 @@ pub const Profile = struct {
     literal_values: LiteralValues,
     memberTraits: *const fn (profile: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits,
     visibility_keywords: []const []const u8 = &.{},
+    expression_body: ?[]const u8 = null,
+    value_bodied: []const FunctionNode = &.{},
+    body_wording: []const u8 = "its block, from its opening brace to its closing brace",
+    braces: bool = true,
+    short_refs: bool = false,
+    memberLabel: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node) std.mem.Allocator.Error!?[]const u8 = null,
+    memberQualifier: ?*const fn (node: ts.Node) ?ts.Node = null,
+    parameterKey: ?*const fn (arena: std.mem.Allocator, tree: ts.Tree, node: ts.Node, full: bool) std.mem.Allocator.Error!?[]const u8 = null,
     modifier: ?[]const u8 = null,
     function_names: []const FunctionName = &.{},
     file_scoped_containers: []const []const u8 = &.{},
@@ -449,6 +485,16 @@ pub const Profile = struct {
     pub fn functionKind(self: *const Profile, node_kind: []const u8) ?FunctionKind {
         for (self.functions) |entry| {
             if (std.mem.eql(u8, entry.node, node_kind)) return entry.kind;
+        }
+        return null;
+    }
+
+    pub fn functionNode(self: *const Profile, node_kind: []const u8) ?FunctionNode {
+        for (self.functions) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
+        }
+        for (self.value_bodied) |entry| {
+            if (std.mem.eql(u8, entry.node, node_kind)) return entry;
         }
         return null;
     }

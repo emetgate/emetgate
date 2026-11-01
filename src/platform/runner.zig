@@ -258,9 +258,10 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
 
     var gate: Gate = .full;
     if (options.expected_hash == .present) {
-        const analysis_target = try (try base.symbols()).resolve(ref);
-        const cut: symbol.Span = .{ .start = analysis_target.body.startByte(), .end = analysis_target.body.endByte() };
-        const frame = boundedness.analyze(gpa, base, ref, cut);
+        const analysis_target = try (try base.symbols()).item(ref);
+        const shown = analysis_target.body orelse analysis_target.node;
+        const cut: symbol.Span = .{ .start = shown.startByte(), .end = shown.endByte() };
+        const frame = boundedness.analyze(gpa, base, analysis_target.ref, cut);
         defer frame.deinit();
         gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
         if (options.trace) |t| t.* = .{

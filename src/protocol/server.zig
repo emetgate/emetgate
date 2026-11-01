@@ -108,7 +108,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_try",
-        .description = "Edits code, gated: symbol+hash+body (the braced block; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids: emetgate_read_symbol nodes:true).",
+        .description = "Edits code, gated: symbol+hash+body (as read; hash \"absent\" + whole declaration adds one), or node+text / nodes:[{node,text}] (ids: emetgate_read_symbol nodes:true).",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "", .optional = true },

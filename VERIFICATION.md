@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2566**
-- Mutations declared in `tests/mutations.json`: **1781**
-  - killed: **1732**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2598**
+- Mutations declared in `tests/mutations.json`: **1782**
+  - killed: **1733**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -62,7 +62,7 @@ python tools/verification_page.py --check
 | `C3-coverage-start-window-check-disabled` | `src/engine/coverage.zig` | `if (candidate.start < node_start or candidate.start > body_star...` -> `if (candidate.start < node_start and candidate.start > body_sta...` | a range that ends with the body but starts inside it does not count for the sym... | killed |
 | `C4-coverage-surrogate-middle-accepted` | `src/engine/coverage.zig` | `if (len == 4) try index.append(gpa, invalid_unit);` -> `` | a surrogate pair counts as two UTF-16 units before a later function; utf16 index maps uni... | killed |
 | `C5-coverage-default-not-called` | `src/engine/coverage.zig` | `@memset(out, .unknown);` -> `@memset(out, .not_called);` | a symbol with no V8 function is unknown, never not_called; offsets from a transpiled sour... | killed |
-| `G6-rules-body-claimed-untouched` | `src/engine/cas.zig` | `.body = slot, .hole = .{ .old = cut, .new = slot } };` -> `.body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.st...` | rules: an enforced no_comment rule rejects a commented body before the tests run; rules: ... | killed |
+| `G6-rules-body-claimed-untouched` | `src/engine/cas.zig` | `.body = slot, .hole = .{ .old = cut, .new = hole } };` -> `.body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.st...` | rules: an enforced no_comment rule rejects a commented body before the tests run; rules: ... | killed |
 | `R1-checks-unknown-check-skipped` | `src/engine/checks.zig` | `const check = find(checks, invocation.name) orelse return error...` -> `const check = find(checks, invocation.name) orelse checks[0];` | an unknown check name is refused before any check runs | killed |
 | `R2-checks-use-strict-prologue-position-ignored` | `src/engine/checks.zig` | `if (!isStringStatement(profile, sibling)) return false;` -> `` | no_comment allows a use strict directive only in the directive prologue | killed |
 | `R3-checks-use-strict-exemption-removed` | `src/engine/checks.zig` | `return !isDirective(profile, tree, node);` -> `return !isDirective(profile, tree, node) or true;` | no_comment allows a use strict directive only in the directive prologue | killed |
@@ -77,10 +77,10 @@ python tools/verification_page.py --check
 | `EC5-cas-edge-comment-check-removed` | `src/engine/cas.zig` | `if (profile.isComment(edgeToken(body, .first).kind()) or profil...` -> `if ((profile.isComment(edgeToken(body, .first).kind()) or profi...` | a body that parses but spills outside its slot is a BodyEscape | killed |
 | `EC6-cas-placeholder-call-removed` | `src/engine/cas.zig` | `try rejectPlaceholder(base.profile, patched_target.body);` -> `` | purple C2: every placeholder variant is rejected before any test runs | killed |
 | `EC7-cas-placeholder-condition-disabled` | `src/engine/cas.zig` | `if (has_comment and !has_statement) return error.PlaceholderBod...` -> `if (has_comment and !has_statement and false) return error.Plac...` | purple C2: every placeholder variant is rejected before any test runs | killed |
-| `EC8-cas-untouched-outside-call-removed` | `src/engine/cas.zig` | `try expectUntouchedOutside(before.*, after.*, cut, slot);` -> `_ = before;` | defense in depth for body replacement: a 594-case differential spike (ASI, regex/division... | defense in depth |
+| `EC8-cas-untouched-outside-call-removed` | `src/engine/cas.zig` | `try expectUntouchedOutside(before.*, after.*, cut, hole);` -> `_ = before;` | defense in depth for body replacement: a 594-case differential spike (ASI, regex/division... | defense in depth |
 | `EC9-cas-twin-check-removed` | `src/engine/cas.zig` | `if (!hasTwinOutside(after, old, slot)) return error.BodyEscape;` -> `` | outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour | killed |
 | `EC10-cas-outside-count-check-disabled` | `src/engine/cas.zig` | `if (outside_before != outside_after) return error.BodyEscape;` -> `if (outside_before != outside_after and false) return error.Bod...` | outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour | killed |
-| `EC11-cas-twin-hash-ignored` | `src/engine/cas.zig` | `if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidat...` -> `if (candidate.ref.eql(wanted.ref)) return true;` | outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour | killed |
+| `EC11-cas-twin-hash-ignored` | `src/engine/cas.zig` | `if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &c...` -> `if (candidate.ref.sameMember(wanted.ref)) return true;` | outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour | killed |
 | `EC12-cas-body-trim-removed` | `src/engine/cas.zig` | `return std.mem.trim(u8, without_bom, " \t\r\n");` -> `return without_bom;` | replacement bodies are normalised: a BOM and surrounding whitespace are ignored | killed |
 | `EC13-cas-bom-strip-removed` | `src/engine/cas.zig` | `const without_bom = if (std.mem.startsWith(u8, body, utf8_bom))...` -> `const without_bom = body;` | replacement bodies are normalised: a BOM and surrounding whitespace are ignored | killed |
 | `EB2-bnd-exported-check-removed` | `src/engine/boundedness.zig` | `if (isExported(profile, snapshot.tree, sym.*)) return unbounded...` -> `` | adversarial: an exported declaration is UNBOUNDED; body-only: an exported declaration is ... | killed |
@@ -97,8 +97,8 @@ python tools/verification_page.py --check
 | `EB15-bnd-body-only-and-becomes-or` | `src/engine/boundedness.zig` | `return mutation_span.start >= sym.body.startByte() and mutation...` -> `return mutation_span.start >= sym.body.startByte() or mutation_...` | boundary: a mutation one byte into the signature flips to signature_change | killed |
 | `EB16-bnd-has-error-check-removed` | `src/engine/boundedness.zig` | `if (snapshot.tree.root().hasError()) return unbounded(.signatur...` -> `` | equivalent: snapshot.symbols() fails on the same tree and analyze catches it as unbounded... | equivalent |
 | `EB17-bnd-export-walk-crosses-bodies` | `src/engine/boundedness.zig` | `if (std.mem.eql(u8, kind, profile.root) or std.mem.eql(u8, kind...` -> `if (std.mem.eql(u8, kind, profile.root)) return false;` | precision: a helper declared inside an exported function body is not itself exp... | killed |
-| `ES1-sym-ambiguity-marking-removed` | `src/engine/symbol.zig` | `a.ambiguous = true;             b.ambiguous = true;` -> `` | static, instance, getter and setter collisions are distinct refs; true duplicat... | killed |
-| `ES2-sym-resolve-first-of-duplicates` | `src/engine/symbol.zig` | `if (found != null) return error.AmbiguousSymbol;` -> `` | static, instance, getter and setter collisions are distinct refs; true duplicat... | killed |
+| `ES1-sym-ambiguity-marking-removed` | `src/engine/symbol.zig` | `for (items, clashing) \|*item, clash\| item.ambiguous = clash;` -> `` | static, instance, getter and setter collisions are distinct refs; true duplicat... | killed |
+| `ES2-sym-resolve-first-of-duplicates` | `src/engine/symbol.zig` | `if (found != null) return error.AmbiguousSymbol;             fo...` -> `found = symbol;` | static, instance, getter and setter collisions are distinct refs; true duplicat... | killed |
 | `ES3-sym-unnamed-container-skipped` | `src/engine/symbol.zig` | `.unnamed => return null,` -> `.unnamed => continue,` | containers: dotted namespaces, bound class expressions, nested objects and encl... | killed |
 | `ES4-sym-export-outside-hash` | `src/engine/symbol.zig` | `if (isOneOf(parent.kind(), profile.export_wrappers)) outer = pa...` -> `if (isOneOf(parent.kind(), profile.export_wrappers) and false) ...` | hash covers decorators, export, modifiers and the binding, not only the functio... | killed |
 | `ES5-sym-decorators-outside-hash` | `src/engine/symbol.zig` | `.span = .{ .start = leadingDecoratorStart(profile, outer), .end...` -> `.span = .{ .start = outer.startByte(), .end = outer.endByte() }` | hash covers decorators, export, modifiers and the binding, not only the functio... | killed |
@@ -119,7 +119,7 @@ python tools/verification_page.py --check
 | `PC8-forbid-not-registered` | `src/engine/checks.zig` | `.{ .name = "forbid", .collect = forbid, .takes_argument = true ...` -> `` | rules: an enforced forbid rule rejects a body containing its text before the te... | killed |
 | `PC9-forbid-counts-overlapping-matches` | `src/engine/checks.zig` | `\|at\| : (from = at + needle.len) {` -> `\|at\| : (from = at + 1) {` | forbid deliberately does not count overlapping occurrences: aaa holds one aa | killed |
 | `NS1-hash-field-absent-not-recognised` | `src/engine/symbol.zig` | `if (std.mem.eql(u8, text, absent_text)) return .absent;` -> `` | the hash field is a precondition: a hex hash, or absent, and nothing else | killed |
-| `NS2-insert-existing-symbol-accepted` | `src/engine/cas.zig` | `if (before.item(insertion.ref)) \|_\| return error.SymbolExists...` -> `if (before.item(insertion.ref)) \|_\| {} else` | insert refuses a symbol that already exists, even as a duplicate | killed |
+| `NS2-insert-existing-symbol-accepted` | `src/engine/cas.zig` | `if (before.itemExact(insertion.ref)) \|_\| return error.SymbolE...` -> `if (before.itemExact(insertion.ref)) \|_\| {} else` | insert refuses a symbol that already exists, even as a duplicate | killed |
 | `NS3-insert-duplicate-symbol-accepted` | `src/engine/cas.zig` | `\|err\| if (err == error.AmbiguousSymbol) return error.SymbolEx...` -> `\|err\| if (err == error.AmbiguousSymbol) {}` | insert refuses a symbol that already exists, even as a duplicate | killed |
 | `NS4-insert-missing-newline-accepted` | `src/engine/cas.zig` | `return error.MissingTrailingNewline;` -> `return "\n";` | insert refuses a file without a trailing newline and a body that does not parse; absent: ... | killed |
 | `NS5-insert-crlf-ending-ignored` | `src/engine/cas.zig` | `if (std.mem.endsWith(u8, source, "\r\n")) return "\r\n";` -> `` | insert follows a CRLF file's line ending and never rewrites the bytes already t... | killed |
@@ -184,9 +184,9 @@ python tools/verification_page.py --check
 | `PY-FI4-from-import-ignored` | `src/engine/checks.zig` | `return importsModule(tree.text(source), module);` -> `return importsModule(tree.text(source), module) and false;` | python presets flag the construct itself and not a name, string or comment that... | killed |
 | `GV7-try-splices-an-lf-body-into-a-crlf-file` | `src/engine/cas.zig` | `normalizeBody(mutation.new_body), crlfOf(base.source));` -> `normalizeBody(mutation.new_body), null);` | a replacement body spliced into a CRLF file takes CRLF line endings, an LF file...; verif... | killed |
 | `GV8-insert-keeps-an-lf-body-in-a-crlf-file` | `src/engine/cas.zig` | `normalizeBody(insertion.new_body), crlfOf(eol));` -> `normalizeBody(insertion.new_body), null);` | an inserted symbol follows a CRLF file's line ending inside its body too | killed |
-| `JS1-item-span-escape-unchecked` | `src/engine/cas.zig` | `if (placed.span.start != grown.start or placed.span.end != grow...` -> `if (false) return error.BodyEscape;` | defense in depth: the item span check and expectSameShape each refuse every escape the ot... | defense in depth |
+| `JS1-item-span-escape-unchecked` | `src/engine/cas.zig` | `if (exact.span.start == grown.start and exact.span.end == grown...` -> `return exact;` | defense in depth: the item span check and expectSameShape each refuse every escape the ot... | defense in depth |
 | `JS2-item-shape-unchecked` | `src/engine/cas.zig` | `try expectSameShape(base.tree, next.tree, cut, slot);` -> `` | defense in depth: the item span check and expectSameShape each refuse every escape the ot... | defense in depth |
-| `JS1B-item-span-and-shape-unchecked` | `src/engine/cas.zig` | `if (placed.span.start != grown.start or placed.span.end != grow...` -> `if (placed.body) \|body\| try rejectPlaceholder(base.profile, b...` | a replaced item that grows into its neighbour or changes its name is refused | killed |
+| `JS1B-item-span-and-shape-unchecked` | `src/engine/cas.zig` | `const placed = placedAt(after.*, ref, grown) orelse return erro...` -> `const placed = after.itemExact(ref) catch return error.BodyEsca...` | a replaced item that grows into its neighbour or changes its name is refused | killed |
 | `JS3-item-separator-doubled` | `src/engine/cas.zig` | `if (text.len > 0 and (text[text.len - 1] == ',' or text[text.le...` -> `if (false and (text[text.len - 1] == ',' or text[text.len - 1] ...` | a whole top-level statement, binding, method or property is replaced by its ref... | killed |
 | `JS5-removal-blank-lines-all-eaten` | `src/engine/removal.zig` | `if (bottom) \|at\| cut.end = at else cut.start = top.?;` -> `` | removal: statements, members, bindings and properties leave exactly one blank l... | killed |
 | `JS6-removal-shared-declaration-cut` | `src/engine/removal.zig` | `if (whole and topLevelSymbolsIn(before.*, owned) > 1) return er...` -> `` | removal: a stale hash, a member and a shared declaration are refused | killed |
@@ -452,7 +452,7 @@ python tools/verification_page.py --check
 | `P1b-new-file-placed-over-whatever-is-at-the-path` | `src/platform/disk.zig` | `if (crashBetweenMoves()) return error.Crashed;         self.rep...` -> `if (crashBetweenMoves()) return error.Crashed;         self.rep...` | journal base: a file created at the path between the two moves is kept, the wri...; commi... | killed |
 | `P1c-backup-removed-though-its-bytes-are-in-no-commit` | `src/platform/disk.zig` | `if (err == error.PathAlreadyExists and self.base_in_history) {` -> `if (err == error.PathAlreadyExists) {` | journal base: a file created at the path between the two moves is kept, the wri... | killed |
 | `P1d-backup-of-committed-bytes-left-behind` | `src/platform/disk.zig` | `if (err == error.PathAlreadyExists and self.base_in_history) {` -> `if (false and err == error.PathAlreadyExists and self.base_in_h...` | commit window: a file created at the path between the two moves is kept, the co... | killed |
-| `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (true) return guard.renameReplacing(gpa, target_abs);     co...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
+| `P1e-journal-recover-restores-over-any-target` | `src/platform/disk.zig` | `const ours = new_hash orelse return guard.renameReplacing(gpa, ...` -> `if (new_hash == null or new_hash != null) return guard.renameRe...` | journal base: recover does not put the old bytes back over a file the user edit...; journ... | killed |
 | `P1j-next-call-skips-the-journal` | `src/platform/disk.zig` | `var report: RecoverReport = .{};     try recoverJournaled(gpa, ...` -> `const report: RecoverReport = .{};     if (false) try recoverJo...` | commit window: a crash between the two moves of the file write recovers to the ... | killed |
 | `BD4-plan-doc-skips-the-source-refusal` | `src/platform/batch_plan.zig` | `try docnode.refuseSource(edit.file_abs);` -> `` | planDoc refuses a file of a registered language before it reads it | killed |
 | `SP1-final-name-not-taken-for-a-resolved-path` | `src/platform/repo.zig` | `const final = try finalOf(gpa, opened);     defer gpa.free(fina...` -> `return gpa.dupeZ(u8, opened);` | equivalent: open_nowait.realPath already returns GetFinalPathNameByHandleW's DOS name wit... | equivalent |
@@ -711,7 +711,7 @@ python tools/verification_page.py --check
 
 ### Mutation testing tool itself
 
-40 mutation(s).
+41 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -725,7 +725,8 @@ python tools/verification_page.py --check
 | `MR3-legacy-record-kept` | `tools/mutate/core.zig` | `try work.deleteFile(io, legacy_manifest);` -> `try work.access(io, legacy_manifest, .{});` | harness: a recovery record left by an older run on another branch is dropped wi... | killed |
 | `RN1-shard-selection-off-by-one` | `tools/test_runner.zig` | `return ordinal % shard.count == shard.index - 1;` -> `return ordinal % shard.count == shard.index;` | shards: every selected test runs in exactly one shard | killed |
 | `RN2-empty-filter-passes` | `tools/test_runner.zig` | `if (options.filters.len != 0 and selection.matched == 0) {` -> `if (false) {` | runner: a filter that matches no test fails the run instead of passing it empty | killed |
-| `RN3-a-shard-left-out` | `tools/test_runner.zig` | `const shards = gpa.alloc(ShardRun, options.jobs) catch oom();` -> `const shards = gpa.alloc(ShardRun, options.jobs - 1) catch oom(...` | runner: --jobs runs every selected test once across its shards | killed |
+| `RN3-queue-left-after-every-shard-crashed` | `tools/test_runner.zig` | `if (!crashed or remaining == 0 or remaining >= left) break;` -> `if (true) break;` | runner: tests left in the queue still run after every shard crashed, and each c... | killed |
+| `RN15-crashing-shard-loses-its-record` | `tools/test_runner.zig` | `if (record_file != null) recordClaim(&record_writer.interface, ...` -> `if (false) recordClaim(&record_writer.interface, index) catch \...` | runner: tests left in the queue still run after every shard crashed, and each c... | killed |
 | `RN4-coverage-ignores-a-missing-test` | `tools/test_runner.zig` | `if (seen[i] == 0) return .{ .missing = i };` -> `if (seen[i] == 0) continue;` | runner: shard coverage names a test no shard ran, one two shards ran and a stra... | killed |
 | `RN5-mutant-never-set` | `tools/test_runner.zig` | `emetgate_mutant = options.mutant;` -> `emetgate_mutant = 0;` | runner: --mutant sets the global that the schemata dispatch reads; runner: a failing test... | killed |
 | `RN6-mutant-not-passed-to-shards` | `tools/test_runner.zig` | `if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant"` -> `if (false) argv.appendSlice(gpa, &.{ "--mutant"` | runner: a failing test in one shard fails the --jobs run and the mutant reaches... | killed |
@@ -1539,10 +1540,10 @@ python tools/verification_page.py --check
 | `PY-DC5-self-declarator-statement-skipped` | `src/engine/declarations.zig` | `if (std.mem.eql(u8, statement_node.kind(), declarator_kind)) re...` -> `` | python declarations: a module-level assignment is a variable and an unpacking o... | killed |
 | `PY-PF1-lambda-not-a-function` | `src/engine/lang/python/profile.zig` | `.{ .node = "lambda", .kind = .arrow },` -> `` | python profile treats a lambda as a function named by the assignment that holds... | killed |
 | `PY-PF2-assignment-not-a-binding` | `src/engine/lang/python/profile.zig` | `.{ .parent = "assignment", .value_field = "right", .name_field ...` -> `.{ .parent = "", .value_field = "right", .name_field = "left" },` | python profile treats a lambda as a function named by the assignment that holds... | killed |
-| `PY-PF3-decorator-outside-class-read` | `src/engine/lang/python/profile.zig` | `if (!std.mem.eql(u8, owner.kind(), "block") or !std.mem.eql(u8,...` -> `if (!std.mem.eql(u8, owner.kind(), "block")) return .{};     _ ...` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
+| `PY-PF3-decorator-outside-class-read` | `src/engine/lang/python/profile.zig` | `const in_class = if (class) \|c\| std.mem.eql(u8, owner.?.kind(...` -> `const in_class = if (class != null) std.mem.eql(u8, owner.?.kin...` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
 | `PY-PF4-staticmethod-keeps-receiver` | `src/engine/lang/python/profile.zig` | `traits.receiver = false;` -> `` | python profile reads staticmethod, classmethod, property and setter decorators ...; pytho... | killed |
 | `PY-PF5-classmethod-not-static` | `src/engine/lang/python/profile.zig` | `.classmethod => traits.is_static = true,` -> `.classmethod => {},` | python profile reads staticmethod, classmethod, property and setter decorators ...; pytho... | killed |
-| `PY-PF6-property-not-getter` | `src/engine/lang/python/profile.zig` | `.property => traits.accessor = .get,` -> `.property => {},` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
+| `PY-PF6-property-not-getter` | `src/engine/lang/python/profile.zig` | `.property, .getter => traits.accessor = .get,` -> `.property, .getter => {},` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
 | `PY-PF7-setter-not-setter` | `src/engine/lang/python/profile.zig` | `.setter => traits.accessor = .set,` -> `.setter => {},` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
 | `PY-PF8-staticmethod-name-ignored` | `src/engine/lang/python/profile.zig` | `if (std.mem.eql(u8, name, "staticmethod")) return .staticmethod;` -> `` | python profile reads staticmethod, classmethod, property and setter decorators ... | killed |
 | `PY-FT1-no-test-definitions` | `src/engine/lang/python/facts.zig` | `.test_definitions = &test_definitions,` -> `` | python facts: test functions and test classes are test blocks, and conftest.py ... | killed |

@@ -154,11 +154,12 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     defer base.destroy();
     if (!rename.supports(base.profile)) return error.UnsupportedLanguage;
     if (base.tree.root().hasError()) return error.SourceHasErrors;
-    const ref = try symbol.Ref.parse(gpa, request.ref_text);
-    defer ref.deinit(gpa);
+    const given = try symbol.Ref.parse(gpa, request.ref_text);
+    defer given.deinit(gpa);
+    const ref = try canonicalRef(base, given);
     const target = try targetOf(gpa, base, ref, request.expected_hash);
     const old = ref.name;
-    if (!rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
+    if (!renamableMember(old, base) or !rename.validName(request.new_name) or std.mem.eql(u8, old, request.new_name)) return error.InvalidName;
     const offset = target.offset;
     var member = ref.container.len != 0;
 
@@ -201,7 +202,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
 
     var new_ref = ref;
     new_ref.name = request.new_name;
-    const new_ref_text = try std.fmt.allocPrint(gpa, "{f}", .{new_ref});
+    var new_ref_text = try std.fmt.allocPrint(gpa, "{f}", .{new_ref});
     errdefer gpa.free(new_ref_text);
 
     const count = locations.files.items.len;
@@ -232,9 +233,16 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         if (declaring) {
             const table = try renamed.snapshot.symbols();
             if (target.function) {
-                const found = try table.resolve(new_ref);
+                var bare = new_ref;
+                bare.overload = "";
+                const found = table.resolve(new_ref) catch try table.resolve(bare);
                 body = .{ .start = found.body.startByte(), .end = found.body.endByte() };
                 new_hash = found.hash;
+                if (!found.ref.eql(new_ref)) {
+                    const settled = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
+                    gpa.free(new_ref_text);
+                    new_ref_text = settled;
+                }
             } else {
                 const found = declarationOf(table.*, new_ref, target.kind.?) orelse return error.IncompleteRename;
                 new_hash = found.hash;
@@ -293,6 +301,22 @@ const Target = struct {
     function: bool,
     kind: ?symbol.DeclarationKind = null,
 };
+
+fn canonicalRef(base: *Snapshot, given: symbol.Ref) !symbol.Ref {
+    const table = try base.symbols();
+    if (!table.short_refs) return given;
+    const found = table.item(given) catch |err| switch (err) {
+        error.SymbolNotFound => return given,
+        error.AmbiguousSymbol => return err,
+    };
+    return found.ref;
+}
+
+fn renamableMember(name: []const u8, base: *Snapshot) bool {
+    if (base.profile.memberLabel == null) return true;
+    if (std.mem.eql(u8, name, "this")) return false;
+    return rename.validName(if (std.mem.startsWith(u8, name, "@")) name[1..] else name);
+}
 
 fn targetOf(gpa: Allocator, base: *Snapshot, ref: symbol.Ref, expected: symbol.Hash) !Target {
     const table = try base.symbols();
