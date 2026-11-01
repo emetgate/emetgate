@@ -29,6 +29,19 @@ pub const Lang = enum {
             .csharp => "c#",
         };
     }
+
+    pub fn covers(self: Lang, profile_name: []const u8) bool {
+        return switch (self) {
+            .universal => true,
+            .js_ts => eql(profile_name, "typescript") or eql(profile_name, "tsx") or eql(profile_name, "javascript"),
+            .python => eql(profile_name, "python"),
+            .csharp => eql(profile_name, "csharp"),
+        };
+    }
+
+    fn eql(a: []const u8, b: []const u8) bool {
+        return std.mem.eql(u8, a, b);
+    }
 };
 
 pub const Entry = struct {
@@ -79,6 +92,13 @@ pub fn find(num: u8) ?Entry {
         if (entry.num == num) return entry;
     }
     return null;
+}
+
+pub fn langOf(text: []const u8, check: []const u8) Lang {
+    for (catalog) |entry| {
+        if (std.mem.eql(u8, entry.label, text) and std.mem.eql(u8, entry.check, check)) return entry.lang;
+    }
+    return .universal;
 }
 
 pub fn decidedOf(entry: Entry, where: ?[]const u8) rule_command.Decided {
@@ -419,6 +439,16 @@ fn allMarked() Marks {
 
 fn occurrences(text: []const u8, needle: []const u8) usize {
     return std.mem.count(u8, text, needle);
+}
+
+test "a rule takes its language from the catalog entry it was picked from, its own text stays universal" {
+    try std.testing.expectEqual(Lang.js_ts, langOf("no console.log", "forbid:console.log"));
+    try std.testing.expectEqual(Lang.python, langOf("no pickle", "forbid_import:pickle"));
+    try std.testing.expectEqual(Lang.universal, langOf("my own words", "forbid:console.log"));
+    try std.testing.expect(Lang.js_ts.covers("tsx") and Lang.js_ts.covers("javascript") and !Lang.js_ts.covers("python"));
+    try std.testing.expect(Lang.python.covers("python") and !Lang.python.covers("csharp"));
+    try std.testing.expect(Lang.csharp.covers("csharp") and !Lang.csharp.covers("typescript"));
+    try std.testing.expect(Lang.universal.covers("zig"));
 }
 
 test "catalog list: every line fits 80 columns, is ASCII, has no trailing blank, and the list stays short" {

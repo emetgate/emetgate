@@ -51,8 +51,14 @@ pub fn bindingSite(profile: *const Profile, node: ts.Node) ?ts.Node {
         parent = parent.parent() orelse return null;
     }
     const binding = bindingFor(profile, parent) orelse return null;
-    const bound = parent.childByField(binding.value_field) orelse return null;
+    const bound = if (binding.value_field.len != 0) parent.childByField(binding.value_field) orelse return null else lastNamedChild(parent) orelse return null;
     return if (bound.eql(value)) parent else null;
+}
+
+fn lastNamedChild(node: ts.Node) ?ts.Node {
+    const count = node.namedChildCount();
+    if (count == 0) return null;
+    return node.namedChild(count - 1);
 }
 
 pub fn bindingName(profile: *const Profile, node: ts.Node) ?ts.Node {

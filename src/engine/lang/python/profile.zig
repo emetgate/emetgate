@@ -46,7 +46,7 @@ const literal_values: LiteralValues = .{
     .negatable = &.{ "integer", "float" },
     .template = "string",
     .substitution = "interpolation",
-    .named_argument = "keyword_argument",
+    .named_arguments = &.{"keyword_argument"},
     .named_argument_name_field = "name",
     .named_argument_value_field = "value",
 };
@@ -73,9 +73,9 @@ pub const profile: Profile = .{
     .reference_names = &.{"identifier"},
     .call = .{ .node = "call", .function_field = "function", .arguments_field = "arguments", .arguments = "argument_list", .optional_marker = null },
     .reexport_specifier = null,
-    .namespace_exports = &.{},
-    .star_token = null,
-    .dynamic_callees = &.{},
+    .namespace_exports = &.{"wildcard_import"},
+    .star_token = "*",
+    .dynamic_callees = &.{ "eval", "exec", "__import__", "import_module", ".import_module", "globals", "locals", "vars", "getattr", ".__getattribute__" },
     .dynamic_constructors = &.{},
     .strings = &.{"string"},
     .string_holes = &.{"interpolation"},
@@ -83,7 +83,7 @@ pub const profile: Profile = .{
     .bodyless_terminator = null,
     .empty_body = "...",
     .expression_statement = "expression_statement",
-    .prose_strings = &.{},
+    .prose_strings = &.{ "string", "concatenated_string" },
     .directives = &.{},
     .literal_values = literal_values,
     .memberTraits = memberTraits,
@@ -92,6 +92,9 @@ pub const profile: Profile = .{
     .modules = &python_rename.modules,
     .declarations = python_rename.declarations,
     .facts = &python_facts.python,
+    .import_forms = .{ .calls = &.{ "__import__", ".__import__", "import_module", ".import_module" }, .dotted = true },
+    .docstrings = true,
+    .definition_wrappers = &.{"decorated_definition"},
 };
 
 const Decorated = enum { staticmethod, classmethod, property, setter };

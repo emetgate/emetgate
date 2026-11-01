@@ -209,6 +209,7 @@ test "csharp symbols: types, members, accessors, fields and properties share one
         "Demo.Sub.Calc.Total@static@set setter",
         "Demo.Sub.Calc.Add method",
         "Demo.Sub.Calc.Inner.Deep method",
+        "Demo.Sub.Calc.Inner.Deep.f arrow",
         "Demo.Sub.Calc class",
         "Demo.Sub.Calc.Count@static field",
         "Demo.Sub.Calc.Total@static field",

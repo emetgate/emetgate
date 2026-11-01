@@ -11,6 +11,7 @@ const Accessor = @import("../../ref.zig").Accessor;
 const MemberTraits = profile_mod.MemberTraits;
 const Container = profile_mod.Container;
 const LiteralValues = profile_mod.LiteralValues;
+const Binding = profile_mod.Binding;
 
 extern fn tree_sitter_c_sharp() callconv(.c) ?*const ts.Language;
 
@@ -46,18 +47,33 @@ const containers = [_]Container{
     .{ .node = "file_scoped_namespace_declaration", .name = .field },
 };
 
-const never_matching_literal_values: LiteralValues = .{
-    .pair = "",
-    .key_field = "",
-    .value_field = "",
-    .quoted_key = "",
-    .literals = &.{},
+const bindings = [_]Binding{
+    .{ .parent = "variable_declarator", .value_field = "", .name_field = "name" },
+    .{ .parent = "assignment_expression", .value_field = "right", .name_field = "left" },
+    .{ .parent = "property_declaration", .value_field = "value", .name_field = "name" },
+};
+
+const literal_values: LiteralValues = .{
+    .pair = "assignment_expression",
+    .key_field = "left",
+    .value_field = "right",
+    .quoted_key = "string_literal",
+    .quoted_key_content = "string_literal_content",
+    .literals = &.{ "integer_literal", "real_literal", "string_literal", "verbatim_string_literal", "raw_string_literal", "character_literal" },
     .negation_operator_field = "",
-    .negation_operator = "",
+    .negation_operator = "-",
     .negation_argument_field = "",
-    .negatable = &.{},
-    .template = "",
-    .substitution = "",
+    .negatable = &.{ "integer_literal", "real_literal" },
+    .template = "interpolated_string_expression",
+    .substitution = "interpolation",
+    .named_arguments = &.{ "argument", "attribute_argument" },
+    .named_argument_name_field = "name",
+    .named_argument_value_field = "",
+    .pair_parent = "initializer_expression",
+    .equals_pairs = &.{ "anonymous_object_creation_expression", "with_initializer" },
+    .entry_pair = "initializer_expression",
+    .indexed_key = "element_binding_expression",
+    .negation_unary = "prefix_unary_expression",
 };
 
 pub const profile: Profile = .{
@@ -65,13 +81,13 @@ pub const profile: Profile = .{
     .extensions = &.{".cs"},
     .grammar = grammar,
     .functions = &function_nodes,
-    .bindings = &.{},
+    .bindings = &bindings,
     .transparent_wrappers = &.{"parenthesized_expression"},
     .addressable_names = &.{"identifier"},
     .dotted_name = "qualified_name",
     .name_segments = &.{"identifier"},
     .containers = &containers,
-    .declaration_statements = &.{},
+    .declaration_statements = &.{ "variable_declaration", "local_declaration_statement", "field_declaration" },
     .declarator = "variable_declarator",
     .export_wrappers = &.{},
     .decorator = "attribute_list",
@@ -84,7 +100,7 @@ pub const profile: Profile = .{
     .reexport_specifier = null,
     .namespace_exports = &.{},
     .star_token = null,
-    .dynamic_callees = &.{},
+    .dynamic_callees = &.{ "Activator.CreateInstance", ".Activator.CreateInstance", "Assembly.Load", ".Assembly.Load", "Assembly.LoadFrom", ".Assembly.LoadFrom", "Type.GetType", ".Type.GetType", ".GetMethod", ".GetProperty", ".GetField", ".GetMember", ".InvokeMember" },
     .dynamic_constructors = &.{},
     .strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal", "interpolated_string_expression" },
     .string_holes = &.{"interpolation"},
@@ -94,7 +110,7 @@ pub const profile: Profile = .{
     .expression_statement = "expression_statement",
     .prose_strings = &.{ "string_literal", "verbatim_string_literal", "raw_string_literal" },
     .directives = &.{},
-    .literal_values = never_matching_literal_values,
+    .literal_values = literal_values,
     .memberTraits = memberTraits,
     .visibility_keywords = &.{ "public", "protected", "internal" },
     .modifier = "modifier",
@@ -104,6 +120,9 @@ pub const profile: Profile = .{
     .modules = &csharp_rename.modules,
     .declarations = csharp_rename.declarations(),
     .facts = &csharp_facts.csharp,
+    .import_forms = .{ .calls = &.{ "Assembly.Load", ".Assembly.Load", "Assembly.LoadFrom", ".Assembly.LoadFrom", "Type.GetType", ".Type.GetType" }, .dotted = true, .directive = "using_directive" },
+    .commented_definitions = &.{ "class_declaration", "struct_declaration", "interface_declaration", "enum_declaration", "record_declaration", "delegate_declaration" },
+    .uncommented_definitions = &.{"accessor_declaration"},
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {

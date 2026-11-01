@@ -54,6 +54,7 @@ pub const profile: Profile = .{
     .prose_strings = &ecma.prose_strings,
     .directives = &ecma.directives,
     .literal_values = ecma.literal_values,
+    .import_forms = ecma.import_forms,
     .memberTraits = memberTraits,
     .language_service = true,
     .rename = &ecma_rename.grammar,
