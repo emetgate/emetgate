@@ -2,6 +2,7 @@ const ts = @import("../../tree_sitter.zig");
 const profile_mod = @import("../profile.zig");
 const csharp_rename = @import("rename.zig");
 const csharp_facts = @import("facts.zig");
+const csharp_map = @import("map.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -136,6 +137,7 @@ pub const profile: Profile = .{
     .import_forms = .{ .calls = &.{ "Assembly.Load", ".Assembly.Load", "Assembly.LoadFrom", ".Assembly.LoadFrom", "Type.GetType", ".Type.GetType" }, .dotted = true, .directive = "using_directive" },
     .commented_definitions = &.{ "class_declaration", "struct_declaration", "interface_declaration", "enum_declaration", "record_declaration", "delegate_declaration" },
     .uncommented_definitions = &.{"accessor_declaration"},
+    .map = &csharp_map.table,
 };
 
 fn memberTraits(self: *const Profile, tree: ts.Tree, node: ts.Node, kind: FunctionKind) MemberTraits {
