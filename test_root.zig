@@ -169,6 +169,7 @@ pub const open_run = src.open_run;
 pub const read_tools = src.read_tools;
 pub const read_budget = src.read_budget;
 pub const mirror = src.mirror;
+pub const context_epoch = src.context_epoch;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
@@ -302,6 +303,7 @@ test {
     _ = @import("tests/regression_gate.zig");
     _ = @import("tests/prompt_hook.zig");
     _ = @import("tests/pretool_hook.zig");
+    _ = @import("tests/context_epoch.zig");
     _ = @import("tests/launch_path.zig");
     _ = @import("tests/symbol.zig");
     _ = @import("tests/mutate_harness.zig");

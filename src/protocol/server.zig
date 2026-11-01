@@ -19,6 +19,7 @@ const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const batch_stage_mod = @import("batch_stage.zig");
 const search_session_mod = @import("../platform/search_session.zig");
@@ -291,6 +292,7 @@ pub const Served = struct {
     workspace: ?[]u8,
     observer: ?telemetry.Observer,
     mirror: mirror_mod.Mirror,
+    context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
     search: search_session_mod.Session,
     language_service: tsserver.Session,
@@ -303,6 +305,7 @@ pub const Served = struct {
     pub const Options = struct {
         root: ?[]const u8 = null,
         fact_store: ?[]const u8 = null,
+        environ: ?*const std.process.Environ.Map = null,
     };
 
     pub fn open(self: *Served, gpa: Allocator, io: std.Io, runtime: *Runtime, policy: Policy, options: Options) void {
@@ -316,6 +319,7 @@ pub const Served = struct {
             .workspace = workspace,
             .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
             .mirror = .init(gpa, policy.mirror_enabled),
+            .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
             .language_service = .{ .gpa = gpa, .io = io, .root = root },
@@ -327,6 +331,7 @@ pub const Served = struct {
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
+        self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
         self.policy.search_session = &self.search;
         self.policy.language_service = &self.language_service;
@@ -360,6 +365,7 @@ pub const Served = struct {
         self.search.deinit();
         self.tree_cache.deinit();
         self.mirror.deinit();
+        self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
         if (self.root) |r| self.gpa.free(r);
     }
@@ -370,10 +376,10 @@ pub const Served = struct {
     }
 };
 
-pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy) !void {
+pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy, environ: *const std.process.Environ.Map) !void {
     try tool_names.setPrefix(policy.tool_prefix);
     var served: Served = undefined;
-    served.open(gpa, io, runtime, policy, .{});
+    served.open(gpa, io, runtime, policy, .{ .environ = environ });
     defer served.close();
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);

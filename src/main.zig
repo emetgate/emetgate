@@ -17,6 +17,7 @@ const lockdown_slash = emetgate.lockdown_slash;
 const doctor = emetgate.doctor;
 const prompt_hook = emetgate.prompt_hook;
 const pretool_hook = emetgate.pretool_hook;
+const context_epoch = emetgate.context_epoch;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const rule_catalog = emetgate.rule_catalog;
@@ -45,6 +46,7 @@ const usage =
     \\       emetgate rules   (interactive checklist: pick the enforced rules with the keyboard)
     \\       emetgate hook prompt
     \\       emetgate hook pretool
+    \\       emetgate hook session
     \\       emetgate recover [--shadow-root <dir>] [--cache-max-age-days <n>] [--cache-max-mb <n>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
@@ -81,6 +83,10 @@ const usage =
     \\or discards git history or changes, drops a database, formats a disk, shuts down,
     \\changes permissions recursively, pipes a download into a shell or changes an
     \\emetgate rule. It prints nothing for any other command.
+    \\hook session is the SessionStart hook that lockdown gives claude: it records a
+    \\new context epoch, so that after a compaction or /clear emetgate mcp sends every
+    \\file again instead of answering unchanged. It prints nothing, and it records the
+    \\epoch even when stdin is empty or not JSON.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
     \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
@@ -173,7 +179,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
         const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
-        try server.serve(runtime.gpa, init.io, runtime, out, policy);
+        try server.serve(runtime.gpa, init.io, runtime, out, policy, init.environ_map);
         return 0;
     }
     if (std.mem.eql(u8, command, "scan")) {
@@ -194,6 +200,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (args.len == 1 + pretool_hook.hook_args.len and std.mem.eql(u8, command, pretool_hook.hook_args[0]) and std.mem.eql(u8, args[2], pretool_hook.hook_args[1])) {
         return hookPretoolCmd(init, runtime, out);
+    }
+    if (args.len == 1 + context_epoch.hook_args.len and std.mem.eql(u8, command, context_epoch.hook_args[0]) and std.mem.eql(u8, args[2], context_epoch.hook_args[1])) {
+        return hookSessionCmd(init, runtime);
     }
     if (std.mem.eql(u8, command, "recover")) {
         const options = parseRecover(args[2..]) orelse exitWithUsage();
@@ -635,6 +644,19 @@ fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) 
     defer if (root) |path| gpa.free(path) else |_| {};
     try prompt_hook.respond(gpa, init.io, root, text, out);
     try out.flush();
+}
+
+fn hookSessionCmd(init: std.process.Init, runtime: *Runtime) u8 {
+    const gpa = runtime.gpa;
+    var buffer: [4096]u8 = undefined;
+    var reader = stdio.stdinReader(init.io, &buffer);
+    const input = reader.interface.allocRemaining(gpa, .limited(context_epoch.max_input_bytes)) catch null;
+    defer if (input) |bytes| gpa.free(bytes);
+    context_epoch.hook(gpa, init.io, init.environ_map, input orelse "") catch |err| {
+        std.debug.print("error: {t}: the new context epoch was not recorded\n", .{err});
+        return 1;
+    };
+    return 0;
 }
 
 fn hookPretoolCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) u8 {

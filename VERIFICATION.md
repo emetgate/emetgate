@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2501**
-- Mutations declared in `tests/mutations.json`: **1768**
-  - killed: **1719**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2519**
+- Mutations declared in `tests/mutations.json`: **1781**
+  - killed: **1732**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -195,7 +195,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-180 mutation(s).
+182 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -379,6 +379,8 @@ python tools/verification_page.py --check
 | `REDET1-batch-detects-on-disk-only` | `src/platform/batch.zig` | `const tests = try test_command_mod.redetect(gpa, io, options.te...` -> `const tests = options.test_command;` | test detection: a batch that creates the project file runs the test command it ...; test ... | killed |
 | `LD1-own-config-without-tool-prefix` | `src/platform/lockdown.zig` | `try js.write(tool_prefix_flag);     try js.write(own_tool_prefi...` -> `` | lockdown tells its own server the prefix Claude Code puts before every allowed ... | killed |
 | `LD2-project-config-without-tool-prefix` | `src/platform/lockdown.zig` | `if (!namesFlag(args.items, tool_prefix_flag)) {` -> `if (namesFlag(args.items, tool_prefix_flag)) {` | lockdown gives each project emetgate server the prefix of its own name and keep... | killed |
+| `CE10-launch-keeps-the-parent-context` | `src/platform/lockdown.zig` | `try env.put(lockdown_slash.context_variable, context);` -> `` | lockdown gives each claude launch its own context file under the state folder a... | killed |
+| `CE11-launch-leaves-its-context-file` | `src/platform/lockdown.zig` | `defer std.Io.Dir.cwd().deleteFile(io, context) catch {};` -> `` | lockdown gives each claude launch its own context file under the state folder a... | killed |
 
 ### Disk, repository boundary and atomic commit
 
@@ -467,7 +469,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-151 mutation(s).
+152 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -622,6 +624,7 @@ python tools/verification_page.py --check
 | `BLD15-detect-policy-ignored` | `src/protocol/policy.zig` | `return policy.test_command orelse if (policy.detect_test) test_...` -> `return policy.test_command orelse "";` | test detection: a write in a project with no test command lands as unverified_n... | killed |
 | `BLD16-detect-flag-repeatable` | `src/protocol/policy.zig` | `if (policy.detect_test) return null;` -> `` | test detection: --detect-test is parsed once | killed |
 | `FW6-write-leaves-find-session-fresh` | `src/protocol/policy.zig` | `if (self.find_session) \|session\| session.invalidate();` -> `_ = self;` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |
+| `CE13-mirror-flag-is-not-trust` | `src/protocol/policy.zig` | `policy.mirror_trusted = policy.mirror_enabled;` -> `` | context epoch: --mirror trusts the mirror without an epoch, the default and --n... | killed |
 
 ### Scan
 
@@ -755,7 +758,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1112 mutation(s).
+1122 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1871,6 +1874,16 @@ python tools/verification_page.py --check
 | `TN3-static-fix-not-prefixed` | `src/protocol/wire.zig` | `if (fix.dynamic) try js.write(fix.text) else try tool_names.wri...` -> `try js.write(fix.text);` | recovery hints: with a tool prefix computed and static fix lines name tools by ... | killed |
 | `TN4-instructions-not-prefixed` | `src/protocol/server.zig` | `try tool_names.writeJson(&js, instructions);` -> `try js.write(instructions);` | recovery hints: with a tool prefix every tool named in instructions and descrip... | killed |
 | `IO1-stdin-read-positionally` | `src/platform/stdio.zig` | `return .initStreaming(file, io, buffer);` -> `return .init(file, io, buffer);` | a pipe reader waits for a writer that sends its bytes late instead of reading a... | killed |
+| `CE1-epoch-move-keeps-the-mirror` | `src/protocol/handlers.zig` | `if (context.stale()) m.reset();` -> `_ = context.stale();` | context epoch: a compaction makes the next read send the content, and a repeat ... | killed |
+| `CE2-no-epoch-trusts-the-mirror` | `src/protocol/context_epoch.zig` | `const file = self.path orelse return true;` -> `const file = self.path orelse return false;` | context epoch: a watch with no path never lets a read answer unchanged | killed |
+| `CE3-unreadable-epoch-trusts-the-mirror` | `src/protocol/context_epoch.zig` | `max_epoch_bytes) catch return true;` -> `max_epoch_bytes) catch return false;` | context epoch: with no epoch file the server sends the content every time | killed |
+| `CE4-moved-epoch-is-not-stale` | `src/protocol/context_epoch.zig` | `if (seen == now) return !self.armed;` -> `if (seen != now) return !self.armed;` | context epoch: a compaction makes the next read send the content, and a repeat ... | killed |
+| `CE5-a-move-does-not-arm` | `src/protocol/context_epoch.zig` | `self.armed = true;` -> `` | context epoch: a file another session left behind does not arm the mirror until... | killed |
+| `CE6-left-behind-file-arms` | `src/protocol/context_epoch.zig` | `self.armed = self.ownSession(bytes);` -> `self.armed = true;` | context epoch: a file another session left behind does not arm the mirror until... | killed |
+| `CE7-bad-stdin-is-not-recorded` | `src/protocol/context_epoch.zig` | `const parsed = json_input.parseLeaky(std.json.Value, arena, inp...` -> `const parsed = json_input.parseLeaky(std.json.Value, arena, inp...` | context epoch: the session hook with empty or unreadable stdin still moves the ... | killed |
+| `CE8-hook-records-nothing` | `src/protocol/context_epoch.zig` | `try record(gpa, io, file, input);` -> `_ = io;     _ = input;` | context epoch: the hook writes the file the environment names and writes nothin... | killed |
+| `CE9-settings-omit-the-session-hook` | `src/platform/lockdown_slash.zig` | `exe_abs, &session_args);` -> `exe_abs, &pretool_args);` | lockdown slash: the hooks are commands in exec form that name this executable | killed |
+| `CE12-served-policy-never-watches` | `src/protocol/server.zig` | `self.policy.context = if (policy.mirror_trusted or options.envi...` -> `self.policy.context = null;` | context epoch: a served policy watches the epoch unless --mirror trusts it or n... | killed |
 
 ## What this system does not prove
 

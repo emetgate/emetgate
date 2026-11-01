@@ -3,6 +3,7 @@ const tool_names = @import("../engine/tool_names.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
+const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const run_command = @import("../platform/run_command.zig");
@@ -28,6 +29,8 @@ pub const Policy = struct {
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
     mirror_enabled: bool = false,
+    mirror_trusted: bool = false,
+    context: ?*context_epoch.Watch = null,
     raw_code: bool = false,
     read_budget: usize = read_budget_mod.default_budget,
     read_budget_set: bool = false,
@@ -136,6 +139,7 @@ pub fn parsePolicy(args: anytype) ?Policy {
             if (mirror_flag) return null;
             mirror_flag = true;
             policy.mirror_enabled = arg.len == "--mirror".len;
+            policy.mirror_trusted = policy.mirror_enabled;
         } else if (std.mem.eql(u8, arg, "--json-code")) {
             if (json_code) return null;
             json_code = true;
