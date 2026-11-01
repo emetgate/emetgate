@@ -8,6 +8,7 @@ const open_shell = @import("open_shell.zig");
 const test_command = @import("test_command.zig");
 const toolchain = @import("toolchain.zig");
 const receipts = @import("receipts.zig");
+const frozen_hold = @import("frozen_hold.zig");
 const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
@@ -338,6 +339,7 @@ pub const RepoRun = struct {
     changed: usize = 0,
     receipt: ?[64]u8 = null,
     receipt_error: ?anyerror = null,
+    frozen: frozen_hold.Report = .{},
 };
 
 pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8) !RepoRun {
@@ -363,11 +365,17 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const before = try snapshot(arena, gpa, io, root_abs);
+    const hold = frozen_hold.begin(gpa, io, root_abs) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.FrozenHoldFailed,
+    };
     const started_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
-    var ran: RepoRun = .{ .report = switch (spawn) {
-        .toolchain => |local| try runner.runToolchain(gpa, io, root_abs, local, limits),
-        .open => |open| try open_shell.run(gpa, io, root_abs, open.shell, open.command, limits),
-    } };
+    const report = spawned(gpa, io, root_abs, limits, spawn) catch |err| {
+        if (hold) |held| held.finish().deinit(gpa);
+        return err;
+    };
+    var ran: RepoRun = .{ .report = report };
+    if (hold) |held| ran.frozen = held.finish();
     const clean = switch (ran.report.outcome) {
         .exited => |code| code == 0,
         else => false,
@@ -378,7 +386,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
         return ran;
     };
     ran.changed = changes.len;
-    if (changes.len == 0 or !clean) return ran;
+    if (changes.len == 0 or !clean or !ran.frozen.held()) return ran;
     const written = receipts.write(gpa, io, root_abs, .{
         .operation = .run,
         .class = .spending,
@@ -397,6 +405,13 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     gpa.free(written.batch);
     ran.receipt = written.id;
     return ran;
+}
+
+fn spawned(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Limits, spawn: Spawn) !sandbox.Report {
+    return switch (spawn) {
+        .toolchain => |local| runner.runToolchain(gpa, io, root_abs, local, limits),
+        .open => |open| open_shell.run(gpa, io, root_abs, open.shell, open.command, limits),
+    };
 }
 
 const Seen = std.StringArrayHashMapUnmanaged(receipt.Hash);

@@ -236,6 +236,7 @@ test {
     _ = @import("tests/verify_filtered_commit.zig");
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/open_run.zig");
+    _ = @import("tests/open_run_frozen.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_retry.zig");

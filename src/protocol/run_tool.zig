@@ -14,6 +14,7 @@ const toolchain = @import("../platform/toolchain.zig");
 const output_digest = @import("output_digest.zig");
 const receipt_note = @import("receipt_note.zig");
 const open_run = @import("open_run.zig");
+const frozen_hold = @import("../platform/frozen_hold.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -136,16 +137,24 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
             try writeRefused(w, command, "sandbox_unavailable", allowed);
             return true;
         },
+        error.FrozenHoldFailed => {
+            event.fail("FrozenHoldFailed");
+            try writeRefused(w, command, "frozen_hold_failed", allowed);
+            return true;
+        },
         else => |e| return e,
     };
     defer ran.report.deinit(gpa);
+    defer ran.frozen.deinit(gpa);
     recordExit(event, ran.report);
     try writeRan(gpa, io, root_abs, w, command, ran.report, null, "repo");
     if (ran.changed != 0) {
         const field = if (ran.receipt) |id|
             try std.fmt.allocPrint(gpa, ",\"files_changed\":{d},\"receipt\":\"{s}\"", .{ ran.changed, &id })
+        else if (ran.receipt_error) |err|
+            try std.fmt.allocPrint(gpa, ",\"files_changed\":{d},\"receipt_error\":\"{t}\"", .{ ran.changed, err })
         else
-            try std.fmt.allocPrint(gpa, ",\"files_changed\":{d},\"receipt_error\":\"{t}\"", .{ ran.changed, ran.receipt_error.? });
+            try std.fmt.allocPrint(gpa, ",\"files_changed\":{d}", .{ran.changed});
         defer gpa.free(field);
         try receipt_note.insert(gpa, w, field);
     } else if (ran.receipt_error) |err| {
@@ -153,7 +162,22 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         defer gpa.free(field);
         try receipt_note.insert(gpa, w, field);
     }
-    return false;
+    try insertFrozen(gpa, w, ran.frozen);
+    if (!ran.frozen.held()) event.fail("FrozenNotRestored");
+    return !ran.frozen.held();
+}
+
+fn insertFrozen(gpa: Allocator, w: *Writer, frozen: frozen_hold.Report) !void {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try open_run.writeFrozen(gpa, &js, frozen, null);
+    try js.endObject();
+    const text = out.written();
+    if (text.len <= 2) return;
+    text[0] = ',';
+    try receipt_note.insert(gpa, w, text[0 .. text.len - 1]);
 }
 
 fn recordExit(event: *telemetry.Event, report: sandbox.Report) void {
@@ -207,6 +231,9 @@ fn writeRefused(w: *Writer, command: []const u8, reason: []const u8, allowed: []
     if (std.mem.eql(u8, reason, "not_allowed")) {
         try js.objectField("fix");
         try tool_names.writeJson(&js, if (isGit(command)) git_fix else toolchain_fix);
+    } else if (std.mem.eql(u8, reason, "frozen_hold_failed")) {
+        try js.objectField("fix");
+        try js.write(open_run.hold_fix);
     }
     try js.endObject();
     try w.writeByte('\n');

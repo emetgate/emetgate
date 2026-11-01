@@ -1120,6 +1120,26 @@ pub fn writeTypecheckRejected(gpa: Allocator, writer: *Writer, typecheck_cmd: []
     return writeStageRejected(gpa, writer, typecheckReason(report), "typecheck_cmd", typecheck_cmd, report, note);
 }
 
+pub const frozen_fix = "a rule holds this path: change the code instead; only the user changes a frozen path, by hand";
+pub const violation_fix = "remove the violation and call again";
+pub const mixed_fix = "for a frozen path: a rule holds it, so change the code instead and leave the path to the user; for the rest: remove the violation and call again";
+
+fn ruleFix(violations: []const rules.Violation) []const u8 {
+    var frozen: usize = 0;
+    for (violations) |v| {
+        if (rules.isFrozen(.{ .id = v.rule, .check = v.check })) frozen += 1;
+    }
+    if (frozen == 0) return violation_fix;
+    return if (frozen == violations.len) frozen_fix else mixed_fix;
+}
+
+fn firstOfRule(violations: []const rules.Violation, index: usize) bool {
+    for (violations[0..index]) |earlier| {
+        if (std.mem.eql(u8, earlier.rule, violations[index].rule)) return false;
+    }
+    return true;
+}
+
 pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -1129,8 +1149,10 @@ pub fn writeRuleViolation(writer: *Writer, report: rules.Report) !void {
     try js.write("rule_violation");
     try js.objectField("violations");
     try js.beginArray();
-    for (report.violations) |v| try writeViolation(&js, v);
+    for (report.violations, 0..) |v, index| try writeViolation(&js, v, if (firstOfRule(report.violations, index)) v.rule_text else "");
     try js.endArray();
+    try js.objectField("fix");
+    try js.write(ruleFix(report.violations));
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -1159,10 +1181,14 @@ pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure, note: ?Shad
     try writer.writeByte('\n');
 }
 
-fn writeViolation(js: *std.json.Stringify, v: rules.Violation) !void {
+fn writeViolation(js: *std.json.Stringify, v: rules.Violation, rule_text: []const u8) !void {
     try js.beginObject();
     try js.objectField("rule");
     try js.write(v.rule);
+    if (rule_text.len != 0) {
+        try js.objectField("rule_text");
+        try js.write(rule_text);
+    }
     try js.objectField("check");
     try js.write(v.check);
     try js.objectField("file");
@@ -1241,7 +1267,7 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize, untrusted:
     try js.endArray();
     try js.objectField("violations");
     try js.beginArray();
-    for (shown) |v| try writeViolation(&js, v);
+    for (shown) |v| try writeViolation(&js, v, "");
     try js.endArray();
     if (limit != null) {
         try js.objectField("violation_count");
@@ -2083,6 +2109,31 @@ test "a crashed stage is reported as a crash with its hex code, never as a faile
     try testing.expect(std.mem.indexOf(u8, typecheck_json, "\"crash_code\":\"0xC0000142\"") != null);
 }
 
+test "a rule violation payload says each rule's words once and how to go on, frozen or not" {
+    const at = rules.Violation{ .rule = @constCast("r1"), .check = @constCast("frozen"), .file = @constCast("a.test.js"), .line = 1, .col = 1, .end_line = 1, .end_col = 1, .text = @constCast(""), .rule_text = @constCast("tests are held") };
+    var other = at;
+    other.file = @constCast("b.test.js");
+    var plain = at;
+    plain.rule = @constCast("r2");
+    plain.check = @constCast("no_comment");
+    plain.rule_text = @constCast("no comments");
+
+    var frozen_list = [_]rules.Violation{ at, other };
+    var frozen_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer frozen_buffer.deinit();
+    try writeRuleViolation(&frozen_buffer.writer, .{ .violations = &frozen_list });
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, frozen_buffer.written(), "tests are held"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, frozen_buffer.written(), "\"fix\":"));
+    try testing.expect(std.mem.indexOf(u8, frozen_buffer.written(), frozen_fix) != null);
+
+    var mixed_list = [_]rules.Violation{ at, plain };
+    var mixed_buffer: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer mixed_buffer.deinit();
+    try writeRuleViolation(&mixed_buffer.writer, .{ .violations = &mixed_list });
+    try testing.expect(std.mem.indexOf(u8, mixed_buffer.written(), "\"rule_text\":\"no comments\"") != null);
+    try testing.expect(std.mem.indexOf(u8, mixed_buffer.written(), mixed_fix) != null);
+}
+
 test "a rule violation payload lists every violation with its rule and position" {
     var buffer: std.Io.Writer.Allocating = .init(testing.allocator);
     defer buffer.deinit();
@@ -2099,7 +2150,7 @@ test "a rule violation payload lists every violation with its rule and position"
     try writeRuleViolation(&buffer.writer, .{ .violations = &violations });
 
     try testing.expectEqualStrings(
-        "{\"status\":\"rejected\",\"reason\":\"rule_violation\",\"violations\":[{\"rule\":\"r7\",\"check\":\"no_comment\",\"file\":\"src\\\\a.ts\",\"line\":2,\"col\":3,\"end_line\":2,\"end_col\":12,\"text\":\"// \\\"why\\\"\"}]}\n",
+        "{\"status\":\"rejected\",\"reason\":\"rule_violation\",\"violations\":[{\"rule\":\"r7\",\"check\":\"no_comment\",\"file\":\"src\\\\a.ts\",\"line\":2,\"col\":3,\"end_line\":2,\"end_col\":12,\"text\":\"// \\\"why\\\"\"}],\"fix\":\"remove the violation and call again\"}\n",
         buffer.written(),
     );
     try testing.expectEqual(@as(u8, 19), exitCode(error.UnknownCheck));

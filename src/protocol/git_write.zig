@@ -6,6 +6,8 @@ const repo = @import("../platform/repo.zig");
 const exe_path = @import("../platform/exe_path.zig");
 const shadow = @import("../platform/shadow.zig");
 const bounded_run = @import("../platform/bounded_run.zig");
+const rules = @import("../platform/rules.zig");
+const wire = @import("wire.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -226,6 +228,9 @@ pub const Ok = struct {
     path_values: [max_args][]const u8 = undefined,
     npath: usize = 0,
     dashdash: ?usize = null,
+    commit_all: bool = false,
+    commit_include: bool = false,
+    dry_run: bool = false,
 
     fn positionals(self: *const Ok) []const []const u8 {
         return self.pos[0..self.npos];
@@ -291,6 +296,9 @@ const Walker = struct {
         if (std.mem.eql(u8, flag.name, "--staged") or std.mem.eql(u8, flag.name, "-S")) self.staged = true;
         if (std.mem.eql(u8, flag.name, "--worktree") or std.mem.eql(u8, flag.name, "-W")) self.worktree = true;
         if (listed(self.ok.spec.safe_with, flag.name)) self.safe = true;
+        if (std.mem.eql(u8, flag.name, "-a") or std.mem.eql(u8, flag.name, "--all")) self.ok.commit_all = true;
+        if (std.mem.eql(u8, flag.name, "-i") or std.mem.eql(u8, flag.name, "--include")) self.ok.commit_include = true;
+        if (std.mem.eql(u8, flag.name, "--dry-run")) self.ok.dry_run = true;
         if (!flag.value) return null;
         const value = inline_value orelse blk: {
             self.i += 1;
@@ -740,6 +748,8 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
 
+    if (std.mem.eql(u8, ok.spec.sub, "commit") and !ok.dry_run and try refuseFrozen(arena, io, git, root_abs, &ok, w, event)) return true;
+
     const before = try headOid(arena, io, git, root_abs);
     const ran = try runGit(arena, io, root_abs, try fullArgv(arena, git, &prefix, &ok, args), ok.spec.network);
     const after = try headOid(arena, io, git, root_abs);
@@ -783,6 +793,46 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     try js.endObject();
     try w.writeByte('\n');
     return failed;
+}
+
+fn refuseFrozen(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, w: *Writer, event: *telemetry.Event) !bool {
+    var paths: std.ArrayList([]const u8) = .empty;
+    const named = ok.positionals();
+    try appendDiffed(arena, io, git, root_abs, &.{"--cached"}, if (ok.commit_include) &.{} else named, &paths);
+    if (ok.commit_all or named.len != 0) try appendDiffed(arena, io, git, root_abs, &.{}, named, &paths);
+    if (paths.items.len == 0) return false;
+    switch (try rules.frozenGate(arena, io, root_abs, paths.items)) {
+        .ok => return false,
+        .violated => |report| {
+            event.fail("RuleViolation");
+            try wire.writeRuleViolation(w, report);
+            return true;
+        },
+        .failed => |failure| {
+            event.fail("RuleCheckFailed");
+            try writeRefused(w, "rule_check_failed", failure.rule);
+            return true;
+        },
+    }
+}
+
+fn appendDiffed(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, mode: []const []const u8, named: []const []const u8, paths: *std.ArrayList([]const u8)) !void {
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ git, "--no-pager", "diff", "--name-only", "--no-renames", "--relative", "-z" });
+    try argv.appendSlice(arena, mode);
+    try argv.append(arena, "--");
+    try argv.appendSlice(arena, named);
+    const result = try bounded_run.run(arena, io, .{
+        .argv = argv.items,
+        .cwd = .{ .path = root_abs },
+        .stdout_limit = .limited(64 * 1024 * 1024),
+    });
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+    var names = std.mem.tokenizeScalar(u8, result.stdout, 0);
+    while (names.next()) |name| try paths.append(arena, name);
 }
 
 fn checkoutLosesWork(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, args: []const []const u8) !bool {
@@ -896,6 +946,7 @@ fn fixFor(reason: []const u8) []const u8 {
     if (std.mem.eql(u8, reason, "unsupported_value")) return "the strategy is one of ort, recursive, resolve, octopus, ours, subtree";
     if (std.mem.eql(u8, reason, "not_read_only")) return "this form changes the repository; run it with emetgate_git_write";
     if (std.mem.eql(u8, reason, "too_many_args")) return "give at most 32 arguments";
+    if (std.mem.eql(u8, reason, "rule_check_failed")) return "the frozen rules could not be checked, so nothing was committed; emetgate doctor says why";
     return "use a supported flag; file edits go through the gate";
 }
 
