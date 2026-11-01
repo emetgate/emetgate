@@ -89,16 +89,36 @@ fn unfoldDocs(base: *Snapshot, cut: Span, body: []const u8) Allocator.Error!?[]u
     return doc_fold.restore(base.runtime.gpa, base.profile, base.tree, cut.start, cut.end, body);
 }
 
+const BodySplice = struct { cut: Span, text: []const u8, tail: []const u8 };
+
+fn bodySplice(base: *Snapshot, body: ts.Node, text: []const u8) BodySplice {
+    const whole: BodySplice = .{ .cut = .{ .start = body.startByte(), .end = body.endByte() }, .text = text, .tail = "" };
+    const clause = base.profile.expression_body orelse return whole;
+    const was_clause = std.mem.eql(u8, body.kind(), clause);
+    const trimmed = std.mem.trimEnd(u8, text, " \t\r\n");
+    if (std.mem.startsWith(u8, trimmed, "=>")) {
+        const bare = std.mem.trimEnd(u8, std.mem.trimEnd(u8, trimmed, ";"), " \t\r\n");
+        return .{ .cut = whole.cut, .text = bare, .tail = if (was_clause) "" else ";" };
+    }
+    if (!was_clause) return whole;
+    var end = whole.cut.end;
+    while (end < base.source.len and std.ascii.isWhitespace(base.source[end])) end += 1;
+    if (end == base.source.len or base.source[end] != ';') return whole;
+    return .{ .cut = .{ .start = whole.cut.start, .end = end + 1 }, .text = text, .tail = "" };
+}
+
 fn applyBody(base: *Snapshot, mutation: Mutation, target: *const symbol.Symbol) Error!Applied {
     const unfolded = try unfoldDocs(base, .{ .start = target.body.startByte(), .end = target.body.endByte() }, normalizeBody(mutation.new_body));
     defer if (unfolded) |text| base.runtime.gpa.free(text);
-    const new_body = try followLineEnding(base.runtime.gpa, unfolded orelse normalizeBody(mutation.new_body), crlfOf(base.source));
-    defer base.runtime.gpa.free(new_body);
+    const shaped = try followLineEnding(base.runtime.gpa, unfolded orelse normalizeBody(mutation.new_body), crlfOf(base.source));
+    defer base.runtime.gpa.free(shaped);
     const before = try base.symbols();
     if (!std.mem.eql(u8, &target.hash, &mutation.expected_hash)) return error.HashMismatch;
 
-    const cut: Span = .{ .start = target.body.startByte(), .end = target.body.endByte() };
-    const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source[0..cut.start], new_body, base.source[cut.end..] });
+    const splice = bodySplice(base, target.body, shaped);
+    const cut = splice.cut;
+    const new_body = splice.text;
+    const source = try std.mem.concat(base.runtime.gpa, u8, &.{ base.source[0..cut.start], new_body, splice.tail, base.source[cut.end..] });
     const next = try Snapshot.fromSource(base.runtime, base.profile, source);
     errdefer next.destroy();
     if (next.tree.root().hasError()) return error.MutationSyntaxInvalid;
@@ -109,12 +129,13 @@ fn applyBody(base: *Snapshot, mutation: Mutation, target: *const symbol.Symbol) 
     };
 
     const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(new_body.len)) };
-    const patched_target = after.resolve(mutation.ref) catch return error.BodyEscape;
+    const hole: Span = .{ .start = slot.start, .end = slot.end + @as(u32, @intCast(splice.tail.len)) };
+    const patched_target = after.resolve(target.ref) catch return error.BodyEscape;
     try expectExactSlot(base.profile, patched_target.body, slot);
     try rejectPlaceholder(base.profile, patched_target.body);
-    try expectUntouchedOutside(before.*, after.*, cut, slot);
+    try expectUntouchedOutside(before.*, after.*, cut, hole);
 
-    return .{ .snapshot = next, .hash = patched_target.hash, .body = slot, .hole = .{ .old = cut, .new = slot } };
+    return .{ .snapshot = next, .hash = patched_target.hash, .body = slot, .hole = .{ .old = cut, .new = hole } };
 }
 
 fn replaceItem(base: *Snapshot, mutation: Mutation) Error!Applied {
@@ -129,11 +150,11 @@ fn replaceItem(base: *Snapshot, mutation: Mutation) Error!Applied {
     defer gpa.free(body);
     const text = try shapeText(gpa, base, target.span, body);
     defer gpa.free(text);
-    return spliceItem(base, mutation.ref, target.span, target.span, text) catch |err| {
+    return spliceItem(base, target.ref, target.span, target.span, text) catch |err| {
         if (target.role != .property) return err;
         const value = target.node.childByField(base.profile.declarations.items.pair_value) orelse return err;
         const value_span: Span = .{ .start = value.startByte(), .end = value.endByte() };
-        return spliceItem(base, mutation.ref, target.span, value_span, text) catch return err;
+        return spliceItem(base, target.ref, target.span, value_span, text) catch return err;
     };
 }
 
@@ -147,12 +168,17 @@ fn spliceItem(base: *Snapshot, ref: symbol.Ref, old: Span, cut: Span, text: []co
     };
     const slot: Span = .{ .start = cut.start, .end = cut.start + @as(u32, @intCast(text.len)) };
     const grown: Span = .{ .start = old.start, .end = old.end - (cut.end - cut.start) + slot.end - slot.start };
-    const placed = after.item(ref) catch return error.BodyEscape;
-    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;
+    const placed = placedAt(after.*, ref, grown) orelse return error.BodyEscape;
     if (placed.body) |body| try rejectPlaceholder(base.profile, body);
     try expectSameShape(base.tree, next.tree, cut, slot);
     try expectUntouchedOutside(before.*, after.*, old, grown);
     return .{ .snapshot = next, .hash = placed.hash, .hole = .{ .old = cut, .new = slot }, .body = slot };
+}
+
+fn placedAt(after: symbol.Table, ref: symbol.Ref, grown: Span) ?symbol.Item {
+    const exact = after.itemExact(ref) catch return after.memberAt(ref, grown);
+    if (exact.span.start == grown.start and exact.span.end == grown.end) return exact;
+    return after.memberAt(ref, grown);
 }
 
 fn reparse(base: *Snapshot, cut: Span, text: []const u8) Error!*Snapshot {
@@ -284,7 +310,7 @@ pub fn propose(base: *Snapshot, ref: symbol.Ref, expected: symbol.Expected, new_
 
 pub fn insert(base: *Snapshot, insertion: Insertion) Error!Applied {
     const before = try base.symbols();
-    if (before.item(insertion.ref)) |_| return error.SymbolExists else |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;
+    if (before.itemExact(insertion.ref)) |_| return error.SymbolExists else |err| if (err == error.AmbiguousSymbol) return error.SymbolExists;
 
     const eol = try lineEnding(base.source);
     const new_body = try followLineEnding(base.runtime.gpa, normalizeBody(insertion.new_body), crlfOf(eol));
@@ -393,7 +419,14 @@ fn classHolding(table: symbol.Table, ref: symbol.Ref) ?ts.Node {
     for (table.declarations) |declaration| {
         if (declaration.kind == .class and !declaration.ambiguous and declaration.ref.eql(owner)) return declaration.node;
     }
-    return null;
+    if (!table.short_refs) return null;
+    var found: ?ts.Node = null;
+    for (table.declarations) |declaration| {
+        if (declaration.kind != .class or declaration.ambiguous or !owner.abbreviates(declaration.ref)) continue;
+        if (found != null) return null;
+        found = declaration.node;
+    }
+    return found;
 }
 
 fn insertMember(base: *Snapshot, ref: symbol.Ref, class: ts.Node, new_body: []const u8, eol: []const u8) Error!Applied {
@@ -583,7 +616,7 @@ fn expectUntouchedOutside(before: symbol.Table, after: symbol.Table, cut: Span, 
 fn hasTwinOutside(table: symbol.Table, wanted: symbol.Symbol, slot: Span) bool {
     for (table.symbols) |candidate| {
         if (!isOutside(candidate.declaration, slot)) continue;
-        if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;
+        if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;
     }
     return false;
 }

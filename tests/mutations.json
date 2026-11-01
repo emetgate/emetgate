@@ -1186,7 +1186,7 @@
     {
       "id": "G6-rules-body-claimed-untouched",
       "file": "src/engine/cas.zig",
-      "from": ".body = slot, .hole = .{ .old = cut, .new = slot } };",
+      "from": ".body = slot, .hole = .{ .old = cut, .new = hole } };",
       "to": ".body = slot, .hole = .{ .old = cut, .new = .{ .start = slot.start, .end = slot.start } } };",
       "kills": [
         "rules: an enforced no_comment rule rejects a commented body before the tests run",
@@ -1372,7 +1372,7 @@
       "expect_status": "survived",
       "note": "defense in depth for body replacement: a 594-case differential spike (ASI, regex/division, template, comment, U+2028, shared declarators, class and object members) found no body that passes every other guard and fails only this one; it is the load-bearing guard for the planned insertion target",
       "file": "src/engine/cas.zig",
-      "from": "    try expectUntouchedOutside(before.*, after.*, cut, slot);\n",
+      "from": "    try expectUntouchedOutside(before.*, after.*, cut, hole);\n",
       "to": "    _ = before;\n",
       "filter": [
         "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour",
@@ -1404,8 +1404,8 @@
         "outside-symbol lock rejects a renamed, re-hashed, added or removed neighbour"
       ],
       "file": "src/engine/cas.zig",
-      "from": "if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;",
-      "to": "if (candidate.ref.eql(wanted.ref)) return true;"
+      "from": "if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;",
+      "to": "if (candidate.ref.sameMember(wanted.ref)) return true;"
     },
     {
       "id": "EC12-cas-body-trim-removed",
@@ -1587,7 +1587,7 @@
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "            a.ambiguous = true;\n            b.ambiguous = true;\n",
+      "from": "    for (items, clashing) |*item, clash| item.ambiguous = clash;\n",
       "to": ""
     },
     {
@@ -1596,8 +1596,8 @@
         "static, instance, getter and setter collisions are distinct refs; true duplicates are ambiguous"
       ],
       "file": "src/engine/symbol.zig",
-      "from": "        if (found != null) return error.AmbiguousSymbol;\n",
-      "to": ""
+      "from": "            if (found != null) return error.AmbiguousSymbol;\n            found = symbol;\n",
+      "to": "            found = symbol;\n"
     },
     {
       "id": "ES3-sym-unnamed-container-skipped",
@@ -1935,8 +1935,8 @@
     {
       "id": "NS2-insert-existing-symbol-accepted",
       "file": "src/engine/cas.zig",
-      "from": "    if (before.item(insertion.ref)) |_| return error.SymbolExists else",
-      "to": "    if (before.item(insertion.ref)) |_| {} else",
+      "from": "    if (before.itemExact(insertion.ref)) |_| return error.SymbolExists else",
+      "to": "    if (before.itemExact(insertion.ref)) |_| {} else",
       "kills": [
         "insert refuses a symbol that already exists, even as a duplicate"
       ]
@@ -13349,8 +13349,8 @@
     {
       "id": "PY-PF3-decorator-outside-class-read",
       "file": "src/engine/lang/python/profile.zig",
-      "from": "    if (!std.mem.eql(u8, owner.kind(), \"block\") or !std.mem.eql(u8, class.kind(), \"class_definition\")) return .{};\n",
-      "to": "    if (!std.mem.eql(u8, owner.kind(), \"block\")) return .{};\n    _ = class;\n",
+      "from": "    const in_class = if (class) |c| std.mem.eql(u8, owner.?.kind(), \"block\") and std.mem.eql(u8, c.kind(), \"class_definition\") else false;\n",
+      "to": "    const in_class = if (class != null) std.mem.eql(u8, owner.?.kind(), \"block\") else false;\n",
       "kills": [
         "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
       ]
@@ -13378,8 +13378,8 @@
     {
       "id": "PY-PF6-property-not-getter",
       "file": "src/engine/lang/python/profile.zig",
-      "from": "            .property => traits.accessor = .get,\n",
-      "to": "            .property => {},\n",
+      "from": "            .property, .getter => traits.accessor = .get,\n",
+      "to": "            .property, .getter => {},\n",
       "kills": [
         "python profile reads staticmethod, classmethod, property and setter decorators of a class member only"
       ]
@@ -14439,8 +14439,8 @@
     {
       "id": "JS1-item-span-escape-unchecked",
       "file": "src/engine/cas.zig",
-      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;",
-      "to": "    if (false) return error.BodyEscape;",
+      "from": "    if (exact.span.start == grown.start and exact.span.end == grown.end) return exact;\n    return after.memberAt(ref, grown);\n",
+      "to": "    return exact;\n",
       "expect_status": "survived",
       "note": "defense in depth: the item span check and expectSameShape each refuse every escape the other does, since the shape walk pins the item's enclosing node and the span check pins the item; JS2 removes the other guard and JS1B removes both"
     },
@@ -14455,8 +14455,8 @@
     {
       "id": "JS1B-item-span-and-shape-unchecked",
       "file": "src/engine/cas.zig",
-      "from": "    if (placed.span.start != grown.start or placed.span.end != grown.end) return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n    try expectSameShape(base.tree, next.tree, cut, slot);\n",
-      "to": "    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n",
+      "from": "    const placed = placedAt(after.*, ref, grown) orelse return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n    try expectSameShape(base.tree, next.tree, cut, slot);\n",
+      "to": "    const placed = after.itemExact(ref) catch return error.BodyEscape;\n    if (placed.body) |body| try rejectPlaceholder(base.profile, body);\n",
       "kills": [
         "a replaced item that grows into its neighbour or changes its name is refused"
       ]

@@ -3,6 +3,7 @@ const tool_names = @import("../engine/tool_names.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const symbol = @import("../engine/symbol.zig");
 const wire = @import("wire.zig");
+const recovery = @import("recovery.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const tool_result = @import("tool_result.zig");
@@ -40,6 +41,7 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
+        if (err == error.AmbiguousSymbol) _ = recovery.ambiguity(gpa, io, runtime, policy.root, "", file, sym);
         if (err == error.DynamicReference and dynamic.count != 0) wire.setFix("{s} is also reached dynamically at {s}{s}; pass allow_dynamic:true to rename the static references and get these sites back to review by hand", .{ sym, dynamic.list(), if (dynamic.count > 8) " and more" else "" });
         if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix("the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_try_batch old_string/new_string items, one per file, with replace_all:true", .{ @errorName(cause), sym, tool_names.prefix() });
         if (err == error.RenameUnresolved and unresolved.count != 0) wire.setFix("{s} has references that could not be proven at {s}{s}; nothing was written; rename these sites by hand with {s}emetgate_try_batch", .{ sym, unresolved.list(), if (unresolved.count > 8) " and more" else "", tool_names.prefix() });

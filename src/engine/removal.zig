@@ -131,13 +131,20 @@ fn expectOthersUntouched(before: symbol.Table, after: symbol.Table, cut: Span) e
     for (before.declarations) |old| {
         if (old.declaration.start >= cut.start and old.declaration.start < cut.end) continue;
         if (old.declaration.start <= cut.start and old.declaration.end >= cut.end) continue;
-        if (after.declarationMatching(old.ref, old.hash) == null) return error.BodyEscape;
+        if (!hasDeclarationTwin(after, old)) return error.BodyEscape;
     }
+}
+
+fn hasDeclarationTwin(table: symbol.Table, wanted: symbol.Declaration) bool {
+    for (table.declarations) |candidate| {
+        if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;
+    }
+    return false;
 }
 
 fn hasTwin(table: symbol.Table, wanted: symbol.Symbol) bool {
     for (table.symbols) |candidate| {
-        if (candidate.ref.eql(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;
+        if (candidate.ref.sameMember(wanted.ref) and std.mem.eql(u8, &candidate.hash, &wanted.hash)) return true;
     }
     return false;
 }
