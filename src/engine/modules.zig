@@ -550,6 +550,7 @@ test "modules: a python statement that can run no user code at import is no modu
     try testing.expect(try pythonEffects(runtime, "try:\n    import a\nelse:\n    print(1)\nfinally:\n    pass\n"));
     try testing.expect(try pythonEffects(runtime, "try:\n    import a\nfinally:\n    print(1)\n"));
     try testing.expect(try pythonEffects(runtime, "for i in x:\n    pass\n"));
+    try testing.expect(try pythonEffects(runtime, "from dataclasses import dataclass\n\n@dataclass\ndef f():\n    x = 1\n"));
     try testing.expect(!try pythonEffects(runtime, "try:\n    import a\nexcept* E:\n    a = None\n"));
     try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.version_info >= (limit, 8):\n    a = 1\n"));
     try testing.expect(try pythonEffects(runtime, "import sys\n\nif sys.argv == (1, 2):\n    a = 1\n"));

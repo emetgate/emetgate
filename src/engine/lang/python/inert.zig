@@ -82,9 +82,7 @@ fn inertTry(snapshot: *const Snapshot, statement: ts.Node) bool {
             if (!inertBlock(snapshot, child)) return false;
         } else if (eql(kind, "else_clause")) {
             if (!inertBlock(snapshot, child.childByField("body"))) return false;
-        } else if (eql(kind, "except_clause") or eql(kind, "finally_clause")) {
-            if (!inertClause(snapshot, child)) return false;
-        } else return false;
+        } else if (!inertClause(snapshot, child)) return false;
     }
     return true;
 }

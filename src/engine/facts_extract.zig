@@ -361,7 +361,6 @@ const Extractor = struct {
         };
         if (try self.globalType(node)) |global| return global;
         if (std.mem.eql(u8, kind, self.profile.identifier) or oneOf(kind, self.g.type_kinds)) {
-            if (self.isTypeParameter(node)) return null;
             const binder = self.binderOfUse(node.startByte()) orelse return null;
             const target = self.targetOfBinder(binder) orelse return null;
             return try self.addType(.{ .target = target });
@@ -999,7 +998,6 @@ const Extractor = struct {
         }
         if (std.mem.eql(u8, kind, self.profile.identifier)) {
             const at = self.use_at.get(object.startByte()) orelse return .{ .unresolved = .property_needs_type };
-            if (self.isTypeParameter(object)) return .{ .unresolved = .property_needs_type };
             const binder_index = self.boundIndex(at) orelse {
                 const global = (try self.globalType(object)) orelse return .{ .unresolved = .global };
                 return .{ .member_of_type = global };

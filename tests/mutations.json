@@ -1063,8 +1063,8 @@
     {
       "id": "B1-body-only-bounded-shortcut-restored",
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
-      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
+      "from": "    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);",
+      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);",
       "kills": [
         "body-only: an exported declaration is UNBOUNDED",
         "body-only: a callback escape is UNBOUNDED",
@@ -1432,7 +1432,7 @@
         "body-only: an exported declaration is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);\n",
+      "from": "    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);\n",
       "to": ""
     },
     {
@@ -4950,8 +4950,8 @@
     {
       "id": "BCR8-symmetry-ignores-effects",
       "file": "src/engine/symmetry.zig",
-      "from": "    if (isEffect(profile, node.kind())) return true;\n",
-      "to": "",
+      "from": "    if (isEffect(profile, node.kind()) or isUpdate(profile, node)) return true;\n",
+      "to": "    if (isUpdate(profile, node)) return true;\n",
       "kills": [
         "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
       ]
@@ -6943,7 +6943,7 @@
     {
       "id": "FCS1-typed-edge-labelled-proven",
       "file": "src/engine/facts_store.zig",
-      "from": "certainty = .typed;",
+      "from": "certainty = if (ref.static) .proven else .typed;",
       "to": "certainty = .proven;",
       "kills": [
         "facts store: an inherited method is found through the base class of another file, a typed receiver is labelled typed",
@@ -12564,9 +12564,11 @@
       "file": "src/platform/rename_graph.zig",
       "from": "                if (found.eql(parent_at)) {\n                    try self.prove(file, ref.start);\n                } else",
       "to": "                if (found.eql(parent_at)) {} else",
-      "kills": [
+      "expect_status": "survived",
+      "filter": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call"
-      ]
+      ],
+      "note": "the fact store now links this call through its own C# name lookup before proveGlobal looks at it, so this proof no longer decides the listed test"
     },
     {
       "id": "CSR17-static-shape-not-compared",
@@ -12586,14 +12588,7 @@
       "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
       "to": "                if (i == 0 or d.kind == .constructor) continue;",
       "kills": [
-        "rename facts: a C# static method called from another file is renamed at its declaration and every call",
-        "rename facts: a C# method call through a using directive is renamed",
-        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
-        "rename facts: a C# class in the global namespace is renamed in another file",
-        "rename facts: a C# instance method called through a typed parameter in another file is renamed",
-        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed",
-        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept",
-        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12632,7 +12627,7 @@
       "from": "        if (prefix.len == 0) return at;",
       "to": "        if (prefix.len == 0) return null;",
       "kills": [
-        "rename facts: a C# class in the global namespace is renamed in another file"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12641,7 +12636,7 @@
       "from": "        if (try self.enclosedBy(file, node, namespace)) return at;\n",
       "to": "",
       "kills": [
-        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12650,7 +12645,7 @@
       "from": "        if (self.imports(file, node, namespace)) return at;\n",
       "to": "",
       "kills": [
-        "rename facts: a C# method call through a using directive is renamed"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -17534,7 +17529,7 @@
       "from": "if (self.typed_at.contains(entry.value_ptr.*)) continue;",
       "to": "if (true or self.typed_at.contains(entry.value_ptr.*)) continue;",
       "kills": [
-        "rename facts: a Python local stops being typed when the function it was built from is rebound"
+        "rename facts: a Python local built through a rebound local stays unproven"
       ]
     },
     {
@@ -17543,7 +17538,7 @@
       "from": "if (self.f.sole_binder_types and !self.isSoleBinder(binder)) return null;",
       "to": "if (false and !self.isSoleBinder(binder)) return null;",
       "kills": [
-        "rename facts: a Python local stops being typed when the function it was built from is rebound"
+        "rename facts: a Python call of a name its own file rebinds gives no type"
       ]
     },
     {
@@ -17552,7 +17547,7 @@
       "from": "if (self.f.sole_binder_types and !self.isSoleBinder(name.startByte())) return null;",
       "to": "if (false and !self.isSoleBinder(name.startByte())) return null;",
       "kills": [
-        "rename facts: a Python local stops being typed when the function it was built from is rebound"
+        "rename facts: a Python function its module rebinds gives no type to an importer"
       ]
     },
     {
@@ -17579,7 +17574,7 @@
       "from": "if (oneOf(kind, self.f.generator_kinds)) return null;",
       "to": "if (false and oneOf(kind, self.f.generator_kinds)) return null;",
       "kills": [
-        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+        "rename facts: a Python generator that also returns a constructor gives no type"
       ]
     },
     {
@@ -17619,30 +17614,12 @@
       ]
     },
     {
-      "id": "T3-R12-parameter-as-return-type",
-      "file": "src/engine/facts_extract.zig",
-      "from": "if (self.isTypeParameter(node)) return null;",
-      "to": "if (false and self.isTypeParameter(node)) return null;",
-      "kills": [
-        "rename facts: a C# type parameter is never the class of the same name"
-      ]
-    },
-    {
-      "id": "T3-R13-parameter-as-receiver",
-      "file": "src/engine/facts_extract.zig",
-      "from": "if (self.isTypeParameter(object)) return .{ .unresolved = .property_needs_type };",
-      "to": "if (false and self.isTypeParameter(object)) return .{ .unresolved = .property_needs_type };",
-      "kills": [
-        "rename facts: a C# type parameter hides a class of the same name in its own file"
-      ]
-    },
-    {
       "id": "T3-R14-parameter-as-name",
       "file": "src/engine/facts_extract.zig",
       "from": "        if (self.isTypeParameter(node)) {\n",
       "to": "        if (false and self.isTypeParameter(node)) {\n",
       "kills": [
-        "rename facts: a C# type parameter hides a class of the same name in its own file"
+        "fact store: a csharp type parameter makes no reference to a class of the same name"
       ]
     },
     {
@@ -17660,7 +17637,7 @@
       "from": "if (!self.f.global_types) return false;\n        const def = self.def_at_name.get",
       "to": "if (true) return false;\n        const def = self.def_at_name.get",
       "kills": [
-        "fact store: a csharp class with a constructor and a nested type links its own names"
+        "fact store: a csharp type declared twice in one file is unproven and the nearest namespace wins inside a file"
       ]
     },
     {
@@ -17710,6 +17687,34 @@
       ]
     },
     {
+      "id": "T3-R22-called-names-not-followed",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try graph.addCalled(io, runtime, root);\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method through a local built by a factory in a file that never names the method is renamed",
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
+      "id": "T3-R23-called-binding-by-local-name",
+      "file": "src/platform/rename_graph.zig",
+      "from": "if (found.bindings[b].imported.len != 0) found.bindings[b].imported else found.bindings[b].local,",
+      "to": "found.bindings[b].local,",
+      "kills": [
+        "rename facts: a Python method through a local built by a factory in a file that never names the method is renamed"
+      ]
+    },
+    {
+      "id": "T3-R24-called-path-not-cut-to-its-last-name",
+      "file": "src/platform/rename_graph.zig",
+      "from": "const dot = std.mem.lastIndexOfScalar(u8, path, '.') orelse return path;\n    return path[dot + 1 ..];",
+      "to": "return path;",
+      "kills": [
+        "rename facts: a qualified C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
       "id": "T3-G1-class-call-not-the-class",
       "file": "src/engine/facts_store.zig",
       "from": "if (def.kind == .class) return .{ .def = owner };",
@@ -17724,7 +17729,7 @@
       "from": "if (def.parent != 0 and self.declaredIn(state.facts.defs[def.parent].qname, .type) == .many) return .{ .unresolved = .property_needs_type };",
       "to": "if (false and def.parent != 0 and self.declaredIn(state.facts.defs[def.parent].qname, .type) == .many) return .{ .unresolved = .property_needs_type };",
       "kills": [
-        "rename facts: a C# method through var whose type cannot be proven refuses and names every site"
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
       ]
     },
     {
@@ -17751,7 +17756,7 @@
       "from": "if (base_state.facts.defs[base_index].kind == .interface) return false;",
       "to": "if (false and base_state.facts.defs[base_index].kind == .interface) return false;",
       "kills": [
-        "fact store: a csharp call's return type is unproven when a base class may hold another overload"
+        "fact store: a csharp interface base leaves a call's return type proven"
       ]
     },
     {
@@ -17769,7 +17774,7 @@
       "from": "if (found != null) return .{ .unresolved = .global };\n            found = i;",
       "to": "if (false and found != null) return .{ .unresolved = .global };\n            found = i;",
       "kills": [
-        "rename facts: a C# method through var whose type cannot be proven refuses and names every site"
+        "fact store: a csharp type declared twice in one file is unproven and the nearest namespace wins inside a file"
       ]
     },
     {
@@ -17778,7 +17783,7 @@
       "from": "if (other != key.file) return .many;",
       "to": "if (false and other != key.file) return .many;",
       "kills": [
-        "rename facts: a C# method through var whose type cannot be proven refuses and names every site"
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
       ]
     },
     {
@@ -17787,14 +17792,14 @@
       "from": "if (in_type) return .{ .unresolved = .member_not_found };",
       "to": "if (false and in_type) return .{ .unresolved = .member_not_found };",
       "kills": [
-        "fact store: a csharp namespace-qualified static call links through its full path"
+        "fact store: a csharp path through a type never continues into a namespace of the same name"
       ]
     },
     {
       "id": "T3-G10-using-any-block",
       "file": "src/engine/facts_store.zig",
       "from": "return !spec.global and std.mem.eql(u8, spec.scope, level) and spec.start <= t.at and t.at < spec.end;",
-      "to": "return !spec.global and spec.start <= t.at and t.at < spec.end;",
+      "to": "return !spec.global and (true or std.mem.eql(u8, spec.scope, level)) and spec.start <= t.at and t.at < spec.end;",
       "kills": [
         "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it"
       ]
@@ -17803,7 +17808,7 @@
       "id": "T3-G11-using-whole-file",
       "file": "src/engine/facts_store.zig",
       "from": "return !spec.global and std.mem.eql(u8, spec.scope, level) and spec.start <= t.at and t.at < spec.end;",
-      "to": "return !spec.global and std.mem.eql(u8, spec.scope, level);",
+      "to": "return !spec.global and std.mem.eql(u8, spec.scope, level) and (true or (spec.start <= t.at and t.at < spec.end));",
       "kills": [
         "fact store: a csharp using static stays unproven when another import, block or base could supply the name"
       ]
@@ -17895,7 +17900,7 @@
       "from": "std.mem.writeInt(u32, parent[4..8], d.returns, .little);",
       "to": "std.mem.writeInt(u32, parent[4..8], 0, .little);",
       "kills": [
-        "fact store: a csharp call's return type follows a change in the file that declares it"
+        "fact store: a csharp return type moved between two methods reaches the caller"
       ]
     },
     {
@@ -17922,7 +17927,7 @@
       "from": "certainty = if (ref.static) .proven else .typed;",
       "to": "certainty = if (false and ref.static) .proven else .typed;",
       "kills": [
-        "csharp facts: a static call across classes"
+        "fact store: a csharp call through a type name is proven and one through a local is typed"
       ]
     },
     {
@@ -18135,8 +18140,8 @@
     {
       "id": "T3-I23-try-else-unchecked",
       "file": "src/engine/lang/python/inert.zig",
-      "from": "if (!inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (eql(kind, \"except_clause\")",
-      "to": "if (false and !inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (eql(kind, \"except_clause\")",
+      "from": "if (!inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (!inertClause(snapshot, child)) return false;",
+      "to": "if (false and !inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (!inertClause(snapshot, child)) return false;",
       "kills": [
         "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
       ]
@@ -18155,15 +18160,6 @@
       "file": "src/engine/lang/python/inert.zig",
       "from": "if (eql(child.kind(), \"block\")) {\n            if (!inertBlock(snapshot, child)) return false;",
       "to": "if (eql(child.kind(), \"block\")) {\n            if (false and !inertBlock(snapshot, child)) return false;",
-      "kills": [
-        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
-      ]
-    },
-    {
-      "id": "T3-I26-unknown-try-clause-accepted",
-      "file": "src/engine/lang/python/inert.zig",
-      "from": "} else return false;\n    }\n    return true;\n}\n\nfn inertClause",
-      "to": "} else {}\n    }\n    return true;\n}\n\nfn inertClause",
       "kills": [
         "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
       ]
@@ -18455,6 +18451,78 @@
       "to": "if (false and !inert(snapshot, statement)) return true;",
       "kills": [
         "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-F1-called-flag-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.called = flags & 1 != 0;",
+      "to": "t.called = false;",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F2-value-flag-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.value = flags & 2 != 0;",
+      "to": "t.value = false;",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F3-alias-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "s.alias = try d.str();",
+      "to": "_ = try d.str();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F4-using-range-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "s.end = try d.int();",
+      "to": "_ = try d.int();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F5-scope-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.scope = try d.str();",
+      "to": "_ = try d.str();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F6-at-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.at = try d.int();",
+      "to": "_ = try d.int();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F7-returns-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "def.returns = try d.index();",
+      "to": "_ = try d.index();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F8-enclosing-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.enclosing = try d.index();",
+      "to": "_ = try d.index();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
       ]
     }
   ]

@@ -476,6 +476,66 @@ test "rename facts: a C# class in the global namespace is renamed in another fil
     try expectSource(planned, "Use.cs", "public class Use\n{\n    public int Go() { return Tool.Start(); }\n}\n");
 }
 
+test "rename facts: a C# class named only as a parameter type in another file is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "Tool.cs", .text = "public class Tool\n{\n    public int Run() { return 1; }\n}\n" },
+            .{ .rel = "Use.cs", .text = "public class Use\n{\n    public int Go(Tool t) { return 1; }\n}\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("Tool.cs", "Tool", "Device", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "Use.cs", "public class Use\n{\n    public int Go(Device t) { return 1; }\n}\n");
+    }
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "Tool.cs", .text = "namespace Shop\n{\npublic class Tool\n{\n    public int Run() { return 1; }\n}\n}\n" },
+            .{ .rel = "Use.cs", .text = "namespace Shop.Sub\n{\npublic class Use\n{\n    public int Go(Tool t) { return 1; }\n}\n}\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("Tool.cs", "Shop.Tool", "Device", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "Use.cs", "namespace Shop.Sub\n{\npublic class Use\n{\n    public int Go(Device t) { return 1; }\n}\n}\n");
+    }
+    {
+        var case = try Case.init(&.{
+            .{ .rel = "Tool.cs", .text = "namespace Shop\n{\npublic class Tool\n{\n    public int Run() { return 1; }\n}\n}\n" },
+            .{ .rel = "Use.cs", .text = "using Shop;\n\npublic class Use\n{\n    public int Go(Tool t) { return 1; }\n}\n" },
+        });
+        defer case.deinit();
+        const planned = try case.plan("Tool.cs", "Shop.Tool", "Device", true);
+        defer planned.deinit(testing.allocator);
+        try expectSource(planned, "Use.cs", "using Shop;\n\npublic class Use\n{\n    public int Go(Device t) { return 1; }\n}\n");
+    }
+}
+
+test "rename facts: a Python method through a local built by a factory in a file that never names the method is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "models.py", .text = "class Cart:\n    def total(self):\n        return 1\n" },
+        .{ .rel = "factory.py", .text = "from models import Cart\n\n\ndef make_cart():\n    return Cart()\n" },
+        .{ .rel = "use.py", .text = "from factory import make_cart as mk\n\n\ndef first():\n    c = mk()\n    return c.total()\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("models.py", "Cart.total", "grand", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "use.py", "from factory import make_cart as mk\n\n\ndef first():\n    c = mk()\n    return c.grand()\n");
+}
+
+test "rename facts: a C# method through var built by a factory in a file that never names the method is renamed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Models.cs", .text = "namespace Shop.Models\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n    }\n}\n" },
+        .{ .rel = "Factory.cs", .text = "namespace Shop.Models\n{\n    public static class Factory\n    {\n        public static Cart Make() { return new Cart(); }\n    }\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App\n{\n    public class Use\n    {\n        public int Go() { var c = Shop.Models.Factory.Make(); return c.Total(); }\n    }\n}\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("Models.cs", "Shop.Models.Cart.Total", "Grand", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "Use.cs", "namespace App\n{\n    public class Use\n    {\n        public int Go() { var c = Shop.Models.Factory.Make(); return c.Grand(); }\n    }\n}\n");
+}
+
 test "rename facts: a public C# method in one file still needs interface approval" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{.{ .rel = "src/Box.cs", .text = box_cs }});
@@ -994,6 +1054,42 @@ test "rename facts: a Python local stops being typed when the function it was bu
     try testing.expectEqualStrings("m.py:15", sites.list());
 }
 
+test "rename facts: a Python local built through a rebound local stays unproven" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{.{ .rel = "m.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\nclass Box:\n    def cart(self) -> Cart:\n        return Cart()\n\n\ndef make():\n    return Box()\n\n\ndef go(x):\n    y = make()\n    if x:\n        y = x\n    c = y.cart()\n    return c.total()\n" }});
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqualStrings("m.py:20", sites.list());
+}
+
+test "rename facts: a Python generator that also returns a constructor gives no type" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{ .{ .rel = "m.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\ndef gen():\n    yield 1\n    return Cart()\n\n\ndef go():\n    c = gen()\n    return c.total()\n" } });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("m.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqualStrings("m.py:13", sites.list());
+}
+
+test "rename facts: a Python call of a name its own file rebinds gives no type" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{ .{ .rel = "cart.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\ndef make():\n    return Cart()\n" }, .{ .rel = "use.py", .text = "from cart import make\n\nmake = print\n\n\ndef go():\n    c = make()\n    return c.total()\n" } });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("cart.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqualStrings("use.py:8", sites.list());
+}
+
+test "rename facts: a Python function its module rebinds gives no type to an importer" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{ .{ .rel = "cart.py", .text = "class Cart:\n    def total(self):\n        return 1\n\n\ndef make():\n    return Cart()\n\n\nmake = print\n" }, .{ .rel = "use.py", .text = "from cart import make\n\n\ndef go():\n    c = make()\n    return c.total()\n" } });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("cart.py", "Cart.total", "grand", true, &sites));
+    try testing.expectEqualStrings("use.py:6", sites.list());
+}
+
 test "rename facts: a C# method through var from a call with a declared return type is renamed" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{
@@ -1010,13 +1106,38 @@ test "rename facts: a C# method through var from a call with a declared return t
 test "rename facts: a C# method through var whose type cannot be proven refuses and names every site" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{
-        .{ .rel = "Models.cs", .text = "using System.Threading.Tasks;\n\nnamespace Shop.Models\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n    }\n\n    public class T\n    {\n        public int Total() { return 1; }\n    }\n\n    public static class Maker\n    {\n        public static Cart Two() { return new Cart(); }\n        public static Cart Two(int x) { return new Cart(); }\n        public static U Pick<U>() { return default(U); }\n        public static dynamic Loose() { return null; }\n        public static async Task<Cart> Later() { await Task.Yield(); return new Cart(); }\n    }\n\n    public class G<T>\n    {\n        public T Get() { return default(T); }\n    }\n\n    public class Base { }\n}\n" },
+        .{ .rel = "Models.cs", .text = "using System.Threading.Tasks;\n\nnamespace Shop.Models\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n    }\n\n    public class T\n    {\n        public int Total() { return 1; }\n    }\n\n    public static class Maker\n    {\n        public static Cart Two() { return new Cart(); }\n        public static Cart Two(int x) { return new Cart(); }\n        public static U Pick<U>() { return default(U); }\n        public static dynamic Loose() { return null; }\n        public static async Task<Cart> Later() { await Task.Yield(); return new Cart(); }\n    }\n\n    public class G<T>\n    {\n        public T Get() { return default(T); }\n    }\n\n    public class Mixed\n    {\n        public static Cart Mix() { return new Cart(); }\n        public T Mix(int x) { return new T(); }\n        public int Go() { var c = Mix(1); return c.Total(); }\n    }\n\n    public class Base { }\n}\n" },
         .{ .rel = "Use.cs", .text = "using Shop.Models;\nusing Elsewhere;\n\nnamespace Shop.App\n{\n    public class Use : Outside\n    {\n        public int A() { var c = Maker.Two(); return c.Total(); }\n        public int B() { var c = Maker.Pick<Cart>(); return c.Total(); }\n        public int D() { var c = Maker.Loose(); return c.Total(); }\n        public int E() { var c = Maker.Later(); return c.Total(); }\n        public int F() { var c = new G<Cart>().Get(); return c.Total(); }\n        public int H() { dynamic c = new Cart(); return c.Total(); }\n        public int I() { var c = Unknown(); return c.Total(); }\n        public int J() { var c = Missing.Make(); return c.Total(); }\n    }\n}\n" },
     });
     defer case.deinit();
     var sites: rename_graph.Sites = .{};
     try testing.expectError(error.RenameUnresolved, case.planWith("Models.cs", "Shop.Models.Cart.Total", "Grand", true, &sites));
-    try testing.expectEqual(@as(usize, 8), sites.count);
+    try testing.expectEqual(@as(usize, 9), sites.count);
+}
+
+test "rename facts: a C# call in a partial class whose other part may overload it gives no type" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "P1.cs", .text = "public class Cart\n{\n    public int Total() { return 1; }\n}\n\npublic class Box\n{\n    public int Total() { return 2; }\n}\n\npublic partial class Maker\n{\n    public Cart Make() { return new Cart(); }\n    public int Go() { var c = Make(); return c.Total(); }\n}\n" },
+        .{ .rel = "P2.cs", .text = "public partial class Maker\n{\n    public Box Make(int x) { return new Box(); }\n}\n" },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, case.planWith("P1.cs", "Cart.Total", "Grand", true, &sites));
+    try testing.expectEqualStrings("P1.cs:14", sites.list());
+}
+
+test "rename facts: a qualified C# call in a partial class whose other part may overload it gives no type" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var qualified = try Case.init(&.{
+        .{ .rel = "Q1.cs", .text = "namespace Shop\n{\n    public class Cart\n    {\n        public int Total() { return 1; }\n    }\n\n    public partial class Maker\n    {\n        public static Cart Make() { return new Cart(); }\n    }\n}\n" },
+        .{ .rel = "Q2.cs", .text = "namespace Shop\n{\n    public class Box\n    {\n        public int Size() { return 2; }\n    }\n\n    public partial class Maker\n    {\n        public static Box Make(int x) { return new Box(); }\n    }\n}\n" },
+        .{ .rel = "Use.cs", .text = "public class Use\n{\n    public int Go() { var c = Shop.Maker.Make(1); return c.Total(); }\n}\n" },
+    });
+    defer qualified.deinit();
+    var through: rename_graph.Sites = .{};
+    try testing.expectError(error.RenameUnresolved, qualified.planWith("Q1.cs", "Shop.Cart.Total", "Grand", true, &through));
+    try testing.expectEqualStrings("Use.cs:3", through.list());
 }
 
 test "rename facts: a C# type parameter is never the class of the same name" {
