@@ -354,6 +354,22 @@ pub const Store = struct {
         return ids;
     }
 
+    pub fn namespaceTypeFiles(self: *const Store, gpa: Allocator, namespace: []const u8) ![]FileId {
+        const ids = try self.declaring(gpa, namespace, .namespace);
+        var kept: usize = 0;
+        for (ids) |id| {
+            for (self.files.items[id].facts.namespaces) |declared| {
+                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;
+                ids[kept] = id;
+                kept += 1;
+                break;
+            }
+        }
+        if (gpa.resize(ids, kept)) return ids[0..kept];
+        defer gpa.free(ids);
+        return gpa.dupe(FileId, ids[0..kept]);
+    }
+
     pub fn markUnindexed(self: *Store, id: FileId, status: Status, note: []const u8, tokens: []const []const u8) !bool {
         const state = &self.files.items[id];
         const was_indexed = state.status == .indexed;

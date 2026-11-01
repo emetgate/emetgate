@@ -129,6 +129,8 @@ pub const grammar: Rename = .{
             .{ .node = "call", .target_field = "function", .object_field = "object", .value_field = "arguments" },
         },
         .statement = "expression_statement",
+        .private_prefix = "_",
+        .public_wrapper = "__",
     },
 };
 

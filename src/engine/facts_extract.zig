@@ -11,6 +11,7 @@ const facts_spine = @import("facts_spine.zig");
 const facts_outline = @import("facts_outline.zig");
 const facts_tests = @import("facts_tests.zig");
 const facts_signature = @import("facts_signature.zig");
+const name_list = @import("name_list.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
 
@@ -71,7 +72,7 @@ fn declKindOf(kind: profile_mod.DeclarationKind) facts.DefKind {
 
 const Draft = struct {
     def: facts.Def,
-    node_start: u32,
+    node: ts.Node,
 };
 
 fn draftLess(_: void, a: Draft, b: Draft) bool {
@@ -168,7 +169,7 @@ const Extractor = struct {
             const name = function.name orelse continue;
             if (borrowsName(self.profile, s.node)) continue;
             const label = if (self.profile.memberLabel) |labelled| try labelled(self.arena, self.snapshot.tree, s.node) else null;
-            try drafts.append(self.arena, .{ .node_start = s.node.startByte(), .def = .{
+            try drafts.append(self.arena, .{ .node = s.node, .def = .{
                 .kind = defKindOf(s.kind),
                 .name = label orelse try self.text(name),
                 .qname = try std.fmt.allocPrint(self.arena, "{f}", .{s.ref}),
@@ -184,7 +185,7 @@ const Extractor = struct {
             try self.describe(&drafts.items[drafts.items.len - 1].def, s.node);
         }
         for (table.declarations) |d| {
-            try drafts.append(self.arena, .{ .node_start = d.node.startByte(), .def = .{
+            try drafts.append(self.arena, .{ .node = d.node, .def = .{
                 .kind = declKindOf(d.kind),
                 .name = try self.text(d.name),
                 .qname = try std.fmt.allocPrint(self.arena, "{f}", .{d.ref}),
@@ -221,12 +222,31 @@ const Extractor = struct {
                 _ = stack.pop();
             }
             def.parent = if (stack.items.len == 0) 0 else stack.items[stack.items.len - 1];
+            def.exported = self.isPublic(draft.node, def.parent);
             const index: u32 = @intCast(self.defs.items.len);
             try self.defs.append(self.arena, def);
             try stack.append(self.arena, index);
             try self.def_at_name.put(self.arena, def.name_start, index);
-            try self.def_at_node.put(self.arena, draft.node_start, index);
+            try self.def_at_node.put(self.arena, draft.node.startByte(), index);
         }
+    }
+
+    fn isPublic(self: *const Extractor, node: ts.Node, parent: u32) bool {
+        const word = self.f.public_modifier orelse return false;
+        const owner = self.defs.items[parent];
+        if (parent != 0 and (!owner.kind.isType() or !owner.exported)) return false;
+        var hidden = false;
+        var current: ?ts.Node = node;
+        while (current) |at| : (current = at.parent()) {
+            if (std.mem.eql(u8, at.kind(), self.profile.class_body)) break;
+            var i: u32 = 0;
+            while (at.namedChild(i)) |child| : (i += 1) {
+                if (!self.profile.isModifier(child.kind())) continue;
+                if (std.mem.eql(u8, self.raw(child), word)) return true;
+                if (oneOf(self.raw(child), self.f.hidden_modifiers)) hidden = true;
+            }
+        }
+        return !hidden and (owner.kind == .interface or owner.kind == .enumeration);
     }
 
     fn indexUses(self: *Extractor) Error!void {
@@ -552,9 +572,10 @@ const Extractor = struct {
 
     fn collectExports(self: *Extractor) Error!void {
         if (self.m.export_statement.len == 0) {
+            const seen = try name_list.exposed(self.arena, self.snapshot);
             for (self.defs.items, 0..) |*def, d| {
                 if (d == 0 or def.parent != 0) continue;
-                def.exported = true;
+                def.exported = if (seen) |s| s.covers(def.name) else true;
                 try self.exports.append(self.arena, .{ .name = def.name, .kind = .local, .index = @intCast(d) });
             }
             if (self.m.exports_bindings) try self.exportBindings();

@@ -595,7 +595,7 @@ const Builder = struct {
         const state = self.fs.store.file(file);
         const profile = state.profile orelse return;
         const table = profile.facts orelse return;
-        if (!facts_tests.isTestPath(table, state.path)) return;
+        if (!facts_tests.isTestPath(table, state.path) and !state.facts.map.test_content) return;
         const block = facts_tests.innermost(state.facts.tests, start);
         const entry = try self.test_index.getOrPut(self.arena, .{ .file = file, .block = block orelse facts.none, .target = @intCast(target) });
         if (entry.found_existing) {

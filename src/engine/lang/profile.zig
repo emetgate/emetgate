@@ -267,6 +267,8 @@ pub const NameList = struct {
     containers: []const []const u8,
     holders: []const NameListHolder,
     statement: []const u8,
+    private_prefix: ?[]const u8 = null,
+    public_wrapper: ?[]const u8 = null,
 };
 
 pub const TypedBinder = struct {
@@ -331,8 +333,11 @@ pub const Facts = struct {
     calls_construct: bool = false,
     sole_binder_types: bool = false,
     class_body_field: []const u8 = "body",
-    test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},
+    test_name: ?*const fn (base: []const u8) bool = null,
+    test_segment: ?*const fn (segment: []const u8) bool = null,
+    public_modifier: ?[]const u8 = null,
+    hidden_modifiers: []const []const u8 = &.{},
     docstrings: bool = false,
     xml_docs: bool = false,
 };
@@ -340,7 +345,8 @@ pub const Facts = struct {
 pub const TestDefinition = struct {
     node: []const u8,
     name_field: []const u8 = "name",
-    prefix: []const u8,
+    prefix: []const u8 = "",
+    attribute: ?*const fn (name: []const u8) bool = null,
 };
 
 pub const MapEntryKind = enum { route, command, event, api };
@@ -456,6 +462,9 @@ pub const Profile = struct {
     import_forms: ImportForms = .{},
     docstrings: bool = false,
     definition_wrappers: []const []const u8 = &.{},
+    effect_kinds: []const []const u8 = &.{},
+    effect_updates: []const []const u8 = &.{},
+    effect_update_tokens: []const []const u8 = &.{},
     commented_definitions: []const []const u8 = &.{},
     uncommented_definitions: []const []const u8 = &.{},
 

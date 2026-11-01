@@ -232,11 +232,11 @@ fn namespaceFiles(repo: *fact_store.Repo, spec: facts.Spec) ![]facts_store.FileI
         const joined = try std.fmt.allocPrint(gpa, "{s}.{s}", .{ scope, name });
         defer gpa.free(joined);
         const ids = try repo.store.declaring(gpa, joined, .namespace);
-        if (ids.len != 0) return ids;
-        gpa.free(ids);
+        defer gpa.free(ids);
+        if (ids.len != 0) return repo.store.namespaceTypeFiles(gpa, joined);
         scope = scope[0 .. std.mem.lastIndexOfScalar(u8, scope, '.') orelse 0];
     }
-    return repo.store.declaring(gpa, name, .namespace);
+    return repo.store.namespaceTypeFiles(gpa, name);
 }
 
 fn defs(repo: *fact_store.Repo, options: Options, out: *Writer) !u8 {

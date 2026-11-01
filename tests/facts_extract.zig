@@ -227,3 +227,84 @@ test "facts extract: a qualified type through a namespace import is a type refer
     try testing.expectEqual(facts.Target{ .local = try x.def("Local") }, (try x.ref(.type, "Local", 1)).target);
     try testing.expectEqual(@as(usize, 2), x.count(.type, "Local"));
 }
+
+test "facts extract: a C# definition is exported only when it and every type around it are public" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime,
+        \\namespace Shop {
+        \\    public class Cart {
+        \\        public int Total() { int Local() { return 1; } return Local(); }
+        \\        public int Count { get; set; }
+        \\        public int Size;
+        \\        private int hidden;
+        \\        internal int Inner() { return 1; }
+        \\        protected int Guarded() { return 1; }
+        \\        int Bare() { return 1; }
+        \\        public class Line { public int Qty() { return 1; } }
+        \\        private class Secret { public int Reveal() { return 1; } }
+        \\    }
+        \\    class Quiet { public int Open() { return 1; } }
+        \\    internal class Helper { public int Help() { return 1; } }
+        \\    public interface IShape { int Area(); }
+        \\    interface IHidden { int Gone(); }
+        \\    public enum Color { Red }
+        \\}
+        \\
+    , ".cs");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    const yes = [_][]const u8{ "Cart", "Total", "Count", "Size", "Line", "Qty", "IShape", "Color", "Red" };
+    const no = [_][]const u8{ "Local", "hidden", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
+    var seen: usize = 0;
+    for (found.defs) |d| {
+        for (yes) |name| {
+            if (!std.mem.eql(u8, d.name, name)) continue;
+            seen += 1;
+            testing.expect(d.exported) catch |e| {
+                std.debug.print("not exported: {s}\n", .{name});
+                return e;
+            };
+        }
+        for (no) |name| {
+            if (!std.mem.eql(u8, d.name, name)) continue;
+            seen += 1;
+            testing.expect(!d.exported) catch |e| {
+                std.debug.print("exported: {s}\n", .{name});
+                return e;
+            };
+        }
+    }
+    try testing.expectEqual(yes.len + no.len, seen);
+}
+
+fn pythonExported(source: []const u8, name: []const u8) !bool {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ".py");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (std.mem.eql(u8, d.name, name)) return d.exported;
+    }
+    return error.NoDef;
+}
+
+test "facts extract: a Python definition is exported by __all__ when the list is static, else by its name" {
+    try testing.expect(try pythonExported("def area():\n    return 1\n", "area"));
+    try testing.expect(!try pythonExported("def _area():\n    return 1\n", "_area"));
+    try testing.expect(!try pythonExported("def __area():\n    return 1\n", "__area"));
+    try testing.expect(try pythonExported("def __area__():\n    return 1\n", "__area__"));
+    try testing.expect(try pythonExported("__all__ = [\"area\"]\ndef area():\n    return 1\n", "area"));
+    try testing.expect(!try pythonExported("__all__ = [\"area\"]\ndef other():\n    return 1\n", "other"));
+    try testing.expect(try pythonExported("__all__ = (\"_area\",)\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(!try pythonExported("__all__ = []\ndef area():\n    return 1\n", "area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__ += more\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = names()\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\", *more]\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__.extend(more)\ndef _area():\n    return 1\n", "_area"));
+}

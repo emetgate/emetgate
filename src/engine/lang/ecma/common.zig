@@ -40,6 +40,7 @@ pub const containers = [_]Container{
 pub const declaration_statements = [_][]const u8{ "lexical_declaration", "variable_declaration", "expression_statement" };
 pub const reference_names = [_][]const u8{ "identifier", "property_identifier", "shorthand_property_identifier", "shorthand_property_identifier_pattern" };
 pub const comments = [_][]const u8{"comment"};
+pub const effect_kinds = [_][]const u8{ "new_expression", "await_expression", "assignment_expression", "augmented_assignment_expression", "update_expression", "yield_expression" };
 pub const export_wrappers = [_][]const u8{"export_statement"};
 pub const namespace_exports = [_][]const u8{"namespace_export"};
 pub const dynamic_callees = [_][]const u8{ "eval", "import" };

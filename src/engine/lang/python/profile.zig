@@ -88,6 +88,7 @@ pub const profile: Profile = .{
     .declaration_statements = &.{},
     .declarator = "",
     .export_wrappers = &.{},
+    .effect_kinds = &.{ "await", "named_expression", "augmented_assignment", "yield" },
     .decorator = "decorator",
     .comments = &.{"comment"},
     .block = "block",

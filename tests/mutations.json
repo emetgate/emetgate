@@ -13421,24 +13421,6 @@
       ]
     },
     {
-      "id": "PY-FT2-conftest-not-a-test-file",
-      "file": "src/engine/lang/python/facts.zig",
-      "from": "    .test_files = &.{\"conftest.py\"},\n",
-      "to": "",
-      "kills": [
-        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
-      ]
-    },
-    {
-      "id": "PY-FT3-test-file-name-ignored",
-      "file": "src/engine/facts_tests.zig",
-      "from": "    if (oneOf(name, table.test_files)) return true;\n",
-      "to": "",
-      "kills": [
-        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
-      ]
-    },
-    {
       "id": "PY-FT4-test-prefix-ignored",
       "file": "src/engine/facts_tests.zig",
       "from": "        if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;\n",
@@ -17241,6 +17223,282 @@
       "to": "        if (!expected.eql(now) and false) return error.IncompleteMove;\n",
       "kills": [
         "csharp move_file: a using that would make another name ambiguous is refused"
+      ]
+    },
+    {
+      "id": "PY-FT2-test-name-hook-removed",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_name = map.isTestName,\n",
+      "to": "",
+      "kills": [
+        "test blocks: a Python name is a test file only by its prefix or suffix, never by a word inside it",
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT3-test-name-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (named(name)) return true;\n",
+      "to": "        _ = named;\n",
+      "kills": [
+        "test blocks: a Python name is a test file only by its prefix or suffix, never by a word inside it",
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TP1-test-segment-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "            if (marked(segment)) return true;\n",
+      "to": "            if (marked(segment) and false) return true;\n",
+      "kills": [
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TP2-csharp-test-dirs-empty",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .test_dirs = map.table.test_segments,\n",
+      "to": "",
+      "kills": [
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TA1-attribute-not-read",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (definition.attribute) |marks| return if (hasAttribute(node, source, marks)) name else null;\n",
+      "to": "        if (definition.attribute) |marks| { _ = marks; return name; }\n",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-TA2-csharp-no-test-definitions",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .test_definitions = &test_definitions,\n",
+      "to": "",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-TA3-test-class-not-a-block",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .{ .node = \"class_declaration\", .attribute = map.isTestAttribute },\n",
+      "to": "",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-EX1-owner-visibility-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (parent != 0 and (!owner.kind.isType() or !owner.exported)) return false;\n",
+      "to": "        if (parent != 0 and !owner.kind.isType()) return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX2-local-def-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (parent != 0 and (!owner.kind.isType() or !owner.exported)) return false;\n",
+      "to": "        if (parent != 0 and !owner.exported) return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX3-public-word-ignored",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .public_modifier = \"public\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX4-field-modifier-not-read",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        while (current) |at| : (current = at.parent()) {\n",
+      "to": "        while (current) |at| : (current = null) {\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX5-implicit-enum-member-lost",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        return !hidden and (owner.kind == .interface or owner.kind == .enumeration);\n",
+      "to": "        return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX6-class-body-walked-past",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (std.mem.eql(u8, at.kind(), self.profile.class_body)) break;\n",
+      "to": "",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-AL1-private-prefix-off",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "        .private_prefix = \"_\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-AL2-dunder-private",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "        .public_wrapper = \"__\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-AL3-dynamic-list-trusted",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!try staticList(snapshot, list, entry.node, &names, gpa)) open = true;\n",
+      "to": "        _ = try staticList(snapshot, list, entry.node, &names, gpa);\n",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-AL4-second-mention-trusted",
+      "file": "src/engine/name_list.zig",
+      "from": ".open = open or uses > 1,",
+      "to": ".open = open,",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name"
+      ]
+    },
+    {
+      "id": "T3-AL5-list-ignored",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!self.listed) return !self.isPrivate(name);\n",
+      "to": "        if (true) return !self.isPrivate(name);\n",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-BD1-nested-not-local",
+      "file": "src/engine/boundedness.zig",
+      "from": "        if (profile.functionKind(p.kind()) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD2-private-owner-public",
+      "file": "src/engine/boundedness.zig",
+      "from": "        if (seen.isPrivate(text)) return false;\n",
+      "to": "",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD3-unlisted-class-public",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (owner) |top| return seen.covers(top) and !seen.isPrivate(name);\n",
+      "to": "    if (owner) |_| return !seen.isPrivate(name);\n",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD4-rule-off",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| return isExposedByName(snapshot, seen, sym, name);\n",
+      "to": "",
+      "kills": [
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-SY1-python-kinds-gone",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .effect_kinds = &.{ \"await\", \"named_expression\", \"augmented_assignment\", \"yield\" },\n",
+      "to": "",
+      "kills": [
+        "symmetry: Python effect kinds are Python's own"
+      ]
+    },
+    {
+      "id": "T3-SY2-csharp-kinds-gone",
+      "file": "src/engine/lang/csharp/profile.zig",
+      "from": "    .effect_kinds = &.{ \"object_creation_expression\", \"implicit_object_creation_expression\", \"await_expression\", \"assignment_expression\" },\n",
+      "to": "",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY3-update-any-unary",
+      "file": "src/engine/symmetry.zig",
+      "from": "        if (!std.mem.eql(u8, node.kind(), update)) continue;\n        var i: u32 = 0;\n",
+      "to": "        if (std.mem.eql(u8, node.kind(), update)) return true;\n        var i: u32 = 0;\n",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY4-update-off",
+      "file": "src/engine/symmetry.zig",
+      "from": "isEffect(profile, node.kind()) or isUpdate(profile, node)",
+      "to": "isEffect(profile, node.kind())",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY5-typescript-kinds-gone",
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": "    .effect_kinds = &ecma.effect_kinds,\n",
+      "to": "",
+      "kills": [
+        "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
+      ]
+    },
+    {
+      "id": "T3-NS1-child-files-kept",
+      "file": "src/engine/facts_store.zig",
+      "from": "                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "to": "                if (declared.name.len == 0) continue;\n",
+      "kills": [
+        "facts store: a namespace's type files are the files with types directly in it, never a child namespace's"
+      ]
+    },
+    {
+      "id": "T3-NS2-empty-block-counts",
+      "file": "src/engine/facts_store.zig",
+      "from": "                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "to": "                if (!std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "kills": [
+        "facts store: a namespace's type files are the files with types directly in it, never a child namespace's"
+      ]
+    },
+    {
+      "id": "T3-EV1-test-content-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": " and !state.facts.map.test_content) return;",
+      "to": ") return;",
+      "kills": [
+        "evidence: a Python file with test content counts as a test file, whatever its name"
       ]
     }
   ]

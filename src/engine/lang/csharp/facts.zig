@@ -1,8 +1,10 @@
 const profile_mod = @import("../profile.zig");
+const map = @import("map.zig");
 
 const Facts = profile_mod.Facts;
 const FieldSite = profile_mod.FieldSite;
 const TypedBinder = profile_mod.TypedBinder;
+const TestDefinition = profile_mod.TestDefinition;
 const Initializer = profile_mod.Initializer;
 
 const writes = [_]FieldSite{
@@ -38,11 +40,21 @@ const initializers = [_]Initializer{
     .{ .entry = "with_initializer", .owner = "with_expression", .object_is_owner = false },
 };
 
+const test_definitions = [_]TestDefinition{
+    .{ .node = "class_declaration", .attribute = map.isTestAttribute },
+    .{ .node = "method_declaration", .attribute = map.isTestAttribute },
+};
+
 pub const csharp: Facts = .{
     .branch_statements = &branch_statements,
     .test_calls = &.{},
+    .test_definitions = &test_definitions,
+    .public_modifier = "public",
+    .hidden_modifiers = &.{ "private", "protected", "internal" },
     .test_file_infixes = &.{ ".Tests.", ".Test." },
-    .test_dirs = &.{},
+    .test_dirs = map.table.test_segments,
+    .test_name = map.isTestName,
+    .test_segment = map.isTestSegment,
     .doc_directives = &doc_directives,
     .xml_docs = true,
     .member = "member_access_expression",

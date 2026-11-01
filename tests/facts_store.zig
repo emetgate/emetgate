@@ -197,3 +197,26 @@ test "facts store: linking through a file whose imports are not resolved yet is 
     const c = try repo.put("c.ts", "import { f } from \"./index\";\nexport function g() { return f(); }\n");
     try testing.expectError(error.SpecsNotResolved, repo.store.link(c, repo.resolver()));
 }
+
+test "facts store: a namespace's type files are the files with types directly in it, never a child namespace's" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    _ = try repo.put("Top.cs", "namespace Shop { public class Top { } }\n");
+    _ = try repo.put("Child.cs", "namespace Shop.Data { public class Row { } }\n");
+    _ = try repo.put("Both.cs", "namespace Shop { public class Mid { public class Inner { } } }\nnamespace Shop.Data { public class Cell { } }\n");
+    _ = try repo.put("Empty.cs", "namespace Shop { }\n");
+    try repo.linkAll();
+    const direct = try repo.store.namespaceTypeFiles(testing.allocator, "Shop");
+    defer testing.allocator.free(direct);
+    try testing.expectEqual(@as(usize, 2), direct.len);
+    try testing.expectEqualStrings("Both.cs", repo.store.file(direct[0]).path);
+    try testing.expectEqualStrings("Top.cs", repo.store.file(direct[1]).path);
+    const child = try repo.store.namespaceTypeFiles(testing.allocator, "Shop.Data");
+    defer testing.allocator.free(child);
+    try testing.expectEqual(@as(usize, 2), child.len);
+    const none_left = try repo.store.namespaceTypeFiles(testing.allocator, "Shop.Gone");
+    defer testing.allocator.free(none_left);
+    try testing.expectEqual(@as(usize, 0), none_left.len);
+}
