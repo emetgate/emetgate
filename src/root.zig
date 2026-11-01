@@ -145,6 +145,7 @@ pub const journal = @import("platform/journal.zig");
 pub const where = @import("platform/where.zig");
 pub const wire = @import("protocol/wire.zig");
 pub const output_digest = @import("protocol/output_digest.zig");
+pub const failure_text = @import("protocol/failure_text.zig");
 pub const diff_digest = @import("protocol/diff_digest.zig");
 pub const baseline = @import("platform/baseline.zig");
 pub const test_results = @import("platform/test_results.zig");
