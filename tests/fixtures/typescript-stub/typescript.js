@@ -10,6 +10,8 @@ function sleep(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+if (plan().startSleep) sleep(plan().startSleep);
+
 function act(p) {
   if (p.hang) sleep(60000);
   if (p.exit) process.exit(3);

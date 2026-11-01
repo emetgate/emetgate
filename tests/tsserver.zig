@@ -81,6 +81,33 @@ test "tsserver: a hung language service is killed at the timeout and restarted b
     try testing.expectEqual(@as(u32, 16), answer.value.locations[0].start);
 }
 
+test "tsserver: a start slower than the request timeout is not a hang" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TsRepo.init(&.{.{ .rel = "src/a.ts", .text = source }});
+    defer repo.deinit();
+    try repo.installStub();
+    try repo.setPlan("{\"startSleep\":1500}");
+    var s = session(&repo, 500);
+    defer s.deinit();
+    const client = try s.get();
+    try client.ensure();
+    try testing.expect(client.running());
+    try testing.expectEqualStrings("0.0.0-stub", client.version.?);
+}
+
+test "tsserver: a start that never answers is killed at the start timeout" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TsRepo.init(&.{.{ .rel = "src/a.ts", .text = source }});
+    defer repo.deinit();
+    try repo.installStub();
+    try repo.setPlan("{\"startSleep\":60000}");
+    var s: tsserver.Session = .{ .gpa = testing.allocator, .io = testing.io, .root = repo.root_abs, .options = .{ .timeout_ms = 20_000, .start_timeout_ms = 1_000 } };
+    defer s.deinit();
+    const client = try s.get();
+    try testing.expectError(error.LanguageServiceTimeout, client.ensure());
+    try testing.expect(!client.running());
+}
+
 test "tsserver: a language service that exits mid-request is reported and restarted" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try TsRepo.init(&.{.{ .rel = "src/a.ts", .text = source }});

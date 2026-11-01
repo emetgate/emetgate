@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2584**
-- Mutations declared in `tests/mutations.json`: **1782**
-  - killed: **1733**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2609**
+- Mutations declared in `tests/mutations.json`: **1783**
+  - killed: **1734**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1122 mutation(s).
+1123 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -887,6 +887,7 @@ python tools/verification_page.py --check
 | `TS1-plugins-passed-through` | `src/platform/tsserver_host.js` | `delete options.plugins;` -> `` | tsserver: tsconfig plugins never reach the language service; red team rename: a malicious... | killed |
 | `TS2-hung-service-kept` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `` | tsserver: a hung language service is killed at the timeout and restarted by the... | killed |
 | `TS3-typescript-check-skipped` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return erro...` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch {};` | tsserver: a repo without node_modules/typescript is an explicit error, not a gl... | killed |
+| `TS5-start-held-to-request-timeout` | `src/platform/tsserver.zig` | `"}", self.options.start_timeout_ms);` -> `"}", self.options.timeout_ms);` | tsserver: a start slower than the request timeout is not a hang | killed |
 | `TS4-failed-answer-kills-service` | `src/platform/tsserver.zig` | `errdefer \|err\| if (err != error.LanguageServiceFailed) self.s...` -> `errdefer self.stop();` | tsserver: a request the language service answers with an error leaves the proce... | killed |
 | `RN14-cache-not-invalidated-after-rename` | `src/protocol/rename_tool.zig` | `if (policy.tree_cache) \|cache\| for (outcome.plan.edits) \|edi...` -> `` | defense-in-depth: same as R12, the content hash on the next load catches the renamed file... | survives (unclassified) |
 | `SC1-merged-declaration-check-skipped` | `src/engine/rename.zig` | `return error.MergedDeclaration;` -> `continue;` | rename: renaming a class and only one of an interface merged with it is refused...; renam... | killed |
@@ -1130,7 +1131,7 @@ python tools/verification_page.py --check
 | `MP11-rank-edge-range-unchecked` | `src/engine/map_rank.zig` | `if (e.from >= nodes or e.to >= nodes) return error.EdgeOutOfRan...` -> `if (e.from >= nodes) return error.EdgeOutOfRange;` | map rank: edges outside the graph and negative teleport weights are refused | killed |
 | `MP12-hidden-files-never-named` | `src/engine/map.zig` | `if (f.family != .code or f.symbol_count == 0 or self.file_shown...` -> `if (true) continue;` | map: a heavy file that its region path does not show is named on the region line | killed |
 | `MP13-shared-name-printed-twice` | `src/engine/map.zig` | `if (seen.found_existing) continue;` -> `_ = seen;` | map: symbols that share one name in a region are named once | killed |
-| `MP14-tests-mixed-with-code` | `src/engine/map.zig` | `const family: Family = if (isTestPath(table, state.path)) .test...` -> `const family: Family = if (isTestPath(table, state.path) and fa...` | map: test files are kept in test regions apart from the code they exercise | killed |
+| `MP14-tests-mixed-with-code` | `src/engine/map.zig` | `const family: Family = if (isTestFile(state, self.options.fallb...` -> `const family: Family = if (isTestFile(state, self.options.fallb...` | map: test files are kept in test regions apart from the code they exercise | killed |
 | `MP15-entry-decorators-ignored` | `src/engine/map.zig` | `if (decoratorRule(table, r.name)) \|rule\| {` -> `if (decoratorRule(table, "")) \|rule\| {` | map: route, command and api entry points come from decorators and cross region ... | killed |
 | `MP16-split-directory-children-hidden` | `src/engine/map.zig` | `const shown = if (self.options.list_children and family == .cod...` -> `const shown = if (false) try childrenLabel(self.arena, items.it...` | map: a region of a split directory names each sibling directory on its line and... | killed |
 | `MP17-file-runs-never-folded` | `src/engine/map.zig` | `if (j - i > 2) {             try out.appendSlice(arena, segment...` -> `if (j - i > 2000) {             try out.appendSlice(arena, segm...` | map: a region of a split directory names each sibling directory on its line and... | killed |

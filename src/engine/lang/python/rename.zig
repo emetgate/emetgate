@@ -149,4 +149,5 @@ pub const declarations: Declarations = .{
     .destructuring = &.{ "pattern_list", "tuple_pattern", "list_pattern", "list_splat_pattern", "attribute", "subscript" },
     .variable_declarator = "assignment",
     .variable_name_field = "left",
+    .containers = &.{ "class_definition", "block" },
 };
