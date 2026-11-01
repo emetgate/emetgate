@@ -146,7 +146,10 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, runtime, args, event, policy.root, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_git_write")) return git_write.callGitWrite(gpa, io, args, event, policy.root);
-    if (std.mem.eql(u8, name, "emetgate_run")) return run_tool.callRun(gpa, io, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_run")) {
+        const result = try run_tool.callRun(gpa, io, args, event, policy);
+        return if (policy.open_run) rawCode(gpa, policy, result) else result;
+    }
     return error.UnknownTool;
 }
 

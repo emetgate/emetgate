@@ -13,6 +13,14 @@ pub fn stdin() std.Io.File {
     return file;
 }
 
+pub fn stdinReader(io: std.Io, buffer: []u8) std.Io.File.Reader {
+    return pipeReader(stdin(), io, buffer);
+}
+
+pub fn pipeReader(file: std.Io.File, io: std.Io, buffer: []u8) std.Io.File.Reader {
+    return .initStreaming(file, io, buffer);
+}
+
 fn isOverlapped(handle: std.os.windows.HANDLE) bool {
     const windows = std.os.windows;
     var iosb: windows.IO_STATUS_BLOCK = undefined;
@@ -41,6 +49,16 @@ const test_pipe = struct {
     ) callconv(.winapi) windows.HANDLE;
 
     extern "kernel32" fn CloseHandle(handle: windows.HANDLE) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn CreatePipe(read: *windows.HANDLE, write: *windows.HANDLE, attributes: ?*anyopaque, size: windows.DWORD) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn WriteFile(handle: windows.HANDLE, bytes: [*]const u8, len: windows.DWORD, written: ?*windows.DWORD, overlapped: ?*anyopaque) callconv(.winapi) windows.BOOL;
+    extern "kernel32" fn Sleep(ms: windows.DWORD) callconv(.winapi) void;
+
+    fn writeLate(handle: windows.HANDLE, bytes: []const u8) void {
+        Sleep(300);
+        var written: windows.DWORD = 0;
+        _ = WriteFile(handle, bytes.ptr, @intCast(bytes.len), &written, null);
+        _ = CloseHandle(handle);
+    }
 
     fn create(name: [*:0]const u16, open_mode: windows.DWORD) !windows.HANDLE {
         const handle = CreateNamedPipeW(name, open_mode, 0, 1, buffer_size, buffer_size, 0, null);
@@ -65,4 +83,20 @@ test "overlapped pipes are detected so large writes wait instead of hitting unre
 
     try testing.expect(isOverlapped(overlapped));
     try testing.expect(!isOverlapped(synchronous));
+}
+
+test "a pipe reader waits for a writer that sends its bytes late instead of reading an empty pipe as the end" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var read: std.os.windows.HANDLE = undefined;
+    var write: std.os.windows.HANDLE = undefined;
+    if (test_pipe.CreatePipe(&read, &write, null, 0) == .FALSE) return error.PipeCreationFailed;
+    defer _ = test_pipe.CloseHandle(read);
+    const sent = "{\"tool_input\":{\"command\":\"git status\"}}";
+    const writer = try std.Thread.spawn(.{}, test_pipe.writeLate, .{ write, sent });
+    defer writer.join();
+    var buffer: [64]u8 = undefined;
+    var reader = pipeReader(.{ .handle = read, .flags = .{ .nonblocking = false } }, testing.io, &buffer);
+    const got = try reader.interface.allocRemaining(testing.allocator, .limited(1 << 16));
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings(sent, got);
 }

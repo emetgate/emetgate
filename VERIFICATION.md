@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2481**
-- Mutations declared in `tests/mutations.json`: **1767**
-  - killed: **1718**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2517**
+- Mutations declared in `tests/mutations.json`: **1768**
+  - killed: **1719**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -210,8 +210,8 @@ python tools/verification_page.py --check
 | `F1-lockdown-mcp-config-last` | `src/platform/lockdown.zig` | `"--mcp-config", mcp_config_abs, "--strict-mcp-config" }` -> `"--strict-mcp-config", "--mcp-config", mcp_config_abs }` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `F2-lockdown-tools-last` | `src/platform/lockdown.zig` | `{ claude_program, "--tools", allowed_builtin_tools, "--allowedT...` -> `{ claude_program, "--allowedTools", allowed_tools, "--mcp-confi...` | a user prompt never becomes a --tools or --mcp-config value; a positional prompt right af... | killed |
 | `N1-lockdown-missing-config-guard-removed` | `src/platform/lockdown.zig` | `error.FileNotFound => return error.McpConfigMissing,` -> `error.FileNotFound => return gpa.dupeZ(u8, mcp_config_name),` | lockdown refuses to launch when the directory has no .mcp.json | killed |
-| `K6-lockdown-writer-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_try", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
-| `K6b-lockdown-runner-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_run", };` | lockdown pre-allows only emetgate tools that neither write to the repo nor run ...; every... | killed |
+| `K6-lockdown-writer-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_try", };` | lockdown pre-allows emetgate tools that neither write to the repo nor run a com...; every... | killed |
+| `K6b-lockdown-runner-pre-allowed` | `src/platform/lockdown.zig` | `"emetgate_mutate", };` -> `"emetgate_mutate",     "emetgate_run", };` | lockdown pre-allows emetgate tools that neither write to the repo nor run a com...; every... | killed |
 | `K7-lockdown-tool-search-env-dropped` | `src/platform/lockdown.zig` | `try env.put(tool_search_variable, tool_search_value);` -> `` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
 | `K7b-lockdown-child-env-not-passed` | `src/platform/lockdown.zig` | `.{ .argv = argv, .environ_map = &env }` -> `.{ .argv = argv }` | the launched claude gets ENABLE_TOOL_SEARCH=false whatever the parent had | killed |
 | `K7c-lockdown-tool-search-left-on` | `src/platform/lockdown.zig` | `pub const tool_search_value = "false";` -> `pub const tool_search_value = "true";` | the child environment turns tool search off and keeps the rest; the launched claude gets ... | killed |
@@ -755,7 +755,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1111 mutation(s).
+1112 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -912,7 +912,7 @@ python tools/verification_page.py --check
 | `RUN1-allowlist-check-skipped` | `src/platform/run_command.zig` | `const entry = match(allowed, requested) orelse return .{ .refus...` -> `const entry = match(allowed, requested) orelse requested;` | a request runs only the allowlist entry it equals byte for byte; run tool: a command the ... | killed |
 | `RUN2-metacharacter-check-relaxed` | `src/platform/run_command.zig` | `pub const shell_metacharacters = "&\|<>^%!;'$()\r\n\x00";` -> `pub const shell_metacharacters = "\x00";` | an allowlist entry with a shell metacharacter is refused; run policy: an --allow-run entr... | killed |
 | `RUN3-in-working-tree` | `src/platform/run_command.zig` | `runner.runStages(gpa, io, location.shadow, null, options.comman...` -> `runner.runStages(gpa, io, options.root_abs, null, options.comma...` | redteam run: an allowed script cannot write outside the shadow, runs from the s... | killed |
-| `RUN4-output-cap-removed` | `src/protocol/output_digest.zig` | `const cut = run_command.tail(bytes, max_log_lines, max_log_byte...` -> `const cut = run_command.tail(bytes, std.math.maxInt(usize), std...` | redteam run: a flood of output comes back as a capped digest whose full log a l... | killed |
+| `RUN4-output-cap-removed` | `src/protocol/output_digest.zig` | `return writeLogLimited(gpa, io, root_abs, id, w, max_log_lines,...` -> `return writeLogLimited(gpa, io, root_abs, id, w, std.math.maxIn...` | redteam run: a flood of output comes back as a capped digest whose full log a l... | killed |
 | `RUN5-model-policy-accepted` | `src/protocol/run_tool.zig` | `try policy_mod.refuseModelPolicy(args);` -> `if (args == null) try policy_mod.refuseModelPolicy(args);` | redteam run: a call that names any policy field is refused before anything runs | killed |
 | `RUN6-out-of-scope-accepted` | `src/platform/run_command.zig` | `if (isOutOfScope(command)) return error.RunCommandOutOfScope;` -> `` | installing dependencies and git commit or push are out of scope for the allowli...; run p... | killed |
 | `VR1-before-digest-not-chained` | `src/verify/checker.zig` | `} else if (!eqlOptional(before_digest, f.before)) outcome.raise...` -> `}` | verify: a forged digest, a non-canonical note, an added and a removed receipt a... | killed |
@@ -1096,8 +1096,8 @@ python tools/verification_page.py --check
 | `SA7-empty-answer-without-a-note` | `src/protocol/search_v1.zig` | `if (result.groups.items.len == 0) {` -> `if (false) {` | search answers: a complete answer with no match states how many files it evalua...; searc... | killed |
 | `EP3-git-tool-runs-bare-git` | `src/protocol/git_tools.zig` | `argv[0] = git;` -> `_ = &argv;` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
 | `EP4-program-files-run-bare-git` | `src/platform/tsserver.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| if (inside(dir, dir_final, cwd, cwd_fin...` -> `if (search.cwd) \|cwd\| if (inside(dir, dir_final, cwd, cwd_fin...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
-| `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| if (inside(dir, dir_final, root,...` -> `if (search.repo_root) \|root\| if (inside(dir, dir_final, root,...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| planted = planted or inside(dir, dir_fi...` -> `if (search.cwd) \|cwd\| planted = planted or (inside(dir, dir_f...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
+| `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| planted = planted or inside(dir,...` -> `if (search.repo_root) \|root\| planted = planted or (inside(dir...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
 | `EP7-relative-entry-searched` | `src/platform/exe_path.zig` | `if (dir.len == 0 or !fullyQualified(dir)) continue;` -> `if (dir.len == 0) continue;` | exe path: a name found nowhere else, a relative name and a relative path entry ... | killed |
 | `EP8-junction-entry-compared-as-text` | `src/platform/exe_path.zig` | `if (dir_final != null and base_final != null) return withinWide...` -> `_ = dir_final;     _ = base_final;` | exe path: a PATH entry that reaches the repository or the working directory thr... | killed |
 | `QC1-lexicon-word-not-applied` | `src/engine/question_terms.zig` | `if (self.lex.entryOf(found)) \|entry\| return self.lexiconConce...` -> `if (self.lex.entryOf(found)) \|entry\| if (entry.values.len == ...` | question lexicon checks: every term check translates its turkish phrase to the ... | killed |
@@ -1182,8 +1182,8 @@ python tools/verification_page.py --check
 | `SL7-hook-silent-command-has-empty-reason` | `src/protocol/prompt_hook.zig` | `if (said.len == 0) done else said` -> `said` | prompt hook: a /rule that prints nothing still answers ok | killed |
 | `SL8-hook-rule-error-leaves-the-hook` | `src/protocol/prompt_hook.zig` | `else => try reason.writer.print("error: {t}\n", .{err}),` -> `else => return err,` | prompt hook: a refused rule answers with the error name and the names that exis...; promp... | killed |
 | `SL9-hook-undefined-grammar-answers-nothing` | `src/protocol/prompt_hook.zig` | `rule_command.parse(words) orelse return reason.writeAll(usage);` -> `rule_command.parse(words) orelse return;` | prompt hook: a /rule the grammar does not define answers with the usage and wri... | killed |
-| `SL12-lockdown-hook-is-an-mcp-tool` | `src/platform/lockdown_slash.zig` | `try js.write("command");` -> `try js.write("mcp_tool");` | lockdown slash: the hook is a command in exec form that names this executable | killed |
-| `SL13-lockdown-hook-loses-its-arguments` | `src/platform/lockdown_slash.zig` | `try js.write(hook_args);` -> `try js.write(hook_args[0..1]);` | lockdown slash: the hook is a command in exec form that names this executable | killed |
+| `SL12-lockdown-hook-is-an-mcp-tool` | `src/platform/lockdown_slash.zig` | `try js.write("command");` -> `try js.write("mcp_tool");` | lockdown slash: the hooks are commands in exec form that name this executable | killed |
+| `SL13-lockdown-hook-loses-its-arguments` | `src/platform/lockdown_slash.zig` | `try js.write(args);` -> `try js.write(args[0..1]);` | lockdown slash: the hooks are commands in exec form that name this executable | killed |
 | `SL14-lockdown-command-file-model-invocable` | `src/platform/lockdown_slash.zig` | `"disable-model-invocation: true\n" ++` -> `` | lockdown slash: install puts the settings and the command file under emetgate's... | killed |
 | `SL15-lockdown-slash-flags-after-the-lock` | `src/platform/lockdown_slash.zig` | `@memcpy(out[1 .. 1 + added.len], &added);     @memcpy(out[1 + a...` -> `@memcpy(out[argv.len..], &added);     @memcpy(out[1..argv.len],...` | lockdown slash: the hook flags come before the lock and the prompt stays the la... | killed |
 | `SL16-lockdown-changed-settings-kept` | `src/platform/lockdown_slash.zig` | `return std.mem.eql(u8, present, data);` -> `return true;` | lockdown slash: a second install repairs a changed file and leaves nothing else...; lockd... | killed |
@@ -1870,6 +1870,7 @@ python tools/verification_page.py --check
 | `TN2-tool-names-inside-words` | `src/engine/tool_names.zig` | `if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[...` -> `if (known(prose[start..end])) return .{ .start = start, .end = ...` | tool names: every known tool name is prefixed, the longest name wins and other ... | killed |
 | `TN3-static-fix-not-prefixed` | `src/protocol/wire.zig` | `if (fix.dynamic) try js.write(fix.text) else try tool_names.wri...` -> `try js.write(fix.text);` | recovery hints: with a tool prefix computed and static fix lines name tools by ... | killed |
 | `TN4-instructions-not-prefixed` | `src/protocol/server.zig` | `try tool_names.writeJson(&js, instructions);` -> `try js.write(instructions);` | recovery hints: with a tool prefix every tool named in instructions and descrip... | killed |
+| `IO1-stdin-read-positionally` | `src/platform/stdio.zig` | `return .initStreaming(file, io, buffer);` -> `return .init(file, io, buffer);` | a pipe reader waits for a writer that sends its bytes late instead of reading a... | killed |
 
 ## What this system does not prove
 

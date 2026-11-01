@@ -6,6 +6,10 @@ const Allocator = std.mem.Allocator;
 pub const command_name = "rule";
 pub const hook_args = [_][]const u8{ "hook", "prompt" };
 pub const hook_event = "UserPromptSubmit";
+pub const pretool_args = [_][]const u8{ "hook", "pretool" };
+pub const pretool_event = "PreToolUse";
+pub const run_tool = "emetgate_run";
+pub const pretool_matcher = "^mcp__.+__" ++ run_tool ++ "$";
 pub const local_app_data_variable = "LOCALAPPDATA";
 pub const settings_name = "settings.json";
 pub const command_dir = ".claude\\commands";
@@ -39,8 +43,21 @@ pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     try js.objectField("hooks");
     try js.beginObject();
     try js.objectField(hook_event);
+    try writeHook(&js, null, exe_abs, &hook_args);
+    try js.objectField(pretool_event);
+    try writeHook(&js, pretool_matcher, exe_abs, &pretool_args);
+    try js.endObject();
+    try js.endObject();
+    return out.toOwnedSlice();
+}
+
+fn writeHook(js: *std.json.Stringify, matcher: ?[]const u8, exe_abs: []const u8, args: []const []const u8) !void {
     try js.beginArray();
     try js.beginObject();
+    if (matcher) |pattern| {
+        try js.objectField("matcher");
+        try js.write(pattern);
+    }
     try js.objectField("hooks");
     try js.beginArray();
     try js.beginObject();
@@ -49,14 +66,11 @@ pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     try js.objectField("command");
     try js.write(exe_abs);
     try js.objectField("args");
-    try js.write(hook_args);
+    try js.write(args);
     try js.endObject();
     try js.endArray();
     try js.endObject();
     try js.endArray();
-    try js.endObject();
-    try js.endObject();
-    return out.toOwnedSlice();
 }
 
 pub fn install(gpa: Allocator, io: std.Io, local_app_data: []const u8, exe_abs: []const u8) !Entry {

@@ -18,6 +18,7 @@ pub const own_server_args = [_][]const u8{"mcp"};
 pub const detect_flag = "--detect-test";
 pub const test_flag = "--test";
 pub const tool_prefix_flag = "--tool-prefix";
+pub const open_run_flag = "--open-run";
 pub const own_tool_prefix = "mcp__" ++ own_server_name ++ "__";
 pub const setting_sources_flag = "--setting-sources";
 pub const setting_sources = "project";
@@ -40,6 +41,8 @@ pub const read_only_tools = [_][]const u8{
     "emetgate_git",
     "emetgate_mutate",
 };
+
+pub const hook_judged_tools = [_][]const u8{lockdown_slash.run_tool};
 
 const emetgate_program = "emetgate";
 const server_commands = [_][]const u8{ "mcp", "serve" };
@@ -120,6 +123,10 @@ pub fn alwaysLoadConfig(gpa: Allocator, mcp_config: []const u8) !?[]u8 {
         const args = &entry.value_ptr.object.getPtr("args").?.array;
         if (!namesTest(args.items)) {
             try args.append(.{ .string = detect_flag });
+            changed = true;
+        }
+        if (!namesFlag(args.items, open_run_flag)) {
+            try args.append(.{ .string = open_run_flag });
             changed = true;
         }
         if (!namesFlag(args.items, tool_prefix_flag)) {
@@ -210,7 +217,7 @@ fn collapseUnderscores(out: *std.ArrayList(u8)) void {
 pub fn allowedTools(gpa: Allocator, server: []const u8) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
-    for (read_only_tools, 0..) |tool, i| {
+    for (read_only_tools ++ hook_judged_tools, 0..) |tool, i| {
         if (i != 0) try out.append(gpa, ' ');
         try out.print(gpa, "mcp__{s}__{s}", .{ server, tool });
     }
@@ -242,6 +249,7 @@ pub fn ownMcpConfigJson(gpa: Allocator, exe_abs: []const u8, test_command: ?[]co
         try js.write(test_flag);
         try js.write(command);
     } else try js.write(detect_flag);
+    try js.write(open_run_flag);
     try js.write(tool_prefix_flag);
     try js.write(own_tool_prefix);
     try js.endArray();
@@ -334,19 +342,157 @@ fn gitSucceeds(gpa: Allocator, io: std.Io, git: []const u8, dir_abs: []const u8,
     };
 }
 
-pub fn ensureRepo(gpa: Allocator, io: std.Io, dir_abs: []const u8, env: *const std.process.Environ.Map) !bool {
-    const git = try exe_path.git(gpa, dir_abs);
-    defer gpa.free(git);
-    if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "rev-parse", "--show-toplevel" })) return false;
-    if (!try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "init", "-q" })) return error.GitInitFailed;
+pub const InitRefusal = enum {
+    drive_root,
+    holds_home,
+    holds_profiles,
+    holds_repositories,
+
+    pub fn text(self: InitRefusal) []const u8 {
+        return switch (self) {
+            .drive_root => "a drive root",
+            .holds_home => "your home folder, a system folder, or a folder that holds one",
+            .holds_profiles => "a user profile or a folder that holds user profiles",
+            .holds_repositories => "a folder that holds other git repositories",
+        };
+    }
+};
+
+pub const guarded_variables = [_][]const u8{ "USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA", "SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "PUBLIC" };
+pub const profile_marker = "NTUSER.DAT";
+pub const max_scanned_folders = 4096;
+
+fn isSeparator(c: u8) bool {
+    return c == '\\' or c == '/';
+}
+
+fn trimSeparators(path: []const u8) []const u8 {
+    return std.mem.trimEnd(u8, path, "\\/");
+}
+
+pub fn isDriveRoot(dir_abs: []const u8) bool {
+    const path = trimSeparators(dir_abs);
+    if (path.len == 0) return true;
+    if (path.len == 2 and path[1] == ':') return true;
+    if (path.len < 2 or !isSeparator(path[0]) or !isSeparator(path[1])) return false;
+    var parts: usize = 0;
+    var it = std.mem.tokenizeAny(u8, path, "\\/");
+    while (it.next()) |part| {
+        if (parts == 0 and (std.mem.eql(u8, part, "?") or std.mem.eql(u8, part, "."))) continue;
+        parts += 1;
+    }
+    return parts <= 2;
+}
+
+pub fn holdsPath(dir_abs: []const u8, other: []const u8) bool {
+    const dir = trimSeparators(dir_abs);
+    const path = trimSeparators(other);
+    if (dir.len == 0 or path.len < dir.len) return false;
+    for (dir, path[0..dir.len]) |a, b| {
+        if (isSeparator(a) and isSeparator(b)) continue;
+        if (std.ascii.toLower(a) != std.ascii.toLower(b)) return false;
+    }
+    return path.len == dir.len or isSeparator(path[dir.len]);
+}
+
+pub fn placeRefusal(dir_abs: []const u8, env: *const std.process.Environ.Map) ?InitRefusal {
+    if (isDriveRoot(dir_abs)) return .drive_root;
+    for (guarded_variables) |name| {
+        const value = env.get(name) orelse continue;
+        if (trimSeparators(value).len == 0) continue;
+        if (holdsPath(dir_abs, value)) return .holds_home;
+    }
+    return null;
+}
+
+fn exists(io: std.Io, dir: std.Io.Dir, sub_path: []const u8) bool {
+    dir.access(io, sub_path, .{}) catch return false;
     return true;
 }
 
-fn ensureRepoAt(gpa: Allocator, io: std.Io, dir: std.Io.Dir, env: *const std.process.Environ.Map) !void {
-    const dir_abs = try dir.realPathFileAlloc(io, ".", gpa);
-    defer gpa.free(dir_abs);
-    if (!try ensureRepo(gpa, io, dir_abs, env)) return;
-    std.Io.File.stderr().writeStreamingAll(io, git_init_notice) catch {};
+pub fn scanRefusal(io: std.Io, dir: std.Io.Dir) ?InitRefusal {
+    if (exists(io, dir, profile_marker)) return .holds_profiles;
+    var scanned: usize = 0;
+    var top = dir.openDir(io, ".", .{ .iterate = true, .follow_symlinks = false }) catch return null;
+    defer top.close(io);
+    var it = top.iterate();
+    while (it.next(io) catch return null) |item| {
+        if (item.kind != .directory) continue;
+        scanned += 1;
+        if (scanned > max_scanned_folders) return null;
+        var child = top.openDir(io, item.name, .{ .iterate = true, .follow_symlinks = false }) catch continue;
+        defer child.close(io);
+        if (exists(io, child, profile_marker)) return .holds_profiles;
+        if (exists(io, child, ".git")) return .holds_repositories;
+        var inner = child.iterate();
+        while (inner.next(io) catch null) |grand| {
+            if (grand.kind != .directory) continue;
+            scanned += 1;
+            if (scanned > max_scanned_folders) return null;
+            var grandchild = child.openDir(io, grand.name, .{ .follow_symlinks = false }) catch continue;
+            defer grandchild.close(io);
+            if (exists(io, grandchild, ".git")) return .holds_repositories;
+        }
+    }
+    return null;
+}
+
+pub fn initRefusal(io: std.Io, dir: std.Io.Dir, dir_abs: []const u8, env: *const std.process.Environ.Map) ?InitRefusal {
+    return placeRefusal(dir_abs, env) orelse scanRefusal(io, dir);
+}
+
+pub fn needsRepo(gpa: Allocator, io: std.Io, dir: std.Io.Dir, dir_abs: []const u8, env: *const std.process.Environ.Map) !bool {
+    const git = try exe_path.git(gpa, dir_abs);
+    defer gpa.free(git);
+    if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "rev-parse", "--show-toplevel" })) return false;
+    if (initRefusal(io, dir, dir_abs, env)) |why| {
+        const line = try std.fmt.allocPrint(gpa, "emetgate lockdown: {s} is not a git repository and is {s}, so lockdown does not run git init there\n", .{ dir_abs, why.text() });
+        defer gpa.free(line);
+        std.Io.File.stderr().writeStreamingAll(io, line) catch {};
+        return error.LockdownInitRefused;
+    }
+    return true;
+}
+
+fn initRepo(gpa: Allocator, io: std.Io, dir_abs: []const u8, env: *const std.process.Environ.Map) !void {
+    const git = try exe_path.git(gpa, dir_abs);
+    defer gpa.free(git);
+    if (!try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "init", "-q" })) return error.GitInitFailed;
+}
+
+pub fn ensureRepo(gpa: Allocator, io: std.Io, dir_abs: []const u8, env: *const std.process.Environ.Map) !bool {
+    var dir = try std.Io.Dir.openDirAbsolute(io, dir_abs, .{});
+    defer dir.close(io);
+    if (!try needsRepo(gpa, io, dir, dir_abs, env)) return false;
+    try initRepo(gpa, io, dir_abs, env);
+    return true;
+}
+
+pub fn checkProjectConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, given_test: ?[]const u8) !void {
+    const found = resolveMcpConfig(gpa, io, dir) catch |err| switch (err) {
+        error.McpConfigMissing => return,
+        else => return err,
+    };
+    defer gpa.free(found);
+    if (given_test != null) return error.LockdownTestWithMcpConfig;
+    const config = try std.Io.Dir.cwd().readFileAlloc(io, found, gpa, .limited(max_mcp_config_bytes));
+    defer gpa.free(config);
+    const server = try emetgateServer(gpa, config);
+    gpa.free(server);
+}
+
+pub fn resolveClaude(gpa: Allocator, io: std.Io, program: []const u8) ![]u8 {
+    return exe_path.resolve(gpa, program, null) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ExecutableNotFound, error.NameInvalid => {
+            const planted = try exe_path.skipped(gpa, program, null) orelse return error.ClaudeNotFound;
+            defer gpa.free(planted);
+            const line = try std.fmt.allocPrint(gpa, "emetgate lockdown: skipped {s}: its PATH folder lies inside the current folder, and lockdown runs no program from there\n", .{planted});
+            defer gpa.free(line);
+            std.Io.File.stderr().writeStreamingAll(io, line) catch {};
+            return error.ClaudeOnlyUnderWorkingDir;
+        },
+    };
 }
 
 pub fn launch(gpa: Allocator, io: std.Io, parent_env: *const std.process.Environ.Map, passthrough: []const []const u8) !u8 {
@@ -361,7 +507,12 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     const passthrough = marks.rest;
     try refuseReserved(passthrough);
     const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
-    try ensureRepoAt(gpa, io, dir, parent_env);
+    try checkProjectConfig(gpa, io, dir, tests.command);
+    const resolved = try resolveClaude(gpa, io, program);
+    defer gpa.free(resolved);
+    const dir_abs = try dir.realPathFileAlloc(io, ".", gpa);
+    defer gpa.free(dir_abs);
+    const init_repo = try needsRepo(gpa, io, dir, dir_abs, parent_env);
     const slash = try lockdown_slash.install(gpa, io, local_app_data, self_exe);
     defer slash.deinit(gpa);
     const config_abs = try chooseMcpConfig(gpa, io, dir, slash.dir, self_exe, tests.command);
@@ -380,14 +531,13 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     defer if (marks_dir) |owned| gpa.free(owned);
     const argv = if (marks_dir) |plugin| try lockdown_marks.extend(gpa, hooked, passthrough.len, plugin) else try gpa.dupe([]const u8, hooked);
     defer gpa.free(argv);
-    const resolved = exe_path.resolve(gpa, program, null) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.ExecutableNotFound, error.NameInvalid => return error.ClaudeNotFound,
-    };
-    defer gpa.free(resolved);
     argv[0] = resolved;
     var env = try childEnviron(gpa, parent_env);
     defer env.deinit();
+    if (init_repo) {
+        try initRepo(gpa, io, dir_abs, parent_env);
+        std.Io.File.stderr().writeStreamingAll(io, git_init_notice) catch {};
+    }
     var child = try std.process.spawn(io, .{ .argv = argv, .environ_map = &env });
     const term = try child.wait(io);
     return switch (term) {

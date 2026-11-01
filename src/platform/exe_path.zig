@@ -26,6 +26,28 @@ pub fn git(gpa: Allocator, repo_root: ?[]const u8) error{ GitNotFound, OutOfMemo
     };
 }
 
+pub fn gitBash(gpa: Allocator, repo_root: ?[]const u8) error{ BashNotFound, OutOfMemory }![]u8 {
+    const git_exe = git(gpa, repo_root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.GitNotFound => return error.BashNotFound,
+    };
+    defer gpa.free(git_exe);
+    return (try bashBeside(gpa, git_exe)) orelse error.BashNotFound;
+}
+
+pub fn bashBeside(gpa: Allocator, git_exe: []const u8) error{OutOfMemory}!?[]u8 {
+    var dir = std.fs.path.dirname(git_exe);
+    var depth: usize = 0;
+    while (dir) |current| : (depth += 1) {
+        if (depth == 3) break;
+        const bash = try std.fmt.allocPrint(gpa, "{s}\\bin\\bash.exe", .{std.mem.trimEnd(u8, current, "\\/")});
+        if (isFile(bash)) return bash;
+        gpa.free(bash);
+        dir = std.fs.path.dirname(current);
+    }
+    return null;
+}
+
 pub fn system(gpa: Allocator, name: []const u8) Error![]u8 {
     if (!plainName(name)) return error.NameInvalid;
     var buf: [windows.PATH_MAX_WIDE]u16 = undefined;
@@ -47,9 +69,38 @@ pub const Search = struct {
 };
 
 pub fn resolveIn(gpa: Allocator, name: []const u8, search: Search) Error![]u8 {
+    return walk(gpa, name, search, false);
+}
+
+pub fn skippedIn(gpa: Allocator, name: []const u8, search: Search) error{OutOfMemory}!?[]u8 {
+    if (name.len == 0 or !plainName(name)) return null;
+    return walk(gpa, name, search, true) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
+}
+
+pub fn skipped(gpa: Allocator, name: []const u8, repo_root: ?[]const u8) error{OutOfMemory}!?[]u8 {
+    return skippedHere(gpa, name, repo_root) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => null,
+    };
+}
+
+fn skippedHere(gpa: Allocator, name: []const u8, repo_root: ?[]const u8) Error!?[]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const path_list = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH")) orelse "";
+    const pathext = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATHEXT")) orelse default_pathext;
+    const cwd = try currentDirectory(arena);
+    return skippedIn(gpa, name, .{ .path = path_list, .pathext = pathext, .cwd = cwd, .repo_root = repo_root });
+}
+
+fn walk(gpa: Allocator, name: []const u8, search: Search, only_skipped: bool) Error![]u8 {
     if (name.len == 0 or std.mem.indexOfScalar(u8, name, 0) != null) return error.NameInvalid;
     if (std.mem.indexOfAny(u8, name, "\\/:") != null) {
-        if (!fullyQualified(name)) return error.NameInvalid;
+        if (only_skipped or !fullyQualified(name)) return error.NameInvalid;
         if (!isFile(name)) return error.ExecutableNotFound;
         return gpa.dupe(u8, name);
     }
@@ -66,8 +117,10 @@ pub fn resolveIn(gpa: Allocator, name: []const u8, search: Search) Error![]u8 {
         const dir = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
         if (dir.len == 0 or !fullyQualified(dir)) continue;
         const dir_final = finalName(&entry_buf, dir);
-        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, cwd_final)) continue;
-        if (search.repo_root) |root| if (inside(dir, dir_final, root, root_final)) continue;
+        var planted = false;
+        if (search.cwd) |cwd| planted = planted or inside(dir, dir_final, cwd, cwd_final);
+        if (search.repo_root) |root| planted = planted or inside(dir, dir_final, root, root_final);
+        if (planted != only_skipped) continue;
         if (own_extension) {
             if (try candidate(gpa, &scratch, dir, name, "")) |found| return found;
             continue;
