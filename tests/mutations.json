@@ -2694,6 +2694,7 @@
       "from": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) continue;",
       "to": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and false) continue;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal matches a quoted key but not a computed one",
         "no_literal leaves budgeted, named, computed and shorthand values alone",
@@ -2711,6 +2712,7 @@
       "from": "if (!isLiteral(shape, tree, pair.value)) continue;",
       "to": "if (!isLiteral(shape, tree, pair.value) and false) continue;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
@@ -2728,6 +2730,7 @@
       "from": "if (isKind(part, shape.substitution)) return false;",
       "to": "if (isKind(part, shape.substitution) and false) return false;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "no_literal leaves budgeted, named, computed and shorthand values alone",
         "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
@@ -2756,6 +2759,8 @@
       "from": ".{ .name = \"no_literal\", .collect = noLiteral, .takes_argument = true },",
       "to": ".{ .name = \"no_literal\", .collect = noLiteral },",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "no_literal counts a negated number as a literal but not other unary values",
         "no_literal refuses a missing or empty argument",
@@ -2820,6 +2825,7 @@
       "from": "if (!isKind(key, shape.quoted_key)) return tree.text(key);",
       "to": "if (!isKind(key, shape.quoted_key) or true) return tree.text(key);",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "no_literal matches a quoted key but not a computed one",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
@@ -2848,6 +2854,7 @@
       "from": "if (isNegatedLiteral(shape, tree, value)) return true;",
       "to": "if (isNegatedLiteral(shape, tree, value) and false) return true;",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
@@ -2892,6 +2899,7 @@
         "no_literal"
       ],
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ]
     },
@@ -16648,8 +16656,7 @@
       "to": "        _ = self;\n",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
-        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },
     {
