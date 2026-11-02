@@ -1169,6 +1169,7 @@
       "file": "src/platform/rules.zig",
       "from": "if (decision.status != .active or !decision.enforce) continue;",
       "to": "if (decision.status != .active) continue;",
+      "all": true,
       "kills": [
         "rules: unenforced, checkless and forgotten rules never block an edit"
       ]
@@ -2226,8 +2227,8 @@
     {
       "id": "SC4-scan-ledger-read-through-recall",
       "file": "src/platform/rules.zig",
-      "from": "return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));",
-      "to": "return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));",
+      "from": "try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs))",
+      "to": "try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs))",
       "kills": [
         "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
         "scan: with no ledger there are zero rules and no workspace is created"
