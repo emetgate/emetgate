@@ -115,6 +115,8 @@ pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const open_shell = src.open_shell;
 pub const command_danger = src.command_danger;
+pub const commit_guard = src.commit_guard;
+pub const run_audit = src.run_audit;
 pub const toolchain = src.toolchain;
 pub const console_text = src.console_text;
 pub const commit_message = src.commit_message;
@@ -309,6 +311,8 @@ test {
     _ = @import("tests/regression_gate.zig");
     _ = @import("tests/prompt_hook.zig");
     _ = @import("tests/pretool_hook.zig");
+    _ = @import("tests/commit_guard.zig");
+    _ = @import("tests/run_audit.zig");
     _ = @import("tests/context_epoch.zig");
     _ = @import("tests/launch_path.zig");
     _ = @import("tests/symbol.zig");

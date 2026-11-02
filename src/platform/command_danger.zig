@@ -317,7 +317,8 @@ const R = struct {
     const branch_delete = "deletes a branch even if it is not merged (git branch -D)";
     const stash = "deletes stashed changes (git stash drop/clear)";
     const rewrite = "rewrites the repository's history";
-    const commit = "commits outside the gate: no receipt and rules are not checked; emetgate_commit does both";
+    const commit = "commits outside the gate: no receipt, though emetgate_run still checks the rules at the commit; emetgate_commit does both";
+    const commit_unchecked = "skips the hooks, so a broken rule is only reported after the commit is made";
     const sql = "drops or truncates a database, schema, table or collection";
     const disk = "formats, partitions or overwrites a disk";
     const power = "shuts down, restarts or logs off the machine";
@@ -619,6 +620,10 @@ fn gitCommand(arena: Allocator, words: []const []const u8) Allocator.Error!?Find
         (if (args.len != 0 and (std.mem.eql(u8, args[0], "drop") or std.mem.eql(u8, args[0], "clear"))) R.stash else null)
     else if (std.mem.eql(u8, sub, "filter-branch") or std.mem.eql(u8, sub, "filter-repo"))
         R.rewrite
+    else if (std.mem.eql(u8, sub, "commit") and (hasShort(args, "n") or hasLong(args, &.{"--no-verify"})))
+        R.commit_unchecked
+    else if (std.mem.eql(u8, sub, "merge") and hasLong(args, &.{"--no-verify"}))
+        R.commit_unchecked
     else if (std.mem.eql(u8, sub, "commit") or std.mem.eql(u8, sub, "commit-tree") or std.mem.eql(u8, sub, "update-ref"))
         R.commit
     else

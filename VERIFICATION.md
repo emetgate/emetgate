@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2720**
-- Mutations declared in `tests/mutations.json`: **1794**
-  - killed: **1745**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2747**
+- Mutations declared in `tests/mutations.json`: **1800**
+  - killed: **1751**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -549,7 +549,7 @@ python tools/verification_page.py --check
 | `Q18-empty-match-captures-sliced` | `src/engine/query.zig` | `if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match...` -> `match.captures[0..match.capture_count];` | q: a match that captured no node is skipped instead of crashing | killed |
 | `Q19-predicate-comparisons-not-charged` | `src/engine/query.zig` | `if (budget.* < cost) return error.BudgetExceeded;     budget.* ...` -> `_ = .{ budget, cost };` | q: comparing captures with each other counts against the budget; q: string comparisons co... | killed |
 | `Q20-predicate-compared-bytes-not-charged` | `src/engine/query.zig` | `try charge(budget, 1 + @min(a.len, b.len));` -> `try charge(budget, 1);` | q: string comparisons count their bytes against the budget | killed |
-| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and try anyQueryOn(enforced.rules, chang...` -> `if (allow_repo_memory and try anyQueryOn(enforced.rules, change...` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
+| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and try anyQueryOn(list, changes)) {` -> `if (allow_repo_memory and try anyQueryOn(list, changes)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
 | `Q23-repeated-capture-accepted` | `src/engine/query.zig` | `if (repeatsCapture(own) or capturedGroupRepeats(own)) {` -> `if (false and repeatsCapture(own) or capturedGroupRepeats(own))...` | q: a capture repeated with + or * is refused, one with ? or an uncaptured repea...; redte... | killed |
 | `Q24-capture-count-unlimited` | `src/engine/query.zig` | `if (captureCount(own) > max_captures_per_pattern) {` -> `if (captureCount(own) > max_captures_per_pattern * 1000) {` | q: more than eight captures in one pattern are refused, predicate arguments do ...; redte... | killed |
 | `Q25-predicate-arguments-counted-as-captures` | `src/engine/query.zig` | `i = if (next < text.len and text[next] == '#') predicateEnd(tex...` -> `i += 1;` | q: more than eight captures in one pattern are refused, predicate arguments do ... | killed |
@@ -759,7 +759,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1134 mutation(s).
+1140 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1897,6 +1897,12 @@ python tools/verification_page.py --check
 | `PY2-attribute-assignment-runs-at-import` | `src/engine/lang/python/profile.zig` | `return !std.mem.eql(u8, left.kind(), "identifier");` -> `return std.mem.eql(u8, left.kind(), "");` | python move: code that runs at import needs order_change | killed |
 | `PY3-default-argument-runs-at-import` | `src/engine/lang/python/profile.zig` | `.eager_parameters = true,` -> `` | python move: code that runs at import needs order_change | killed |
 | `CS1-a-mention-must-resolve-the-same` | `src/platform/cs_modules.zig` | `if (!expected.eql(now)) return if (now == .ns or now == .ambigu...` -> `if (!expected.eql(now) and false) return error.IncompleteMove;` | csharp move_file: a using that would make another name ambiguous is refused | killed |
+| `RA1-run-audit-skips-commits` | `src/platform/run_audit.zig` | `try self.judgeCommits(item);` -> `` | run audit: a commit past the hook is judged on message and files | killed |
+| `RA2-run-audit-skips-working-files` | `src/platform/run_audit.zig` | `try self.judgeWorking(item);` -> `` | run audit: a file left uncommitted is judged, one already changed and untouched... | killed |
+| `RA3-run-audit-judges-untouched-dirty-files` | `src/platform/run_audit.zig` | `if (same) continue;` -> `_ = same;` | run audit: a file left uncommitted is judged, one already changed and untouched... | killed |
+| `RA4-run-reply-hides-broken-rules` | `src/protocol/open_run.zig` | `const broken = audit.findings.items.len != 0;` -> `const broken = false;` | run audit: emetgate_run answers rules_broken and is an error | killed |
+| `CG1-commit-guard-judges-the-whole-file` | `src/platform/commit_guard.zig` | `return holes;` -> `return null;` | commit guard: a violation already in HEAD does not block an unrelated line | killed |
+| `CG2-commit-guard-skips-the-message` | `src/platform/commit_guard.zig` | `if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced...` -> `` | commit guard: a message rule refuses the commit and names the rule | killed |
 
 ## What this system does not prove
 

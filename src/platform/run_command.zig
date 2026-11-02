@@ -352,6 +352,7 @@ pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []co
 pub const OpenPlace = struct {
     cwd: ?[]const u8 = null,
     also_hold: []const []const u8 = &.{},
+    env: []const sandbox.EnvVar = &.{},
 };
 
 pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8, place: OpenPlace) !RepoRun {
@@ -437,7 +438,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
 fn spawned(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Limits, spawn: Spawn) !sandbox.Report {
     return switch (spawn) {
         .toolchain => |local| runner.runToolchain(gpa, io, root_abs, local, limits),
-        .open => |open| open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits),
+        .open => |open| open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, open.place.env),
     };
 }
 

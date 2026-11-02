@@ -30,6 +30,7 @@ pub const Policy = struct {
     root: ?[]const u8 = null,
     session_dir: ?[]const u8 = null,
     nested_roots: []const []const u8 = &.{},
+    commit_guard_exe: ?[]const u8 = null,
     mirror_enabled: bool = false,
     mirror_trusted: bool = false,
     context: ?*context_epoch.Watch = null,

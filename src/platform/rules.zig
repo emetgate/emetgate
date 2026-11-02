@@ -159,16 +159,20 @@ fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
 pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const Change, allow_repo_memory: bool) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
-    if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {
+    return judgeUnder(gpa, io, root_abs, enforced.rules, changes, allow_repo_memory);
+}
+
+pub fn judgeUnder(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const Rule, changes: []const Change, allow_repo_memory: bool) !Gate {
+    if (!allow_repo_memory and try anyQueryOn(list, changes)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
         if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
     }
     for (changes) |change| {
-        const gated = try scopeKept(gpa, enforced.rules, change);
+        const gated = try scopeKept(gpa, list, change);
         if (gated != .ok) return gated;
     }
     for (changes) |change| {
-        const gated = try judgeChange(gpa, enforced.rules, change);
+        const gated = try judgeChange(gpa, list, change);
         if (gated != .ok) return gated;
     }
     return .ok;

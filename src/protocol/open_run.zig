@@ -6,6 +6,8 @@ const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
 const open_shell = @import("../platform/open_shell.zig");
+const commit_guard = @import("../platform/commit_guard.zig");
+const sandbox_env = @import("../platform/sandbox.zig");
 const test_command = @import("../platform/test_command.zig");
 const test_outcome = @import("../platform/test_outcome.zig");
 const sandbox = @import("../platform/sandbox.zig");
@@ -13,6 +15,8 @@ const output_digest = @import("output_digest.zig");
 const receipt_note = @import("receipt_note.zig");
 const run_trim = @import("run_trim.zig");
 const frozen_hold = @import("../platform/frozen_hold.zig");
+const run_audit = @import("../platform/run_audit.zig");
+const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -34,6 +38,7 @@ pub const timeout_fix = "the command ran past its time; pass timeout_s (at most 
 pub const frozen_fix = "fix the code instead; a frozen path is changed by hand by the user";
 pub const frozen_failed_fix = "a frozen path could not be put back; frozen_failed names each one and why: restore it by hand before going on";
 pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; emetgate_commit still checks them";
+pub const rules_fix = "the command left what the rule_violations name, and nothing was undone; change what each rule names, and for a commit amend it or follow it with one that fixes it";
 pub const hold_fix = "the command did not run: emetgate could not keep a copy of the frozen paths; emetgate doctor says why";
 
 pub const Request = struct {
@@ -66,7 +71,7 @@ pub fn parse(args: ?Value) error{MissingArgument}!Request {
     return request;
 }
 
-pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w: *Writer, event: *telemetry.Event) !bool {
+pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, policy: *const Policy, w: *Writer, event: *telemetry.Event) !bool {
     try policy_mod.refuseModelPolicy(args);
     const request = try parse(args);
     event.command = request.command;
@@ -87,7 +92,11 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
 
     const shell = try open_shell.find(gpa, root_abs);
     defer shell.deinit(gpa);
-    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots }) catch |err| switch (err) {
+    const guard = try guardEnvironment(arena, gpa, io, root_abs, policy);
+    var audit: run_audit.Audit = undefined;
+    try audit.begin(gpa, io, runtime, root_abs, policy.nested_roots, policy.allow_repo_memory);
+    defer audit.deinit();
+    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env }) catch |err| switch (err) {
         error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);
@@ -97,6 +106,8 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     };
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    try audit.finish();
+    const broken = audit.findings.items.len != 0;
     switch (ran.report.outcome) {
         .exited => |code| event.exit_code = code,
         else => event.fail(@tagName(ran.report.outcome)),
@@ -107,7 +118,7 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
-    try js.write(if (ran.frozen.held()) "ran" else "frozen_not_restored");
+    try js.write(if (!ran.frozen.held()) "frozen_not_restored" else if (broken) "rules_broken" else "ran");
     try js.objectField("command");
     try js.write(request.command);
     try js.objectField("shell");
@@ -119,7 +130,20 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
         try js.objectField("timeout_s");
         try js.write(timeout_s);
     }
-    try writeFrozen(gpa, &js, ran.frozen, if (ran.report.outcome == .timed_out) timeout_fix else null);
+    try writeAudit(&js, &audit);
+    const other_fix: ?[]const u8 = if (broken and ran.report.outcome == .timed_out)
+        try std.mem.join(arena, "; ", &.{ timeout_fix, rules_fix })
+    else if (broken)
+        rules_fix
+    else if (ran.report.outcome == .timed_out)
+        timeout_fix
+    else
+        null;
+    try writeFrozen(gpa, &js, ran.frozen, other_fix);
+    if (guard.failed) |reason| {
+        try js.objectField("commit_guard_error");
+        try js.write(reason);
+    }
     if (ran.report.no_tests) {
         try js.objectField("note");
         try js.write(test_outcome.no_tests_note);
@@ -157,8 +181,8 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
     try js.write(body.text);
     try js.endObject();
     try w.writeByte('\n');
-    if (!ran.frozen.held()) event.fail("FrozenNotRestored");
-    return !ran.frozen.held();
+    if (!ran.frozen.held()) event.fail("FrozenNotRestored") else if (broken) event.fail("RulesBroken");
+    return !ran.frozen.held() or broken;
 }
 
 pub fn writeFrozen(gpa: Allocator, js: *std.json.Stringify, frozen: frozen_hold.Report, other_fix: ?[]const u8) !void {
@@ -194,6 +218,44 @@ pub fn writeFrozen(gpa: Allocator, js: *std.json.Stringify, frozen: frozen_hold.
     try js.write(fix);
 }
 
+fn writeAudit(js: *std.json.Stringify, audit: *const run_audit.Audit) !void {
+    if (audit.findings.items.len != 0) {
+        try js.objectField("rule_violations");
+        try js.beginArray();
+        for (audit.findings.items) |finding| {
+            try js.beginObject();
+            if (finding.commit) |commit| {
+                try js.objectField("commit");
+                try js.write(commit);
+            }
+            try js.objectField("file");
+            try js.write(finding.file);
+            try js.objectField("line");
+            try js.write(finding.line);
+            try js.objectField("col");
+            try js.write(finding.col);
+            try js.objectField("rule");
+            try js.write(finding.rule);
+            if (finding.rule_text.len != 0) {
+                try js.objectField("rule_text");
+                try js.write(finding.rule_text);
+            }
+            try js.objectField("text");
+            try js.write(finding.text);
+            try js.endObject();
+        }
+        try js.endArray();
+    }
+    if (audit.more_findings != 0) {
+        try js.objectField("rule_violations_more");
+        try js.write(audit.more_findings);
+    }
+    if (audit.unchecked.items.len != 0) {
+        try js.objectField("rules_unchecked");
+        try js.write(audit.unchecked.items);
+    }
+}
+
 fn writeOutcome(js: *std.json.Stringify, report: sandbox.Report) !void {
     switch (report.outcome) {
         .exited => |code| {
@@ -216,6 +278,21 @@ fn writeOutcome(js: *std.json.Stringify, report: sandbox.Report) !void {
             try js.write("output_limit");
         },
     }
+}
+
+const Guard = struct { env: []const sandbox_env.EnvVar = &.{}, failed: ?[]const u8 = null };
+
+fn guardEnvironment(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, policy: *const Policy) !Guard {
+    const exe = policy.commit_guard_exe orelse return .{};
+    const local = try sandbox_env.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("LOCALAPPDATA")) orelse return .{ .failed = "LocalAppDataUnavailable" };
+    const state = try std.fmt.allocPrint(arena, "{s}\\emetgate", .{local});
+    const hooks = commit_guard.install(gpa, io, state, exe) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .{ .failed = @errorName(err) },
+    };
+    defer gpa.free(hooks);
+    const count = try sandbox_env.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("GIT_CONFIG_COUNT"));
+    return .{ .env = try commit_guard.environment(arena, hooks, root_abs, policy.allow_repo_memory, count) };
 }
 
 fn writeNotRun(w: *Writer, command: []const u8, kind: open_shell.Kind, err: anyerror) !void {

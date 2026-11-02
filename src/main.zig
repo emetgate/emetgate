@@ -22,6 +22,9 @@ const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const rule_catalog = emetgate.rule_catalog;
 const rules_command = emetgate.rules_command;
+const commit_guard = emetgate.commit_guard;
+const rules = emetgate.rules;
+const repo = emetgate.repo;
 const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
@@ -178,7 +181,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
-        const policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
+        var policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
+        if (policy.open_run) policy.commit_guard_exe = std.process.executablePathAlloc(init.io, runtime.gpa) catch null;
+        defer if (policy.commit_guard_exe) |exe| runtime.gpa.free(exe);
         try server.serve(runtime.gpa, init.io, runtime, out, policy, init.environ_map);
         return 0;
     }
@@ -200,6 +205,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (args.len == 1 + pretool_hook.hook_args.len and std.mem.eql(u8, command, pretool_hook.hook_args[0]) and std.mem.eql(u8, args[2], pretool_hook.hook_args[1])) {
         return hookPretoolCmd(init, runtime, out);
+    }
+    if (args.len == 4 and std.mem.eql(u8, command, commit_guard.hook_command) and std.mem.eql(u8, args[2], commit_guard.hook_name)) {
+        return commitMsgCmd(init, runtime, args[3]);
     }
     if (args.len == 1 + context_epoch.hook_args.len and std.mem.eql(u8, command, context_epoch.hook_args[0]) and std.mem.eql(u8, args[2], context_epoch.hook_args[1])) {
         return hookSessionCmd(init, runtime);
@@ -657,6 +665,25 @@ fn hookSessionCmd(init: std.process.Init, runtime: *Runtime) u8 {
         return 1;
     };
     return 0;
+}
+
+fn commitMsgCmd(init: std.process.Init, runtime: *Runtime, message_path: []const u8) u8 {
+    const gpa = runtime.gpa;
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    const w = &stderr_writer.interface;
+    defer w.flush() catch {};
+    const allow = init.environ_map.get(commit_guard.repo_memory_variable) != null;
+    rules.outer_root = init.environ_map.get(commit_guard.outer_variable);
+    const root = repo.servedRoot(gpa, init.io, null) catch |err| {
+        commit_guard.writeUnchecked(w, err) catch {};
+        return 1;
+    };
+    defer gpa.free(root);
+    return commit_guard.check(gpa, init.io, runtime, root, message_path, allow, w) catch |err| {
+        commit_guard.writeUnchecked(w, err) catch {};
+        return 1;
+    };
 }
 
 fn hookPretoolCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) u8 {

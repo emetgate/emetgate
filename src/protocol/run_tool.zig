@@ -16,6 +16,7 @@ const receipt_note = @import("receipt_note.zig");
 const open_run = @import("open_run.zig");
 const frozen_hold = @import("../platform/frozen_hold.zig");
 
+const Runtime = @import("../engine/runtime.zig").Runtime;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const Value = std.json.Value;
@@ -56,12 +57,12 @@ fn loadAllowlist(gpa: Allocator, io: std.Io, root_abs: []const u8, policy: *cons
     return list;
 }
 
-pub fn callRun(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+pub fn callRun(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     event.label = "run";
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     if (policy.open_run) {
-        const failed = open_run.render(gpa, io, args, &policy, &buffer.writer, event) catch |err| {
+        const failed = open_run.render(gpa, io, runtime, args, &policy, &buffer.writer, event) catch |err| {
             if (err == error.OutOfMemory) return err;
             return tool_result.failure(gpa, &buffer, err, event);
         };
