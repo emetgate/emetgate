@@ -23,13 +23,14 @@ const Fixture = struct {
     fn init(self: *Fixture) !void {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
         self.* = .{ .tmp = testing.tmpDir(.{}), .arena_state = .init(gpa), .runtime = try test_util.openRuntime(), .root = "", .below = "" };
+        errdefer self.deinit();
         const a = self.arena_state.allocator();
         try self.tmp.dir.createDirPath(testing.io, "top/below/src");
         const base = try self.tmp.dir.realPathFileAlloc(testing.io, ".", a);
         self.root = try std.fmt.allocPrint(a, "{s}\\top", .{base});
         self.below = try std.fmt.allocPrint(a, "{s}\\below", .{self.root});
         try self.write("top/src.js", "function hello() {\n  return 1;\n}\n");
-        try self.gitIn(self.root, &.{ "init", "-q" });
+        try self.repo(self.root);
         try self.gitIn(self.root, &.{ "add", "-A" });
         try self.gitIn(self.root, &.{ "commit", "-qm", "base" });
     }
@@ -59,6 +60,12 @@ const Fixture = struct {
             .exited => |code| if (code != 0) return error.GitFailed,
             else => return error.GitFailed,
         }
+    }
+
+    fn repo(self: *Fixture, cwd: []const u8) !void {
+        try self.gitIn(cwd, &.{ "init", "-q" });
+        try self.gitIn(cwd, &.{ "config", "user.name", "t" });
+        try self.gitIn(cwd, &.{ "config", "user.email", "t@t" });
     }
 
     fn rule(_: *Fixture, root: []const u8, text: []const u8, check_spec: []const u8) !void {
@@ -200,7 +207,7 @@ test "commit guard: rules of the folder above reach a repository below it" {
     try f.init();
     defer f.deinit();
     try f.write("top/below/src/a.js", "const a = 1;\n");
-    try f.gitIn(f.below, &.{ "init", "-q" });
+    try f.repo(f.below);
     try f.gitIn(f.below, &.{ "add", "-A" });
     try f.gitIn(f.below, &.{ "commit", "-qm", "base" });
     try f.rule(f.root, "no co-author", "message:forbid:Co-Authored-By");

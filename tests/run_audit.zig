@@ -24,12 +24,13 @@ const Fixture = struct {
     fn init(self: *Fixture) !void {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
         self.* = .{ .tmp = testing.tmpDir(.{}), .arena_state = .init(gpa), .runtime = try test_util.openRuntime(), .root = "", .audit = undefined, .audited = false };
+        errdefer self.deinit();
         const a = self.arena_state.allocator();
         try self.tmp.dir.createDirPath(testing.io, "top");
         const base = try self.tmp.dir.realPathFileAlloc(testing.io, ".", a);
         self.root = try std.fmt.allocPrint(a, "{s}\\top", .{base});
         try self.write("top/src.js", "function hello() {\n  return 1;\n}\n");
-        try self.git(self.root, &.{ "init", "-q" });
+        try self.repo(self.root);
         try self.git(self.root, &.{ "add", "-A" });
         try self.git(self.root, &.{ "commit", "-qm", "base" });
     }
@@ -61,6 +62,12 @@ const Fixture = struct {
 
     fn git(self: *Fixture, cwd: []const u8, args: []const []const u8) !void {
         _ = try self.gitOut(cwd, args, null);
+    }
+
+    fn repo(self: *Fixture, cwd: []const u8) !void {
+        try self.git(cwd, &.{ "init", "-q" });
+        try self.git(cwd, &.{ "config", "user.name", "t" });
+        try self.git(cwd, &.{ "config", "user.email", "t@t" });
     }
 
     fn rule(_: *Fixture, root: []const u8, text: []const u8, check_spec: []const u8) !void {
@@ -185,7 +192,7 @@ test "run audit: a repository below is watched and named in the path" {
     try f.tmp.dir.createDirPath(testing.io, "top/mobil/src");
     const below = try std.fmt.allocPrint(a, "{s}\\mobil", .{f.root});
     try f.write("top/mobil/one.js", "const a = 1;\n");
-    try f.git(below, &.{ "init", "-q" });
+    try f.repo(below);
     try f.git(below, &.{ "add", "-A" });
     try f.git(below, &.{ "commit", "-qm", "base" });
     try f.rule(f.root, "no console.log", "forbid:console.log");
