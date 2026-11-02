@@ -3985,8 +3985,8 @@
     {
       "id": "Q21-committed-query-rule-runs-without-flag",
       "file": "src/platform/rules.zig",
-      "from": "    if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
-      "to": "    if (allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
+      "from": "    if (!allow_repo_memory and try anyQueryOn(list, changes)) {",
+      "to": "    if (allow_repo_memory and try anyQueryOn(list, changes)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -17285,6 +17285,60 @@
       "to": "        if (!expected.eql(now) and false) return error.IncompleteMove;\n",
       "kills": [
         "csharp move_file: a using that would make another name ambiguous is refused"
+      ]
+    },
+    {
+      "id": "RA1-run-audit-skips-commits",
+      "file": "src/platform/run_audit.zig",
+      "from": "        try self.judgeCommits(item);\n",
+      "to": "",
+      "kills": [
+        "run audit: a commit past the hook is judged on message and files"
+      ]
+    },
+    {
+      "id": "RA2-run-audit-skips-working-files",
+      "file": "src/platform/run_audit.zig",
+      "from": "        try self.judgeWorking(item);\n",
+      "to": "",
+      "kills": [
+        "run audit: a file left uncommitted is judged, one already changed and untouched is not"
+      ]
+    },
+    {
+      "id": "RA3-run-audit-judges-untouched-dirty-files",
+      "file": "src/platform/run_audit.zig",
+      "from": "                if (same) continue;\n",
+      "to": "                _ = same;\n",
+      "kills": [
+        "run audit: a file left uncommitted is judged, one already changed and untouched is not"
+      ]
+    },
+    {
+      "id": "RA4-run-reply-hides-broken-rules",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const broken = audit.findings.items.len != 0;\n",
+      "to": "    const broken = false;\n",
+      "kills": [
+        "run audit: emetgate_run answers rules_broken and is an error"
+      ]
+    },
+    {
+      "id": "CG1-commit-guard-judges-the-whole-file",
+      "file": "src/platform/commit_guard.zig",
+      "from": "    return holes;\n",
+      "to": "    return null;\n",
+      "kills": [
+        "commit guard: a violation already in HEAD does not block an unrelated line"
+      ]
+    },
+    {
+      "id": "CG2-commit-guard-skips-the-message",
+      "file": "src/platform/commit_guard.zig",
+      "from": "    if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced.rules, message))) return 1;\n",
+      "to": "",
+      "kills": [
+        "commit guard: a message rule refuses the commit and names the rule"
       ]
     }
   ]
