@@ -1,4 +1,5 @@
 const std = @import("std");
+const display_path = @import("../platform/display_path.zig");
 const telemetry = @import("telemetry.zig");
 const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
@@ -496,6 +497,31 @@ pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
     return success(gpa, &buffer);
 }
 
+fn writeFolders(gpa: Allocator, io: std.Io, dir_abs: []const u8, js: *std.json.Stringify) !void {
+    var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return;
+    defer dir.close(io);
+    var names: std.ArrayList([]u8) = .empty;
+    defer {
+        for (names.items) |name| gpa.free(name);
+        names.deinit(gpa);
+    }
+    var entries = dir.iterate();
+    while (entries.next(io) catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.ascii.eqlIgnoreCase(entry.name, ".git") or std.ascii.eqlIgnoreCase(entry.name, shadow.workspace_dir)) continue;
+        if (names.items.len == max_list_entries) break;
+        try names.append(gpa, try gpa.dupe(u8, entry.name));
+    }
+    if (names.items.len == 0) return;
+    std.mem.sort([]u8, names.items, {}, struct {
+        fn lessThan(_: void, a: []u8, b: []u8) bool {
+            return std.mem.order(u8, a, b) == .lt;
+        }
+    }.lessThan);
+    try js.objectField("folders");
+    try js.write(names.items);
+}
+
 fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w: *Writer) !void {
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
@@ -506,7 +532,13 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w:
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("dir");
-    try js.write(dir);
+    if (display_path.prefix.len != 0 and std.fs.path.isAbsolute(dir)) {
+        const shown = try std.fmt.allocPrint(gpa, "{s}{s}", .{ display_path.prefix, place.rel });
+        defer gpa.free(shown);
+        try js.write(std.mem.trimEnd(u8, shown, "/"));
+    } else {
+        try js.write(dir);
+    }
     try js.objectField("files");
     try js.beginArray();
     var count: usize = 0;
@@ -517,10 +549,17 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w:
             truncated = true;
             break;
         }
-        try js.write(f);
+        if (display_path.prefix.len == 0) {
+            try js.write(f);
+        } else {
+            const shown = try std.fmt.allocPrint(gpa, "{s}{s}", .{ display_path.prefix, f });
+            defer gpa.free(shown);
+            try js.write(shown);
+        }
         count += 1;
     }
     try js.endArray();
+    try writeFolders(gpa, io, place.abs, &js);
     if (truncated) {
         try js.objectField("truncated");
         try js.write(true);

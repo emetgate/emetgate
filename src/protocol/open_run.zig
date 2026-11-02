@@ -19,7 +19,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 
-pub const description = "Runs any shell command in the repo root (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
+pub const description = "Runs any shell command in the session folder (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
 
 pub const command_desc = "the shell command, as you would type it";
 pub const raw_desc = "return the output uncut, up to 64 KiB";
@@ -87,7 +87,7 @@ pub fn render(gpa: Allocator, io: std.Io, args: ?Value, policy: *const Policy, w
 
     const shell = try open_shell.find(gpa, root_abs);
     defer shell.deinit(gpa);
-    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version) catch |err| switch (err) {
+    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots }) catch |err| switch (err) {
         error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);

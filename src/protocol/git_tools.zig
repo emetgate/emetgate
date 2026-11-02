@@ -141,7 +141,10 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     };
     if (opts.cursor) |c| if (!isValidCommit(c)) return error.InvalidCommit;
     const path = if (args) |a| getString(a, "path") else null;
-    const place = try repo.jail(gpa, io, root, path orelse ".");
+    const place = repo.jail(gpa, io, root, path orelse ".") catch |err| switch (err) {
+        error.FileOutsideRepo => if (path == null and root != null) try repo.jail(gpa, io, root, root.?) else return err,
+        else => return err,
+    };
     defer place.deinit(gpa);
 
     const git = try exe_path.git(gpa, place.root);

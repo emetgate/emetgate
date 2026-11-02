@@ -168,6 +168,7 @@ pub const find_tools = @import("protocol/find_tools.zig");
 pub const find_command = @import("protocol/find_command.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
+pub const workspace = @import("protocol/workspace.zig");
 pub const telemetry = @import("protocol/telemetry.zig");
 pub const handlers = @import("protocol/handlers.zig");
 pub const batch_stage = @import("protocol/batch_stage.zig");

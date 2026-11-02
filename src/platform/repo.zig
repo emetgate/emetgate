@@ -289,6 +289,22 @@ fn expectSameRepoByGit(gpa: Allocator, io: std.Io, root: []const u8, abs: []cons
     if (!std.ascii.eqlIgnoreCase(own, root)) return error.FileOutsideRepo;
 }
 
+pub fn nestedOwner(arena: Allocator, io: std.Io, root: []const u8, abs: []const u8, start_at_self: bool) !?[]const u8 {
+    if (abs.len <= root.len or !std.ascii.eqlIgnoreCase(abs[0..root.len], root) or abs[root.len] != '\\') return null;
+    var dir = if (start_at_self) abs else std.fs.path.dirname(abs) orelse return null;
+    var found: ?[]const u8 = null;
+    while (dir.len > root.len) {
+        if (shadow.isReparsePoint(dir) catch false) return null;
+        if (found == null and try ownsRepository(arena, io, dir)) found = dir;
+        dir = std.fs.path.dirname(dir) orelse return null;
+    }
+    const candidate = found orelse return null;
+    const final = finalOf(arena, candidate) catch return null;
+    const owner = gitToplevel(arena, io, final) catch return null;
+    if (!std.ascii.eqlIgnoreCase(owner, final)) return null;
+    return final;
+}
+
 pub fn refuseInternal(rel: []const u8) error{InternalPath}!void {
     var segments = std.mem.tokenizeAny(u8, rel, "/\\");
     const first = segments.next() orelse return;

@@ -160,6 +160,7 @@ pub const find_tools = src.find_tools;
 pub const find_command = src.find_command;
 pub const diagnostics = src.diagnostics;
 pub const server = src.server;
+pub const workspace = src.workspace;
 pub const telemetry = src.telemetry;
 pub const handlers = src.handlers;
 pub const recovery = src.recovery;
@@ -330,6 +331,7 @@ test {
     _ = @import("tests/doc_writer.zig");
     _ = @import("tests/redteam_write_doc.zig");
     _ = @import("tests/batch_crash_doc.zig");
+    _ = @import("tests/nested_repos.zig");
     _ = @import("tests/commit_batch.zig");
     _ = @import("tests/commit_batch_crash.zig");
     _ = @import("tests/commit_protocol.zig");

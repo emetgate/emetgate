@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2704**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2720**
 - Mutations declared in `tests/mutations.json`: **1794**
   - killed: **1745**
   - equivalent: **9**
@@ -480,7 +480,7 @@ python tools/verification_page.py --check
 | `G7-rules-empty-report-returned` | `src/platform/rules.zig` | `if (list.items.len == 0) return .ok;` -> `if (list.items.len == 99999) return .ok;` | a clean span and an empty rule list both report nothing | killed |
 | `G8-rules-column-off-by-one` | `src/platform/rules.zig` | `.col = offset - self.starts[lo] + 1 };` -> `.col = offset - self.starts[lo] };` | violation positions hold at the edges: first and last line, empty lines, CRLF, ...; the l... | killed |
 | `G9-rules-rule-id-not-recorded` | `src/platform/rules.zig` | `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` -> `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` | rules: an enforced no_comment rule rejects a commented body before the tests run; every v... | killed |
-| `SC4-scan-ledger-read-through-recall` | `src/platform/rules.zig` | `return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));` -> `return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));` | scan: a torn ledger stops the ledger scan by name, --check still runs, and noth...; scan:... | killed |
+| `SC4-scan-ledger-read-through-recall` | `src/platform/rules.zig` | `try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs))` -> `try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs))` | scan: a torn ledger stops the ledger scan by name, --check still runs, and noth...; scan:... | killed |
 | `SC10-scan-span-misses-first-byte` | `src/platform/rules.zig` | `const whole: symbol.Span = .{ .start = 0,` -> `const whole: symbol.Span = .{ .start = 1,` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: a to... | killed |
 | `SP1-where-glob-guard-removed` | `src/platform/where.zig` | `if (std.mem.indexOfAny(u8, text, "*?[]{}") != null) return erro...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
 | `SP2-where-absolute-guard-removed` | `src/platform/where.zig` | `if (text[0] == '/' or text[0] == '\\' or std.mem.indexOfScalar(...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |

@@ -45,12 +45,21 @@ pub const Enforced = struct {
     gpa: Allocator,
     recall: ?memory.Recall,
     rules: []const Rule,
+    outer: ?memory.Recall = null,
+    outer_text: ?*std.heap.ArenaAllocator = null,
 
     pub fn deinit(self: Enforced) void {
         self.gpa.free(self.rules);
         if (self.recall) |r| r.deinit();
+        if (self.outer) |r| r.deinit();
+        if (self.outer_text) |state| {
+            state.deinit();
+            self.gpa.destroy(state);
+        }
     }
 };
+
+pub var outer_root: ?[]const u8 = null;
 
 pub const Violation = struct {
     rule: []u8,
@@ -78,11 +87,61 @@ pub const Report = struct {
 };
 
 pub fn load(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
-    return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));
+    return withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs)));
 }
 
 pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
-    return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));
+    return withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs)));
+}
+
+fn nestedBelowOuter(root_abs: []const u8) ?[]const u8 {
+    const outer = outer_root orelse return null;
+    if (root_abs.len <= outer.len + 1) return null;
+    if (!std.ascii.eqlIgnoreCase(root_abs[0..outer.len], outer)) return null;
+    if (root_abs[outer.len] != '\\') return null;
+    return root_abs[outer.len + 1 ..];
+}
+
+fn withOuter(gpa: Allocator, io: std.Io, root_abs: []const u8, own: Enforced) !Enforced {
+    const below = nestedBelowOuter(root_abs) orelse return own;
+    var result = own;
+    errdefer result.deinit();
+    const recall = try memory.peek(gpa, io, outer_root.?);
+    result.outer = recall;
+    const state = try gpa.create(std.heap.ArenaAllocator);
+    state.* = .init(gpa);
+    result.outer_text = state;
+    const arena = state.allocator();
+    const prefix = try std.fmt.allocPrint(arena, "{s}/", .{below});
+    std.mem.replaceScalar(u8, prefix, '\\', '/');
+    var list: std.ArrayList(Rule) = .empty;
+    errdefer list.deinit(gpa);
+    try list.appendSlice(gpa, own.rules);
+    for (recall.decisions) |decision| {
+        if (decision.status != .active or !decision.enforce) continue;
+        const check = decision.check orelse continue;
+        const where = switch (try where_mod.rerooted(arena, decision.where, prefix)) {
+            .outside => continue,
+            .everywhere => null,
+            .scoped => |text| text,
+        };
+        const rule: Rule = .{ .id = decision.id, .check = check, .where = where, .text = decision.text, .lang = rule_catalog.langOf(decision.text, check) };
+        if (alreadyHeld(list.items, rule)) continue;
+        try list.append(gpa, rule);
+    }
+    gpa.free(own.rules);
+    result.rules = try list.toOwnedSlice(gpa);
+    return result;
+}
+
+fn alreadyHeld(held: []const Rule, rule: Rule) bool {
+    for (held) |other| {
+        if (!std.mem.eql(u8, other.check, rule.check)) continue;
+        const a = other.where orelse "";
+        const b = rule.where orelse "";
+        if (std.mem.eql(u8, a, b)) return true;
+    }
+    return false;
 }
 
 fn enforcedFrom(gpa: Allocator, recall: memory.Recall) !Enforced {
@@ -102,6 +161,7 @@ pub fn judge(gpa: Allocator, io: std.Io, root_abs: []const u8, changes: []const 
     defer enforced.deinit();
     if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {
         if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
+        if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
     }
     for (changes) |change| {
         const gated = try scopeKept(gpa, enforced.rules, change);
@@ -819,6 +879,7 @@ fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const 
         const due = try commandDue(rule, targets, options.message) orelse continue;
         if (!trusted) {
             if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
+            if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
             trusted = true;
         }
         if (due.message) |message| {
