@@ -879,7 +879,7 @@ fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const 
         const due = try commandDue(rule, targets, options.message) orelse continue;
         if (!trusted) {
             if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
-        if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
+            if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
             trusted = true;
         }
         if (due.message) |message| {
