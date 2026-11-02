@@ -1,5 +1,6 @@
 const std = @import("std");
 const tool_names = @import("../engine/tool_names.zig");
+const workspace_mod = @import("workspace.zig");
 const commit_intent = @import("../platform/commit_intent.zig");
 const commit_plan = @import("../platform/commit_plan.zig");
 const telemetry = @import("telemetry.zig");
@@ -14,6 +15,7 @@ const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
+const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
@@ -211,13 +213,14 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_commit",
         .description = "Commits pending gated changes; refused on outside edits or tests broken this session.",
-        .props = &.{.{ .name = "message", .desc = "" }},
+        .props = &.{ .{ .name = "message", .desc = "" }, .{ .name = "dir", .desc = nested_dir_desc, .optional = true } },
     },
     .{
         .name = "emetgate_git",
         .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
+            .{ .name = "dir", .desc = nested_dir_desc, .optional = true },
             .{ .name = "args", .desc = "", .optional = true, .ty = "array" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
             .{ .name = "detail", .desc = "", .optional = true },
@@ -234,6 +237,7 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_git_write",
         .description = git_write.description,
         .props = &.{
+            .{ .name = "dir", .desc = nested_dir_desc, .optional = true },
             .{ .name = "args", .desc = "", .ty = "array" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
@@ -382,6 +386,8 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
     var served: Served = undefined;
     served.open(gpa, io, runtime, policy, .{ .environ = environ });
     defer served.close();
+    var repositories = workspace_mod.Workspace.init(gpa, io, runtime, policy, environ, &served, repo.finalPath(gpa, io, ".") catch null);
+    defer repositories.deinit();
 
     const read_buffer = try gpa.alloc(u8, max_message_bytes);
     defer gpa.free(read_buffer);
@@ -403,7 +409,7 @@ pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy
         const trimmed = if (line.len > 0 and line[line.len - 1] == '\r') line[0 .. line.len - 1] else line;
         if (trimmed.len == 0) continue;
 
-        if (try served.handle(runtime, trimmed, out)) {
+        if (try repositories.handle(trimmed, out)) {
             try out.writeByte('\n');
             try out.flush();
         }
@@ -479,7 +485,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     try writeToolResult(out, id, decorated orelse result.text, result.is_error);
 }
 
-fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
+pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
     const explore = std.mem.eql(u8, name, "emetgate_explore");
     const evidence = std.mem.eql(u8, name, "emetgate_evidence");
     if (!explore and !evidence) return handlers.callTool(gpa, io, runtime, name, arguments, event, policy);
@@ -520,6 +526,8 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
     try js.endObject();
     try js.endObject();
 }
+
+const nested_dir_desc = "a folder in another git repository below this one; omit for this one";
 
 pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck passes and no test fails that did not fail before (pytest and dotnet let a new test fail until emetgate_commit), and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
@@ -690,7 +698,7 @@ fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.endObject();
 }
 
-fn writeToolResult(out: *Writer, id: Value, text: []const u8, is_error: bool) !void {
+pub fn writeToolResult(out: *Writer, id: Value, text: []const u8, is_error: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);

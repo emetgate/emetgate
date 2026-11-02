@@ -1,4 +1,7 @@
 const std = @import("std");
+const display_path = @import("../platform/display_path.zig");
+
+pub const no_function_matched = "no function of the repository matched the phrase";
 const facts = @import("../engine/facts.zig");
 const fact_store = @import("../platform/fact_store.zig");
 const io_seam = @import("../platform/io_seam.zig");
@@ -331,7 +334,7 @@ pub const Session = struct {
         try w.print("No symbol named {s}.", .{name});
         const near = try self.symbolScores(arena, name);
         for (near[0..@min(near.len, max_closest)], 0..) |r, i| {
-            try w.print("{s}{s} {s}:{d}", .{ if (i == 0) " Closest: " else "; ", r.f.qname, r.f.path, self.defLine(r.f) });
+            try w.print("{s}{s} {s}{s}:{d}", .{ if (i == 0) " Closest: " else "; ", r.f.qname, display_path.prefix, r.f.path, self.defLine(r.f) });
         }
         try w.writeByte('\n');
     }
@@ -387,7 +390,7 @@ pub const Session = struct {
                 if (self.isTestPick(f.path)) continue;
                 any = true;
                 if (self.container(f)) {
-                    try containers.writer.print("{s}:{d} {s}\n", .{ f.path, self.defLine(f), f.qname });
+                    try containers.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, f.path, self.defLine(f), f.qname });
                     continue;
                 }
                 try addPicked(arena, &picks, &at, f, 1, true);
@@ -427,7 +430,7 @@ pub const Session = struct {
             try out.writer.writeAll(containers.written());
         }
         if (picks.items.len == 0) {
-            try out.writer.writeAll("no function of the repository matched the phrase\n");
+            try out.writer.print("{s}\n", .{no_function_matched});
             return out.written();
         }
         var texts: std.StringHashMapUnmanaged(FileText) = .empty;
@@ -449,14 +452,14 @@ pub const Session = struct {
             const chance: f64 = if (pk.whole) 1 else usefulAt(pk.score);
             const worth = pk.whole or worthSending(size, chance, fetch_chars);
             if (worth and used + size <= limit) {
-                try out.writer.print("{s}:{d} {s}\n", .{ pk.f.path, first, pk.f.qname });
+                try out.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname });
                 var k = first;
                 while (k <= last) : (k += 1) try writeLine(&out.writer, ft, k, base);
                 used += size;
                 try shown.append(arena, .{ .file = pk.f.file, .first = first, .last = last });
                 continue;
             }
-            const line = try std.fmt.allocPrint(arena, "{s}:{d} {s} ({d} lines)\n", .{ pk.f.path, first, pk.f.qname, last - first + 1 });
+            const line = try std.fmt.allocPrint(arena, "{s}{s}:{d} {s} ({d} lines)\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname, last - first + 1 });
             if (pk.whole) {
                 try cut.writer.writeAll(line);
             } else if (usefulAt(pk.score) >= pointer_chance and pointers.written().len + line.len <= pointer_budget) {
@@ -497,7 +500,7 @@ pub const Session = struct {
             const base = indentOf(ft.line(first));
             const size = blockChars(ft, first, last, base) + f.path.len + f.qname.len + header_chars;
             if (!worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;
-            try bound.writer.print("{s}:{d} {s}\n", .{ f.path, first, f.qname });
+            try bound.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, f.path, first, f.qname });
             var k = first;
             while (k <= last) : (k += 1) try writeLine(&bound.writer, ft, k, base);
             used += size;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const display_path = @import("../platform/display_path.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -79,7 +80,7 @@ pub fn writeLines(gpa: Allocator, w: *Writer, lines: []const Line) !void {
     for (order) |i| {
         const l = lines[i];
         if (current == null or !std.mem.eql(u8, current.?, l.file)) {
-            try w.print("{s}\n", .{l.file});
+            try w.print("{s}{s}\n", .{ display_path.prefix, l.file });
             current = l.file;
         }
         const mark: []const u8 = if (l.definition) "*" else "";

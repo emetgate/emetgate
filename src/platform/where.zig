@@ -22,6 +22,7 @@ pub const Error = error{
 };
 
 const exclusion_marker = " !";
+pub const whole_repository = "./";
 
 pub const Base = union(enum) {
     file: []const u8,
@@ -131,6 +132,7 @@ pub fn parse(text: []const u8) Error!Where {
 
 fn parseBase(text: []const u8) Error!Base {
     if (text.len == 0) return error.WhereEmpty;
+    if (std.mem.eql(u8, text, whole_repository)) return .{ .dir = "" };
     if (std.mem.indexOfAny(u8, text, "*?[]{}") != null) return error.WhereGlob;
     if (text[0] == '/' or text[0] == '\\' or std.mem.indexOfScalar(u8, text, ':') != null) return error.WhereAbsolute;
     if (!std.unicode.utf8ValidateSlice(text)) return error.WhereMalformed;
@@ -193,6 +195,61 @@ fn hasDirComponent(rel: []const u8, name: []const u8) bool {
 
 fn isSeparator(c: u8) bool {
     return c == '/' or c == '\\';
+}
+
+pub const Rerooted = union(enum) {
+    outside,
+    everywhere,
+    scoped: []const u8,
+};
+
+pub fn rerooted(arena: std.mem.Allocator, text: ?[]const u8, prefix: []const u8) !Rerooted {
+    const given = text orelse return .everywhere;
+    const parsed = try parse(given);
+    var built: std.ArrayList(u8) = .empty;
+    const base_text = given[0 .. given.len - parsed.exclusions.len];
+    switch (parsed.base) {
+        .dir => |dir| {
+            if (dir.len == 0) {
+                try built.appendSlice(arena, whole_repository);
+            } else if (startsWithPath(dir, prefix)) {
+                const rest = dir[prefix.len..];
+                try built.appendSlice(arena, if (rest.len == 0) whole_repository else rest);
+            } else if (startsWithPath(prefix, dir)) {
+                try built.appendSlice(arena, whole_repository);
+            } else return .outside;
+        },
+        .file, .symbol => {
+            if (!startsWithPath(base_text, prefix)) return .outside;
+            try built.appendSlice(arena, base_text[prefix.len..]);
+        },
+    }
+    var kept: usize = 0;
+    var rest = parsed.exclusions;
+    while (rest.len != 0) {
+        const body = rest[exclusion_marker.len..];
+        const end = std.mem.indexOf(u8, body, exclusion_marker) orelse body.len;
+        const one = body[0..end];
+        rest = body[end..];
+        const shown: ?[]const u8 = switch (classify(one)) {
+            .suffix, .dir_name => one,
+            .file => if (startsWithPath(one, prefix)) one[prefix.len..] else null,
+            .dir_prefix => blk: {
+                if (startsWithPath(prefix, one)) return .outside;
+                break :blk if (startsWithPath(one, prefix)) one[prefix.len..] else null;
+            },
+        };
+        const keep = shown orelse continue;
+        try built.appendSlice(arena, exclusion_marker);
+        try built.appendSlice(arena, keep);
+        kept += 1;
+    }
+    if (kept == 0 and std.mem.eql(u8, built.items, whole_repository)) return .everywhere;
+    return .{ .scoped = built.items };
+}
+
+fn startsWithPath(text: []const u8, prefix: []const u8) bool {
+    return text.len >= prefix.len and samePath(prefix, text[0..prefix.len]);
 }
 
 pub fn validate(text: ?[]const u8) Error!void {
@@ -365,4 +422,24 @@ test "more exclusions than the limit are refused" {
     const at_limit = "src/" ++ " !a/" ** max_exclusions;
     _ = try parse(at_limit);
     try testing.expectError(error.WhereTooManyExclusions, parse(at_limit ++ " !b/"));
+}
+
+test "rerooted: a rule set above a nested repository keeps its meaning inside it" {
+    var state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer state.deinit();
+    const arena = state.allocator();
+    const prefix = "Tribune/mobil/";
+    try std.testing.expect((try rerooted(arena, null, prefix)) == .everywhere);
+    try std.testing.expect((try rerooted(arena, "src/", prefix)) == .outside);
+    try std.testing.expect((try rerooted(arena, "Tribune/", prefix)) == .everywhere);
+    try std.testing.expect((try rerooted(arena, "Tribune/mobil/", prefix)) == .everywhere);
+    try std.testing.expectEqualStrings("tests/", (try rerooted(arena, "Tribune/mobil/tests/", prefix)).scoped);
+    try std.testing.expectEqualStrings("a.js", (try rerooted(arena, "Tribune/mobil/a.js", prefix)).scoped);
+    try std.testing.expect((try rerooted(arena, "Tribune/backend/a.js", prefix)) == .outside);
+    try std.testing.expect((try rerooted(arena, "Tribune/ !Tribune/mobil/", prefix)) == .outside);
+    const kept = (try rerooted(arena, "Tribune/ !*.md !Tribune/backend/", prefix)).scoped;
+    try std.testing.expectEqualStrings("./ !*.md", kept);
+    const parsed = try parse(kept);
+    try std.testing.expect(parsed.coversFile("src/a.js"));
+    try std.testing.expect(!parsed.coversFile("README.md"));
 }

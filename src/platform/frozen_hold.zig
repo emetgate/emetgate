@@ -39,6 +39,50 @@ pub const Report = struct {
     }
 };
 
+pub fn absorb(gpa: Allocator, into: *Report, label: []const u8, other: Report) !void {
+    if (other.state == null and other.failure == null) return;
+    const state = into.state orelse blk: {
+        const fresh = try gpa.create(std.heap.ArenaAllocator);
+        fresh.* = .init(gpa);
+        into.state = fresh;
+        break :blk fresh;
+    };
+    const a = state.allocator();
+    const named = struct {
+        fn path(arena: Allocator, folder: []const u8, rel: []const u8) ![]const u8 {
+            const text = try std.fmt.allocPrint(arena, "{s}/{s}", .{ folder, rel });
+            std.mem.replaceScalar(u8, text, '\\', '/');
+            return text;
+        }
+        fn ids(arena: Allocator, list: []const []const u8) ![]const []const u8 {
+            const copy = try arena.alloc([]const u8, list.len);
+            for (list, copy) |id, *slot| slot.* = try arena.dupe(u8, id);
+            return copy;
+        }
+    };
+    var restored: std.ArrayList(Restored) = .empty;
+    try restored.appendSlice(a, into.restored);
+    for (other.restored) |item| try restored.append(a, .{ .path = try named.path(a, label, item.path), .rules = try named.ids(a, item.rules) });
+    into.restored = restored.items;
+    var committed: std.ArrayList(Committed) = .empty;
+    try committed.appendSlice(a, into.committed);
+    for (other.committed) |item| {
+        const paths = try a.alloc([]const u8, item.paths.len);
+        for (item.paths, paths) |path, *slot| slot.* = try named.path(a, label, path);
+        try committed.append(a, .{ .commit = try a.dupe(u8, item.commit), .subject = try a.dupe(u8, item.subject), .paths = paths, .rules = try named.ids(a, item.rules) });
+    }
+    into.committed = committed.items;
+    var in_merge: std.ArrayList([]const u8) = .empty;
+    try in_merge.appendSlice(a, into.in_merge);
+    for (other.in_merge) |path| try in_merge.append(a, try named.path(a, label, path));
+    into.in_merge = in_merge.items;
+    var failed: std.ArrayList(Failed) = .empty;
+    try failed.appendSlice(a, into.failed);
+    for (other.failed) |item| try failed.append(a, .{ .path = try named.path(a, label, item.path), .reason = try a.dupe(u8, item.reason) });
+    into.failed = failed.items;
+    if (into.failure == null) into.failure = other.failure;
+}
+
 const Scope = struct { id: []const u8, where: ?where_mod.Where };
 const Seen = union(enum) { absent, other, file: Digest };
 const Held = struct { seen: Seen = .absent, copy: []const u8 = "", index: []const u8 = "" };
