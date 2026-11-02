@@ -14,134 +14,26 @@
 
 # Emetgate
 
-LLM은 빠르고 유능합니다 — 몇 시간의 작업을 몇 분 만에. 하지만 그것이 당신의 규칙을 따르는지는 그들에게 달려 있습니다: 모델은 "이것을 절대 쓰지 말라"를 읽고도 그냥 쓸 수 있습니다.
+`CLAUDE.md`에 "주석 금지", "Co-Authored-By 금지"라고 적습니다. 모델은 한동안 따르다가 어느 순간 따르지 않습니다. 파일을 더 길게 써도 다시 부탁하는 것일 뿐입니다.
 
-흔한 해답은 더 나은 프롬프트, 더 긴 `AGENTS.md` — 모델에게 지키라고 *요청하는* 규칙입니다. Emetgate는 다른 길을 택합니다: 모델과 당신의 소스 트리 사이의 한 계층. 건너뛸 수 있는 지시가 아니라 — 반드시 통과해야 하는 게이트. 모델이 변경을 제안하고, 커널이 그것을 검증하며, 통과하지 못하면 아무것도 디스크에 도달하지 않습니다.
-
-MCP 서버로 실행되며, Windows에서 TypeScript, JavaScript, Python, C#, Zig을 지원합니다. 아래에서는 각 기능을 부분으로 나눕니다 — 각 부분이 무엇이며, 여기서 무엇을 하는지. 코드와 그 아래의 실제 출력 없이는 어떤 주장도 하지 않습니다.
-
-## 게이트
-
-변경은 심볼과, 그 변경이 기반으로 삼은 코드의 해시를 지정합니다. Emetgate는 새 본문을 제자리에 넣고, 파일을 다시 파싱하고, 규칙을 실행한 다음, 샌드박스 안의 저장소 복사본에서 타입 검사와 테스트를 실행합니다. 모든 단계가 통과하면 변경이 기록되고 영수증에 묶입니다; 어느 단계든 실패하면 아무것도 기록되지 않습니다.
+Emetgate는 Claude Code와 소스 트리 사이에 들어갑니다. 모델이 변경을 제안하면 저장소의 복사본에서 규칙과 테스트가 판단하고, 통과해야만 파일이 바뀝니다. 설정한 규칙은 세션이 아무리 길어져도, 모델에게 규칙을 어기라고 직접 요청해도 모든 쓰기 도구 호출과 모든 `emetgate_commit`에서 검사됩니다. 통과한 변경마다 나중에 확인할 수 있는 영수증이 남습니다.
 
 ```
-proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
-                  └── any step fails ─▶ nothing is written (מת)
+"status":"rejected","reason":"rule_violation"
+"rule_text":"no new comments","file":"src\\cart.js","line":18
+"text":"// apply the coupon before tax"
+emetgate ✗ rejected · rule_violation · disk untouched · session 0 edits
 ```
 
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| 섀도 워크스페이스 | 저장소의 격리된 복사본 | 제안된 쓰기가 먼저 여기에 적용되므로 테스트와 타입 검사가 실제 트리를 건드리지 않고 실행됩니다; 실패 시 디스크는 전혀 바뀌지 않았습니다 |
-| tree-sitter | 증분 파서 | 변경이 실제로 파싱되고 트리를 깨뜨리지 않았음을 보이기 위해 파일을 다시 파싱합니다 |
-| in-toto 영수증 | 공급망 출처(provenance) 형식 | 통과한 각 쓰기를, 무엇으로부터 무엇이 어떤 테스트로 만들어졌는지에 대한 서명된 기록에 묶습니다 — 나중에 검사 가능 |
+Emetgate는 증인이지 보증이 아닙니다. 무엇이 실행되었고 무슨 일이 있었는지 알려 줄 뿐, 코드가 올바르거나 안전하다고 말할 수는 없습니다. [한계](#한계)를 참고하세요.
 
-## 검색
+Windows 전용입니다. [Claude Code](https://claude.ai/code)와 Git이 필요합니다.
 
-두 개의 엔진: 속도를 위한 리터럴 색인과, 증명을 위한 인증 엔진.
+<p align="center"><img src="../assets/demo.gif" width="800" alt="emetgate lockdown 아래의 Claude Code 세션: 프롬프트에서 규칙을 추가하고, 게이트가 테스트를 깨는 변경을 거부합니다"></p>
 
-### `emetgate_find` — 리터럴 검색
+## 시작
 
-디스크로 되돌아가지 않는 평문 및 색인 가능한 패턴 검색. 워밍 시 밀리초 미만.
-
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| 접미사 배열 (SA-IS) | 선형 시간에 구축되는, 텍스트 모든 접미사의 정렬 배열 | 리터럴을 단 한 번의 `O(m·log n)` 이진 검색으로, 모든 일치와 함께 찾습니다 |
-| 두 개의 웨이블릿 트리 | 배열 위의 위치→파일 및 반복-체인 맵 | 어느 일치가 어느 파일에 있는지, 파일을 디스크에서 다시 읽지 않고 알려줍니다 |
-| mmap된 `.emet` 색인 | 메모리 매핑된 단일 색인 파일 | 검색 중 파일이 다시 열리지 않습니다; 워밍 시 `~0.7–1 ms` |
-
-### `emetgate_search` — 인증 검색
-
-결과와 함께, 아무것도 놓치지 않았다는 증명을 함께 전달하는 검색.
-
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| 트라이그램 포스팅 | 압축된 역색인 (Elias-Fano / 비트맵) | 저장소 전체를 스캔하지 않고 후보 파일을 빠르게 좁힙니다 |
-| RFC 9162 머클 트리 | 읽은 모든 파일의 SHA-256 위의 루트 | 응답이 루트를 전달하므로, 완전하거나 부분적인 답이 주장이 아니라 증명 가능합니다 |
-| 실패-시-닫힘(fail-closed) | 숫자가 맞지 않으면 인증서가 `InconsistentCertificate`로 거부됩니다 | 잘못된 "완전"은 결코 표시되지 않습니다; 의심스러우면 침묵합니다 |
-| NTFS 변경 장벽 | `ReadDirectoryChangesW`를 통한 파일-변경 알림 | 변경된 파일만 다시 읽힙니다(신선도); 벤치마크에서 누락 없음 |
-| ripgrep 위임 | 색인이 제공할 수 없는 정규식 (`\b`, lookaround…) | ripgrep에 넘겨집니다; 응답은 `delegated: rg`라고 말합니다 — 기능 손실 없음 |
-
-응답은 주장이 아니라 증명을 전달합니다 — 실제 출력:
-
-```
-$ search "InconsistentCertificate"
-✓ 6 matches in 429 files            # complete, with the Merkle root
-$ search "Allocator"
-partial: matches 1-46 of 1617; next offset:46
-$ search "zzzNeverOccurs"
-✓ no match in 569 files              # even zero is proven
-```
-
-> 워밍 ~1.5–3.5 ms · 콜드(색인 구축) 661 ms · ripgrep과 한 줄 한 줄 동일
-
-## 규칙
-
-한 번 설정한 정책이 모든 쓰기에서 지켜집니다. 모델은 규칙을 읽을 수 있고 바꿀 수 없습니다.
-
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| tree-sitter 쿼리 | 구문 트리 위의 구조적 일치 | 범위/심볼/주석 검사: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
-| 정규식 엔진(예산제) | 단계 제한이 있는 매처 | `forbid_regex` / `no_todo`: 변경된 범위에서 패턴 또는 마커 탐색 |
-| `ledger.ndjson` | 추가 전용 규칙 장부 (`.emetgate/`) | 규칙이 여기에 있습니다; 모델은 읽지만 쓸 수 없습니다 — 정책은 사람의 것으로 남습니다 |
-| 커밋-메시지 검사 | 메시지-표면 규칙 | `message:conventional`: conventional commit이 커밋 시점에 지켜집니다 |
-
-```
-emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
-emetgate rule add "document exports"  --check require_comment --in src/ --enforce
-```
-
-## 검증된 Git
-
-`emetgate verify --branch base..head`는 브랜치의 전체 이력을 다시 재생하고 변조가 드러나는 판정을 반환합니다.
-
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| blake3 해시 체인 | 각 인증서 = blake3(parent ‖ oid ‖ verdict ‖ receipt) | 커밋 하나를 다시 재생하면 체인 끝이 이동합니다 — 변조가 드러남 |
-| CAS 참조 + 비공개 색인 | 작업 트리를 건드리지 않는 write-tree / commit-tree | 게이트를 통과한, 영수증이 붙은 커밋 — 편집기를 방해하지 않고 |
-| TLA⁺ 모델 검사 | 커밋 저널의 형식 모델 | 충돌이 반쯤 남긴 커밋이 일관된 상태로 돌아옵니다 — 증명됨 |
-| in-toto 영수증 | 커밋에 묶인 출처 (`refs/notes/emetgate`) | 영수증 없음 → `partial`(실패-시-닫힘); 조작된 "verified" 없음 |
-| git rev-list 재생 | `base..head` 범위를 순회 | 각각에 대해 단일-커밋 검증을 다시 실행하며 체인을 엮습니다 |
-
-```
-$ emetgate verify --branch main..HEAD
-branch partial: 48 commit(s)          # no receipt → fail-closed
-  a179a7f unverified (no receipt)  cert 84c2…
-
-# tamper with one receipt:
-branch broken: 1 commit(s)
-  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
-```
-
-## 어떻게 테스트되는가
-
-| 부분 | 무엇인지 | 여기서 하는 일 |
-| --- | --- | --- |
-| 뮤테이션 테스트 | 코드를 일부러 망가뜨리고 스위트가 알아채는지 확인 | 테스트가 단지 통과하는 것이 아니라 결함을 *잡아낸다*는 것을 증명합니다 |
-| TLA⁺ | 커밋 저널의 모델 검사 | 충돌 복구의 정확성을, 코드와 별개로 논증 |
-| 퍼즈 & 레드팀 | 무작위 뮤테이션과 공격 코퍼스 | 예상치 못하거나 적대적인 입력에서 충돌이나 탈출 없음 |
-| ripgrep 동등성 게이트 | 매 실행마다 히트 집합을 rg와 비교 | 검색이 "빠르지만 틀릴" 수 없습니다; 한 줄 한 줄 검사 |
-
-엔진의 경우: 현재 뮤턴트 69개: 58개 제거, 6개 동등함이 증명됨, 4개는 심층 방어로 유지한 중복 가드, 1개 미해결. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
-
-## 측정값
-
-| 표면 | 측정 | 결과 |
-| --- | --- | --- |
-| 전체 테스트 스위트 | 통과 / 실패 / 누출 | 2386 / 0 / 0 |
-| 검색 동등성 | rg 줄 = emetgate | 1617=1617 · 6=6 · 2=2 |
-| 검색 워밍 | 중앙값 | 1.5–3.5 ms |
-| find 워밍 | 중앙값 | 0.7–1.0 ms |
-| 검증(변조된 영수증) | 판정 | broken (잡힘) |
-
-```
-python tests/bench/n8n_search.py   ·   zig build test
-```
-
-## 설치
-
-처음이신가요? [docs/QUICKSTART.md](../docs/QUICKSTART.md)를 따르세요: 설치하고, `emetgate doctor`를 실행한 뒤, `emetgate lockdown`을 실행합니다.
-
-[최신 릴리스](https://github.com/emetgate/emetgate/releases/latest)에서 Windows 바이너리를 내려받고 그 폴더를 `PATH`에 넣으세요 (PowerShell; 이후 새 터미널을 여세요):
+바이너리를 내려받아 `PATH`에 넣습니다(PowerShell):
 
 ```
 New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
@@ -149,44 +41,224 @@ Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download
 [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-그다음 프로젝트 폴더에서:
+새 터미널을 열고 프로젝트 폴더로 이동해 실행합니다:
 
 ```
-emetgate lockdown --test "npm test"
+emetgate lockdown
 ```
 
-Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown`은 에이전트를 emetgate 도구만으로, 실패-시-닫힘으로 시작합니다. `--test`를 빼면 테스트 명령은 쓰기마다 감지됩니다 (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, `.sln` 또는 `.csproj`). 빈 폴더에서는 lockdown이 `git init`을 실행하고, 프로젝트에 테스트 명령이 생길 때까지 쓰기는 `unverified_no_tests`로 기록됩니다.
-
-Lockdown은 프로젝트 자체의 `.mcp.json`만 읽으며, 사용자 범위에 등록된 서버는 절대 읽지 않습니다. emetgate를 다른 도구들 옆에서 서버로 쓰거나 lockdown에 직접 서버 인자를 주려면 프로젝트에 등록하세요:
+설치는 이것으로 끝입니다. 자신의 규칙을 지키게 하려면 세션에서 다음을 입력합니다. 19는 새 주석 금지, 26은 Co-authored-by 금지이며, `/rule pick`은 30개 전부를 보여 줍니다:
 
 ```
-claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+/rule pick 19 26
 ```
 
-그 `.mcp.json`이 있으면 lockdown은 테스트 명령을 거기서 가져오고, `emetgate lockdown --test`는 거부됩니다.
+나머지 행은 선택 사항입니다:
 
-## 더 깊이
+| 목적 | 실행 | 하는 일 |
+| --- | --- | --- |
+| 세션 시작 | `emetgate lockdown` | 내장 도구 대신 emetgate 도구로 Claude Code를 엽니다. 테스트 명령은 쓰기마다 감지됩니다 |
+| 설치 확인 | `emetgate doctor` | 검사마다 한 줄. 모든 `FAIL`은 고치는 명령으로 끝납니다 |
+| 테스트 명령 지정 | `claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"` | 감지가 아무것도 찾지 못하거나 잘못된 명령을 찾을 때. `.mcp.json`을 씁니다 |
+| 타입 검사 추가 | 같은 줄에 `--typecheck "npx tsc --noEmit"` | `tsc`는 감지되지 않으므로 지정해야 합니다 |
+| 다운로드 확인 | `Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256` | 릴리스 페이지의 `emetgate.exe.sha256`과 비교합니다 |
+| 소스에서 빌드 | `zig build -Doptimize=ReleaseSafe` | Zig 0.16.0 필요 |
 
-- [REFERENCE.md](../REFERENCE.md) — 모든 도구
-- [VERIFICATION.md](../VERIFICATION.md) — 영수증과 증명
-- [docs/experiments/tla](../docs/experiments/tla) — TLA⁺ 모델
-- [tests/bench](../tests/bench) — 벤치마크
+각 릴리스에는 SHA-256 파일과 빌드 출처 증명이 함께 제공됩니다. 바이너리는 아직 코드 서명되지 않았습니다. 단계별 안내: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+
+## 세션에서 달라지는 점
+
+| 모델이 원하는 것 | 일어나는 일 |
+| --- | --- |
+| 읽기 또는 검색 | 묻지 않고 실행되며, 파일 전체보다 적은 텍스트를 보내는 도구를 씁니다 |
+| 명령 실행 | 어떤 명령이든 실행되고, 긴 출력은 잘려서 돌아옵니다 |
+| 파괴적인 명령 실행 | 먼저 묻습니다: `rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, 디스크 포맷, 내려받은 스크립트를 셸로 파이프하기 등 |
+| 파일 변경 | 평소처럼 묻고, 그다음 변경이 게이트를 통과합니다 |
+
+빈 폴더에는 `git init`을 합니다. 드라이브 루트, 홈 폴더, 시스템 폴더, 아주 큰 폴더에서는 하지 않으며 lockdown이 거부합니다. 이미 저장소가 있는 폴더는 그대로 둡니다.
+
+## 게이트
+
+```
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── a step fails ─▶ nothing is written (מת)
+```
+
+코드 변경은 심볼과 기반이 된 코드의 해시를 지정하므로, 오래된 편집은 거부됩니다. 변경은 저장소의 복사본에 적용되고 단계들은 거기서 실행됩니다. 단계가 실패하면 파일은 그대로이고, 응답에 실패한 각 테스트의 출력이 담겨 모델이 스위트를 다시 돌리지 않고 고칠 수 있습니다.
+
+각 단계가 하는 일과 하지 않는 일:
+
+| 단계 | 실행 시점 | 비고 |
+| --- | --- | --- |
+| reparse | 항상, 파서가 있는 언어에서 | 파일이 여전히 파싱되는지 보여 줍니다 |
+| 규칙 | 규칙이 있을 때 | [규칙](#규칙) 참고 |
+| 타입 검사 | 프로젝트가 mypy나 pyright를 설정했거나, 루트에 `dotnet` 프로젝트가 하나 있거나, `--typecheck`를 줬을 때 | `tsc`는 감지되지 않으니 `--typecheck`로 전달합니다 |
+| 테스트 | 테스트 명령을 찾았고 코드가 바뀌었을 때 | 테스트 명령이 없으면 `unverified_no_tests` 표시로 쓰기가 이루어집니다. 코드가 아닌 파일만 바뀌면 테스트가 돌지 않습니다 |
+| 영수증 | 통과한 모든 쓰기에서 | [영수증](#영수증) 참고 |
+
+게이트의 테스트 규칙은 이렇습니다: **이전에 실패하지 않은 테스트는 실패해서는 안 됩니다.** 이미 실패하던 테스트는 쓰기를 막지 않으며, 응답이 그 테스트를 알려 줍니다(`baseline_failing`, `failing_tests`). pytest와 `dotnet test`는 새로 실패하는 테스트를 `emetgate_commit`까지 두는 것도 허용하고, 그 부채는 `tests/debt.json`에 기록되므로 테스트를 먼저 쓰고 다음에 통과시킬 수 있습니다. 분석으로 자기 심볼 밖에 영향을 줄 수 없다고 증명된 변경은, 설정되어 있으면 전체 스위트 대신 범위가 좁은 테스트 명령을 실행합니다.
+
+## 언어
+
+| | read, try, scan, 규칙 | rename | move, move_file | 호출 그래프(`facts`) | `explore`, `map` |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| TypeScript, TSX, JavaScript | 예 | 예 | 예 | 예 | 예 |
+| Python | 예 | 예 | 예 | 예 | `map` 예, `explore` 부분 |
+| C# | 예 | 예 | 타입과 정적 멤버 | 부분 | `map` 예, `explore` 부분 |
+| Zig | 예(최상위 함수) | 아니요 | 아니요 | 아니요 | 아니요 |
+| JSON, Markdown | 섹션 읽기와 쓰기 | - | - | - | - |
+
+`map`은 Python과 C#의 테스트, 라우트, 명령을 인식합니다. `explore`는 `latest_news.py`처럼 테스트가 아닌 이름을 아직 테스트로 읽기도 합니다. Rename은 타입 없는 지역 변수를 통해 호출되는 메서드를 따라가지 못합니다. C# 인스턴스 멤버는 객체에 의존하므로 이동하지 않습니다. 데코레이터나 최상위 문이 있는 파일에서 Python 심볼을 옮기려면 `order_change:true`가 필요합니다. Python과 C#용 언어 서비스는 없습니다. 두 언어의 동등 지원은 진행 중입니다.
+
+테스트 명령은 `package.json`, `build.zig`, `Cargo.toml`, `go.mod`, Python 프로젝트 표지, `.sln`, `.slnx`, `.csproj`, `.fsproj`, `.vbproj`, 중첩된 테스트 프로젝트에서 감지합니다.
+
+## 도구
+
+모델은 23개 도구를 받습니다. 전체 매개변수: [REFERENCE.md](../REFERENCE.md).
+
+| | 도구 |
+| --- | --- |
+| 이해 | `explore`(질문에서 정의, 호출자, 영향까지), `evidence`, `symbols`, `skeleton` |
+| 읽기 | `read_symbol`, `read_file`(한 번에 최대 32개 파일, JSON pointer, Markdown 제목, 줄 범위), `list` |
+| 검색 | `search`(리터럴 또는 정규식, 추적 파일 기준), `find`(모든 파일에서 대소문자 무시 리터럴) |
+| 코드 변경 | `try`, `try_batch`(여러 파일, 전부 아니면 전무), `edit`, `write`, `rename`, `move`, `move_file` |
+| 문서 변경 | `write_doc`(JSON, Markdown, 범위) |
+| 검사 | `scan`(저장소 전체에 검사 하나), `mutate`(미리 보기) |
+| git과 셸 | `git`(읽기 전용), `git_write`(플래그 허용 목록, 손실은 `force: true` 필요), `commit`(영수증 포함), `run` |
+
+사용자용 명령줄 도구: `doctor`, `verify`, `rule`, `rules`(터미널 UI), `recover`, `commit`, `receipts attach`, `facts`, `map`, `find`, `scan`, `stats`.
+
+## 규칙
+
+`--enforce`로 설정한 규칙은 모든 쓰기에서 지켜지며, 없으면 기록되고 표시되기만 합니다. 모델은 규칙을 읽을 수 있지만 바꿀 수 없고, 규칙을 바꾸는 명령은 먼저 사용자에게 묻습니다. 규칙은 추가만 가능한 `.emetgate/ledger.ndjson`에 있습니다.
+
+**규칙 설정.** `/rule` 줄은 프롬프트가 전송되기 전에 처리되므로 모델에 도달하지 않습니다.
+
+| 위치 | 명령 | 하는 일 |
+| --- | --- | --- |
+| 세션에서 | `/rule pick` | 아래 30개 준비된 규칙을 보여 줍니다 |
+| 세션에서 | `/rule pick 1 19 26 in src/` | 그 규칙들을 채택합니다. 여기서는 `src/` 아래만 |
+| 세션에서 | `/rule add "ban lodash" --check forbid_import:lodash --enforce` | 자신의 규칙을 추가합니다 |
+| 세션에서 | `/rule list`, `/rule supersede <id> "new text"`, `/rule forget <id>` | 규칙을 보여 주거나 교체하거나 사용을 중단합니다 |
+| 터미널에서 | `emetgate rule add ...` | 같은 명령, 슬래시 없이 |
+| 터미널에서 | `emetgate rules` | 같은 규칙을 위한 터미널 UI |
+
+`--in`은 규칙을 파일, `/`로 끝나는 폴더, 또는 `file#symbol`로 제한합니다.
+
+**규칙이 검사할 수 있는 것.**
+
+| 검사 | 쓰기가 거부되는 경우 |
+| --- | --- |
+| `no_comment` | 주석이 있을 때 |
+| `require_comment` | 함수, 메서드, 클래스 앞에 주석이 없을 때 |
+| `no_todo` | `TODO`, `FIXME`, `XXX`가 있을 때 |
+| `forbid:<text>` | 이 텍스트가 있을 때 |
+| `require:<text>` | 이 텍스트가 없을 때 |
+| `forbid_regex:<pattern>` | 이 정규식에 일치할 때 |
+| `no_literal:<option>` | 이 옵션을 하드코딩할 때, 예: `timeout: 30000`에 대한 `no_literal:timeout` |
+| `forbid_import:<module>` | 이 모듈을 임포트할 때 |
+| `max_function_lines:<n>` | 함수가 n줄보다 길 때 |
+| `q:<query>` | 이 tree-sitter 쿼리가 일치할 때 |
+| `added:<check>` | 변경이 추가한 부분에서만 검사가 실패할 때. 기존 코드는 쓰기를 막지 않습니다 |
+| `cmd:<command>` | 샌드박스의 복사본에서 실행한 자신의 명령이 위반을 보고할 때 |
+| `frozen` | 규칙의 `--in` 범위에 있는 경로를 바꿀 때 |
+| `message:<check>` | 커밋 메시지가 위반할 때: `forbid`, `require`, `max_lines`, `max_subject`, `max_line`, `conventional` |
+
+**`/rule pick`의 준비된 규칙.**
+
+| 그룹 | 규칙 |
+| --- | --- |
+| 코드 스타일, JS와 TS | `console.log`, `debugger`, `alert`, `var`, `any`, `document.write`, `innerHTML`, `dangerouslySetInnerHTML`, 집중 테스트(`.only`), `@ts-ignore` 금지 |
+| 코드 스타일, Python | `print`, `exec`, `assert`, 맨 `except`, `pickle` 금지 |
+| 코드 스타일, C# | `Console.WriteLine`, `Debug.WriteLine`, `Thread.Sleep` 금지 |
+| 코드 스타일, 모든 언어 | 새 주석 금지, 정의에 doc comment, 함수 최대 50줄, `TODO`/`FIXME`/`XXX` 금지 |
+| 보안 | `eval`, 하드코딩된 비밀(정규식으로), `http://` URL 금지 |
+| git 위생 | `Co-authored-by` 금지, "Generated with Claude" 금지, `WIP` 금지, conventional commit 제목 |
+| 아키텍처 | 경로 동결 |
+
+`frozen` 경로는 쓰기 도구로 바꿀 수 없고, `emetgate_run`은 명령마다 그 경로를 되돌립니다. `emetgate_run`을 통한 `git commit`은 먼저 묻습니다.
+
+## 영수증
+
+통과한 쓰기는 무엇이 무엇에서 어떤 테스트로 만들어졌는지 담은 [in-toto](https://in-toto.io) 기록에 묶입니다. `emetgate_commit`은 이를 `refs/notes/emetgate` 아래 git note로 저장합니다.
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt: not called verified
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# after tampering with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…
+```
+
+커밋은 `verified`, `merged`, `unverified`, `mismatch` 중 하나이고, 범위는 `verified`, `partial`, `broken`, `empty` 중 하나이며 빈 범위는 실패합니다. `tools/verify_py/emetgate_verify.py`는 영수증을 Python으로 독립적으로 검사합니다.
+
+영수증은 서명되지 않으며 체인 끝은 공개되지 않습니다. 커밋과 맞지 않게 편집된 영수증은 잡아냅니다. 새로 만든 일관된 영수증과 함께 다시 쓴 커밋은 잡아내지 못합니다.
+
+## 검색
+
+검색 도구는 둘이며, 어느 쪽도 파일 전체를 돌려보내지 않습니다.
+
+| | `search` | `find` |
+| --- | --- | --- |
+| 찾는 곳 | `dir` 아래 git이 추적하는 텍스트 파일 | git이 나열하는 모든 파일, 추적 여부 무관, 무시되지 않은 것 |
+| 일치 | 대소문자 구분 리터럴, 또는 `regex:true`인 정규식 | 대소문자 무관 리터럴, 모든 바이트, 모든 언어 |
+| 인덱스 | 트라이그램 | suffix array와 wavelet matrix, 메모리 매핑 파일 하나 |
+| 응답 | 파일마다 한 번, 그다음 일치마다 `line:text`, 정의에는 `*` | 일치 수와 파일 수, 일치가 가장 많은 20개 파일, 처음 40개 일치 |
+| 일치가 많을 때 | `partial`, 이어서 볼 다음 offset 포함 | 응답 크기가 같게 유지됩니다 |
+| 좁히기 | `kinds:["code"]`는 주석과 문자열을 건너뜁니다 | - |
+| 용도 | 코드 | 로그, 설정, 생성된 파일과 추적되지 않는 파일 |
+
+`search`는 읽은 파일들에 대한 Merkle 루트(RFC 9162)도 함께 답하므로, 완전한 답과 부분적인 답이 응답 안에서 구별됩니다. 인덱스로 처리할 수 없는 정규식은 ripgrep으로 가고 응답에 `delegated: rg`라고 나옵니다. 인증서의 숫자가 맞지 않으면 응답은 `InconsistentCertificate`로 거부됩니다.
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files
+```
+
+n8n에서: 새 세션의 첫 검색 5.5~22.7 ms, 이후 검색 1.9~10.1 ms, rg 27.2~80.9 ms와 git grep 29.1~65.7 ms 대비. 저장소당 한 번인 첫 인덱스 구축은 91~1,335 ms(2026-09-27, 스캔 대역폭 3.13 GB/s).
+
+## 테스트 방법
+
+뮤테이션 테스트는 코드를 일부러 망가뜨리고 스위트가 알아채는지 확인합니다. 퍼즈와 레드팀 코퍼스는 예상 밖의 적대적인 입력을 넣습니다. CI는 풀 리퀘스트마다 Debug와 ReleaseSafe에서 전체 스위트를 실행하고, 야간 실행은 뮤테이션 코퍼스 전체를 다룹니다.
+
+엔진 기준: 오늘 뮤턴트 69개: 58개 제거, 6개 동등 증명, 4개 중복 가드를 심층 방어로 유지, 1개 미해결. 목록은 [VERIFICATION.md](../VERIFICATION.md)에 있습니다.
 
 ## 한계
 
-Windows 전용; TypeScript, JavaScript, Python, C#, Zig. 샌드박스는 읽기나 네트워크가 아니라 쓰기를 막습니다. 게이트를 통과한다는 것은 변경이 파싱되고 *당신의* 테스트를 통과함을 증명합니다 — 그 테스트만큼만 강합니다. 벤치마크는 우리 자신의 것이며, 한 대의 기계에서, 재현 가능합니다.
+- Windows 전용입니다.
+- **게이트 통과는 변경이 파싱되고 테스트를 통과한다는 것을 증명합니다.** 그 테스트만큼만 강하며, 테스트가 없으면 증명하는 것이 거의 없습니다(`unverified_no_tests`).
+- **규칙은 설정한 뒤에만 지켜지며, 쓰기 도구와 `emetgate_commit`을 판단합니다.** `emetgate_run`으로 실행한 명령은 판단하지 않습니다. 모델이 실행한 스크립트는 주석을 추가할 수 있고, 되돌려지는 것은 `frozen` 경로뿐입니다. 거기서의 `git commit`은 먼저 묻지만, 메시지 규칙은 읽지 않습니다.
+- **테스트가 약해졌는지는 아무것도 검사하지 않습니다.** 테스트 폴더에 `frozen` 규칙이 없으면, 테스트를 바꾸고 통과하는 편집은 쓰입니다.
+- **lockdown의 `emetgate_run`은 샌드박스가 아닙니다.** 명령은 사용자 권한으로 실행됩니다.
+- **파괴적 명령 확인은 명령의 단어를 읽습니다.** 모델이 작성한 뒤 실행하는 스크립트 안은 보지 못하므로, 벽이 아니라 과속 방지턱입니다. 승인하는 내용을 읽으세요.
+- **`frozen`에는 구멍이 있습니다.** 모델이 실행한 스크립트의 커밋은 묻지 않습니다. `frozen_committed`에 보고되고 `emetgate verify`는 이를 verified라 부르지 않습니다. 무시된 파일, 추적되지 않는 빌드와 캐시 폴더, 심볼릭 링크, 서브모듈 폴더, 명령보다 오래 사는 프로세스는 지켜지지 않습니다. `commit` 외의 `emetgate_git_write` 명령(`reset`, `restore`, `stash` 등)은 동결 경로를 여전히 옮길 수 있습니다.
+- 게이트 자체의 테스트 실행을 둘러싼 샌드박스는 쓰기를 막을 뿐, 읽기나 네트워크는 막지 않습니다.
+- Python과 C#에는 [언어](#언어)에 적힌 공백이 있습니다.
+- 벤치마크는 자체 측정이고, 한 대의 머신에서 나왔으며, [tests/bench](../tests/bench)에서 재현할 수 있습니다.
+
+## 더 알아보기
+
+- [docs/QUICKSTART.md](../docs/QUICKSTART.md): 단계별 설치
+- [REFERENCE.md](../REFERENCE.md): 모든 도구와 플래그, `.mcp.json` 설정, `--commit`, `--typecheck`, `--allow-run`, `.emetgaterc.json` 포함
+- [VERIFICATION.md](../VERIFICATION.md): 영수증과 증명
 
 ## 이름의 유래
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="1899년 펜 드로잉: 랍비 뢰브가 손을 들자 골렘의 얼굴이 연기 속에서 형성되고, 이마에 히브리 문자가 있다" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="1899년 펜화: 뢰브 랍비가 손을 들자 연기 속에서 골렘의 얼굴이 나타나고, 이마에 히브리 문자가 있습니다" width="220" align="left">
 </picture>
 
-프라하 전설에서 골렘은 이마의 **אמת**(*emet*, "진실")라는 단어로 생명을 얻습니다. 첫 글자를 지우면 **אמת**는 **מת**(*met*, "죽음")가 됩니다 — 골렘이 멈춥니다. 게이트는 변경이 유지될 때 첫 글자를 쓰고; 실패한 테스트가 그것을 지웁니다.
+프라하 전설에서 골렘은 이마에 새겨진 **אמת**(*emet*, "진리")라는 단어로 살아납니다. 첫 글자를 지우면 **אמת**는 **מת**(*met*, "죽음")가 되고 골렘은 멈춥니다. 게이트는 변경이 버티면 첫 글자를 쓰고, 실패한 테스트는 그것을 지웁니다.
 
 <br clear="left">
 
 ## 라이선스
 
-MIT. [LICENSE](../LICENSE) 참조.
+MIT. [LICENSE](../LICENSE)를 참고하세요.
