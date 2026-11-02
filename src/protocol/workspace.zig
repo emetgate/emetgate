@@ -88,7 +88,11 @@ pub const Workspace = struct {
         defer call_arena.deinit();
         const arena = call_arena.allocator();
         var message = json_input.parseLeaky(Value, arena, line, .{}) catch return self.primary.handle(self.runtime, line, out);
-        const call = toolCall(&message) orelse return self.primary.handle(self.runtime, line, out);
+        const call = toolCall(&message) orelse {
+            const method = fieldOf(message, "method") orelse return self.primary.handle(self.runtime, line, out);
+            if (method == .string and std.mem.eql(u8, method.string, "tools/list")) try self.prepareRun();
+            return self.primary.handle(self.runtime, line, out);
+        };
 
         var slots: std.ArrayList(*Value) = .empty;
         if (call.arguments) |arguments| try collectSlots(arena, arguments, &slots);

@@ -48,7 +48,7 @@ const server_name = "emetgate";
 pub const server_version = @import("version").version;
 const max_message_bytes = 4 * 1024 * 1024;
 
-pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string" };
+pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string", nested: bool = false };
 pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
 
 const budget_text = std.fmt.comptimePrint("{d}", .{read_budget.default_budget});
@@ -213,14 +213,14 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_commit",
         .description = "Commits pending gated changes; refused on outside edits or tests broken this session.",
-        .props = &.{ .{ .name = "message", .desc = "" }, .{ .name = "dir", .desc = nested_dir_desc, .optional = true } },
+        .props = &.{ .{ .name = "message", .desc = "" }, .{ .name = "dir", .desc = nested_dir_desc, .optional = true, .nested = true } },
     },
     .{
         .name = "emetgate_git",
         .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
-            .{ .name = "dir", .desc = nested_dir_desc, .optional = true },
+            .{ .name = "dir", .desc = nested_dir_desc, .optional = true, .nested = true },
             .{ .name = "args", .desc = "", .optional = true, .ty = "array" },
             .{ .name = "path", .desc = "required for blame", .optional = true },
             .{ .name = "detail", .desc = "", .optional = true },
@@ -237,7 +237,7 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_git_write",
         .description = git_write.description,
         .props = &.{
-            .{ .name = "dir", .desc = nested_dir_desc, .optional = true },
+            .{ .name = "dir", .desc = nested_dir_desc, .optional = true, .nested = true },
             .{ .name = "args", .desc = "", .ty = "array" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
         },
@@ -449,7 +449,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id, policy.commit, policy.open_run);
+        try writeToolsList(out, request_id, policy.commit, policy.open_run, policy.nested_roots.len != 0);
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -551,7 +551,7 @@ fn commits(tool: []const u8) bool {
     return false;
 }
 
-fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool) !void {
+fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -573,6 +573,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool) !void {
         try js.objectField("properties");
         try js.beginObject();
         for (tool.props) |prop| {
+            if (prop.nested and !nested) continue;
             try js.objectField(prop.name);
             try js.beginObject();
             try js.objectField("type");

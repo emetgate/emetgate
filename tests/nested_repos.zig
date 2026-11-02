@@ -187,6 +187,18 @@ test "nested repos: the everyday text search names files from the session folder
     try testing.expect(!contains(empty.text, "nothing was searched"));
 }
 
+test "nested repos: tools/list offers dir only when a repository lies below" {
+    try skipOffWindows();
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    try f.serve(.{});
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try testing.expect(try f.repositories.handle("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/list\"}", &out.writer));
+    try expectHas(out.written(), "another git repository below");
+}
+
 test "nested repos: a repository under a dot folder or a linked worktree stays out of the search" {
     try skipOffWindows();
     var f: Fixture = undefined;
