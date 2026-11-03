@@ -1,4 +1,5 @@
 const std = @import("std");
+const display_path = @import("../platform/display_path.zig");
 const repo = @import("../platform/repo.zig");
 const search_index = @import("../platform/search_index.zig");
 const index_file = @import("../platform/search_index_file.zig");
@@ -1006,8 +1007,10 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     };
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
+    var empty_buf: [512]u8 = undefined;
+    const empty_note: []const u8 = if (result.groups.items.len == 0) emptyNote(&empty_buf, result, scope, place.rel, query.*, request.kinds, alternatives != null) else "";
     try js.objectField("answer");
-    try js.write(line.written());
+    try js.write(if (std.mem.indexOf(u8, empty_note, nothing_searched) != null) empty_note else line.written());
     try js.objectField("status");
     try js.write(@tagName(verdict.status()));
     if (alternatives) |alt| {
@@ -1116,8 +1119,12 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
         if (m.reason != .match_limit) missing_count += 1;
     }
     if (!paged and missing_count == 0 and verdict.status() == .complete) {
-        try w.writeAll("\u{2713}");
-        if (note.len != 0) try w.print(" {s}", .{note});
+        if (std.mem.indexOf(u8, note, nothing_searched) != null) {
+            try w.writeAll(note);
+        } else {
+            try w.writeAll("\u{2713}");
+            if (note.len != 0) try w.print(" {s}", .{note});
+        }
     } else {
         try w.writeAll("partial:");
         var first = true;
@@ -1606,11 +1613,13 @@ fn mergeSorted(items: []Source, split: usize) void {
     }
 }
 
+pub const nothing_searched = "nothing was searched";
+
 fn emptyNote(buf: []u8, result: Result, scope: Scope, rel: []const u8, query: Query, kinds: ?[]const Value, tried_alternatives: bool) []const u8 {
     const where: []const u8 = if (rel.len == 0) "." else rel;
     if (result.listed == 0) {
-        if (scope.file) return std.fmt.bufPrint(buf, "{s} is not a file git tracks, so nothing was searched", .{where}) catch where;
-        return std.fmt.bufPrint(buf, "no file git tracks is under {s}, so nothing was searched", .{where}) catch where;
+        if (scope.file) return std.fmt.bufPrint(buf, "{s} is not a file git tracks, so {s}", .{ where, nothing_searched }) catch where;
+        return std.fmt.bufPrint(buf, "no file git tracks is under {s}, so {s}", .{ where, nothing_searched }) catch where;
     }
     if (result.matched_lines != 0) {
         var kinds_text: [64]u8 = undefined;
@@ -1655,7 +1664,8 @@ fn writeShown(js: *std.json.Stringify, groups: []const Group, shown: []const Sho
 fn writeGroupSlice(js: *std.json.Stringify, g: Group, lo: usize, hi: usize) !void {
     try js.beginObject();
     try js.objectField("file");
-    try js.write(g.file);
+    var shown_file: [std.fs.max_path_bytes]u8 = undefined;
+    try js.write(std.fmt.bufPrint(&shown_file, "{s}{s}", .{ display_path.prefix, g.file }) catch g.file);
     if (g.symbol) |s| {
         try js.objectField("symbol");
         try js.write(s);

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2751**
-- Mutations declared in `tests/mutations.json`: **1932**
-  - killed: **1882**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2796**
+- Mutations declared in `tests/mutations.json`: **1942**
+  - killed: **1892**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -134,16 +134,16 @@ python tools/verification_page.py --check
 | `NS18-propose-absent-not-routed-to-insert` | `src/engine/cas.zig` | `.absent => insert(base, .{ .ref = ref, .new_body = new_body }),` -> `.absent => error.SymbolNotFound,` | propose replaces a body for a hex hash and inserts a symbol for absent; absent: a new top... | killed |
 | `NF11-create-body-rules-skipped` | `src/engine/cas.zig` | `const declared = try expectSoleDeclaration(profile, next.tree.r...` -> `const declared = try soleTopLevelSymbol(after.*, slot, insertio...` | create applies the same body rules as insert | killed |
 | `NF12-create-trailing-newline-dropped` | `src/engine/cas.zig` | `const source = try std.mem.concat(runtime.gpa, u8, &.{ new_body...` -> `const source = try std.mem.concat(runtime.gpa, u8, &.{new_body}...` | create builds a file of exactly one top-level symbol and one trailing newline; new file: ... | killed |
-| `NL1-literal-option-name-ignored` | `src/engine/checks.zig` | `if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) con...` -> `if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and ...` | conformance: no_literal flags only literal values of the named option, spanning...; no_li... | killed |
-| `NL2-literal-value-kind-ignored` | `src/engine/checks.zig` | `if (!isLiteral(shape, tree, pair.value)) continue;` -> `if (!isLiteral(shape, tree, pair.value) and false) continue;` | scope: a no_literal rule scoped to one symbol reports only its literal options; conforman... | killed |
-| `NL3-literal-template-substitution-ignored` | `src/engine/checks.zig` | `if (isKind(part, shape.substitution)) return false;` -> `if (isKind(part, shape.substitution) and false) return false;` | no_literal leaves budgeted, named, computed and shorthand values alone; python: no_litera... | killed |
+| `NL1-literal-option-name-ignored` | `src/engine/checks.zig` | `if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) con...` -> `if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and ...` | c#: no_literal leaves computed, named, interpolated, positional and plain assig...; confo... | killed |
+| `NL2-literal-value-kind-ignored` | `src/engine/checks.zig` | `if (!isLiteral(shape, tree, pair.value)) continue;` -> `if (!isLiteral(shape, tree, pair.value) and false) continue;` | c#: no_literal leaves computed, named, interpolated, positional and plain assig...; scope... | killed |
+| `NL3-literal-template-substitution-ignored` | `src/engine/checks.zig` | `if (isKind(part, shape.substitution)) return false;` -> `if (isKind(part, shape.substitution) and false) return false;` | c#: no_literal leaves computed, named, interpolated, positional and plain assig...; no_li... | killed |
 | `NL4-literal-pair-outside-span-reported` | `src/engine/checks.zig` | `if (node.startByte() < span.start or node.endByte() > span.end)...` -> `if ((node.startByte() < span.start or node.endByte() > span.end...` | no_literal reports only pairs inside the span; scope: a no_literal rule scoped to one sym... | killed |
-| `NL5-literal-check-takes-no-argument` | `src/engine/checks.zig` | `.{ .name = "no_literal", .collect = noLiteral, .takes_argument ...` -> `.{ .name = "no_literal", .collect = noLiteral },` | scope: a no_literal rule scoped to one symbol reports only its literal options; no_litera... | killed |
-| `NL9-literal-quoted-key-read-raw` | `src/engine/checks.zig` | `if (!isKind(key, shape.quoted_key)) return tree.text(key);` -> `if (!isKind(key, shape.quoted_key) or true) return tree.text(ke...` | no_literal matches a quoted key but not a computed one; conformance: no_literal flags onl... | killed |
+| `NL5-literal-check-takes-no-argument` | `src/engine/checks.zig` | `.{ .name = "no_literal", .collect = noLiteral, .takes_argument ...` -> `.{ .name = "no_literal", .collect = noLiteral },` | c#: no_literal flags named arguments, attributes, initializers, anonymous objec...; c#: n... | killed |
+| `NL9-literal-quoted-key-read-raw` | `src/engine/checks.zig` | `if (!isKind(key, shape.quoted_key)) return tree.text(key);` -> `if (!isKind(key, shape.quoted_key) or true) return tree.text(ke...` | c#: no_literal flags named arguments, attributes, initializers, anonymous objec...; no_li... | killed |
 | `NL10-literal-quoted-key-escape-ignored` | `src/engine/checks.zig` | `if (key.namedChildCount() != 1) return "";     return tree.text...` -> `if (key.namedChildCount() == 0) return "";     return tree.text...` | no_literal matches a quoted key but not a computed one | killed |
-| `NL11-literal-negation-not-literal` | `src/engine/checks.zig` | `if (isNegatedLiteral(shape, tree, value)) return true;` -> `if (isNegatedLiteral(shape, tree, value) and false) return true;` | conformance: no_literal flags only literal values of the named option, spanning...; no_li... | killed |
+| `NL11-literal-negation-not-literal` | `src/engine/checks.zig` | `if (isNegatedLiteral(shape, tree, value)) return true;` -> `if (isNegatedLiteral(shape, tree, value) and false) return true;` | c#: no_literal flags named arguments, attributes, initializers, anonymous objec...; confo... | killed |
 | `NL12-literal-negation-operator-ignored` | `src/engine/checks.zig` | `return std.mem.eql(u8, tree.text(operator), shape.negation_oper...` -> `return std.mem.eql(u8, tree.text(operator), tree.text(operator)...` | no_literal counts a negated number as a literal but not other unary values | killed |
-| `NL14-literal-pair-kind-ignored` | `src/engine/checks.zig` | `if (isKind(node, shape.pair)) {         if (shape.pair_parent` -> `if (true) {         if (shape.pair_parent` | python: no_literal flags a literal keyword argument and a literal dict entry of... | killed |
+| `NL14-literal-pair-kind-ignored` | `src/engine/checks.zig` | `if (isKind(node, shape.pair)) {         if (shape.pair_parent` -> `if (true) {         if (shape.pair_parent` | c#: no_literal flags named arguments, attributes, initializers, anonymous objec...; pytho... | killed |
 | `CMD1-cmd-prefix-dropped` | `src/engine/checks.zig` | `if (!std.mem.startsWith(u8, spec, command_prefix)) return null;` -> `if (!std.mem.startsWith(u8, spec, command_prefix)) return spec;` | only a cmd: prefix names a command predicate, and every other spec stays a regi...; an un... | killed |
 | `CMD2-empty-command-accepted-on-add` | `src/engine/checks.zig` | `if (std.mem.trim(u8, command, command_whitespace).len == 0) ret...` -> `` | rule: an empty or blank cmd: check is refused before the ledger is touched | killed |
 | `Q8-regex-backreference-read-as-literal` | `src/engine/regex.zig` | `'1'...'9' => self.unsupported("backreference", at, 2),` -> `'1'...'9' => self.single(ch),` | regex refuses every construct outside the subset by name; rule: a q: check without @viola... | killed |
@@ -486,7 +486,7 @@ python tools/verification_page.py --check
 | `G7-rules-empty-report-returned` | `src/platform/rules.zig` | `if (list.items.len == 0) return .ok;` -> `if (list.items.len == 99999) return .ok;` | a clean span and an empty rule list both report nothing | killed |
 | `G8-rules-column-off-by-one` | `src/platform/rules.zig` | `.col = offset - self.starts[lo] + 1 };` -> `.col = offset - self.starts[lo] };` | violation positions hold at the edges: first and last line, empty lines, CRLF, ...; the l... | killed |
 | `G9-rules-rule-id-not-recorded` | `src/platform/rules.zig` | `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` -> `fn ownViolation(gpa: Allocator, rule: Rule, file: []const u8, a...` | rules: an enforced no_comment rule rejects a commented body before the tests run; every v... | killed |
-| `SC4-scan-ledger-read-through-recall` | `src/platform/rules.zig` | `return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));` -> `return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));` | scan: a torn ledger stops the ledger scan by name, --check still runs, and noth...; scan:... | killed |
+| `SC4-scan-ledger-read-through-recall` | `src/platform/rules.zig` | `try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs))` -> `try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs))` | scan: a torn ledger stops the ledger scan by name, --check still runs, and noth...; scan:... | killed |
 | `SC10-scan-span-misses-first-byte` | `src/platform/rules.zig` | `const whole: symbol.Span = .{ .start = 0,` -> `const whole: symbol.Span = .{ .start = 1,` | scan: one violation names its file, line, column, rule and text, and exits 10; scan: a to... | killed |
 | `SP1-where-glob-guard-removed` | `src/platform/where.zig` | `if (std.mem.indexOfAny(u8, text, "*?[]{}") != null) return erro...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
 | `SP2-where-absolute-guard-removed` | `src/platform/where.zig` | `if (text[0] == '/' or text[0] == '\\' or std.mem.indexOfScalar(...` -> `` | every rejected where is refused under its own name; where: remember and supersede refuse ... | killed |
@@ -555,7 +555,7 @@ python tools/verification_page.py --check
 | `Q18-empty-match-captures-sliced` | `src/engine/query.zig` | `if (match.capture_count == 0) &[_]c.TSQueryCapture{} else match...` -> `match.captures[0..match.capture_count];` | q: a match that captured no node is skipped instead of crashing | killed |
 | `Q19-predicate-comparisons-not-charged` | `src/engine/query.zig` | `if (budget.* < cost) return error.BudgetExceeded;     budget.* ...` -> `_ = .{ budget, cost };` | q: comparing captures with each other counts against the budget; q: string comparisons co... | killed |
 | `Q20-predicate-compared-bytes-not-charged` | `src/engine/query.zig` | `try charge(budget, 1 + @min(a.len, b.len));` -> `try charge(budget, 1);` | q: string comparisons count their bytes against the budget | killed |
-| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and try anyQueryOn(enforced.rules, chang...` -> `if (allow_repo_memory and try anyQueryOn(enforced.rules, change...` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
+| `Q21-committed-query-rule-runs-without-flag` | `src/platform/rules.zig` | `if (!allow_repo_memory and try anyQueryOn(list, changes)) {` -> `if (allow_repo_memory and try anyQueryOn(list, changes)) {` | redteam ledger: a q: rule in a committed ledger never runs without --allow-repo... | killed |
 | `Q23-repeated-capture-accepted` | `src/engine/query.zig` | `if (repeatsCapture(own) or capturedGroupRepeats(own)) {` -> `if (false and repeatsCapture(own) or capturedGroupRepeats(own))...` | q: a capture repeated with + or * is refused, one with ? or an uncaptured repea...; redte... | killed |
 | `Q24-capture-count-unlimited` | `src/engine/query.zig` | `if (captureCount(own) > max_captures_per_pattern) {` -> `if (captureCount(own) > max_captures_per_pattern * 1000) {` | q: more than eight captures in one pattern are refused, predicate arguments do ...; redte... | killed |
 | `Q25-predicate-arguments-counted-as-captures` | `src/engine/query.zig` | `i = if (next < text.len and text[next] == '#') predicateEnd(tex...` -> `i += 1;` | q: more than eight captures in one pattern are refused, predicate arguments do ... | killed |
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1266 mutation(s).
+1276 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1622,6 +1622,10 @@ python tools/verification_page.py --check
 | `DR3-doctor-signed-out-passes` | `src/platform/doctor.zig` | `if (signed_in) return .{ .name = "login", .status = .ok, .detai...` -> `if (signed_in or true) return .{ .name = "login", .status = .ok...` | doctor: a signed-out claude blocks lockdown with claude auth login, an unreadab... | killed |
 | `DR4-doctor-repo-config-flag-ignored` | `src/platform/doctor.zig` | `if (std.mem.eql(u8, arg.string, "--allow-repo-config")) found.a...` -> `` | doctor: the test command lockdown will use comes from the emetgate server's --t... | killed |
 | `DR5-doctor-no-test-command-only-warns` | `src/platform/doctor.zig` | `error.NoTestCommand => .{ .name = "tests", .status = .fail,` -> `error.NoTestCommand => .{ .name = "tests", .status = .warn,` | doctor: no test command blocks lockdown, and the fix names --test; doctor: an empty --tes... | killed |
+| `CSM1-short-type-ref-refused` | `src/platform/cs_symbol_move.zig` | `const ref = try (try source.symbols()).canonical(given);` -> `const ref = given;` | csharp move: a short type name the read tools accept moves too | killed |
+| `CSM2-user-using-not-counted` | `src/platform/cs_symbol_move.zig` | `imports_added += usingsAdded(edits.items);` -> `imports_added += 0;` | csharp move: a short type name the read tools accept moves too | killed |
+| `CSM3-type-brings-blank-line` | `src/platform/cs_symbol_move.zig` | `const moved_text = source.source[cut.start..mb.lineEndAfter(sou...` -> `const moved_text = source.source[cut.start..cut.end];     const...` | csharp move: a type or member taken from the middle of a block brings no blank ... | killed |
+| `CSM4-member-brings-blank-line` | `src/platform/cs_symbol_move.zig` | `const moved_text = source.source[cut.start..mb.lineEndAfter(sou...` -> `const moved_text = source.source[cut.start..cut.end];     for (...` | csharp move: a type or member taken from the middle of a block brings no blank ... | killed |
 | `DR7-doctor-does-not-detect` | `src/platform/doctor.zig` | `const given = if (server.names_test) server.given else test_com...` -> `const given = server.given;` | doctor: with no --test it reports the command lockdown will detect, with or wit... | killed |
 | `DR8-doctor-empty-test-detects` | `src/platform/doctor.zig` | `found.names_test = true;` -> `found.names_test = false;` | doctor: an empty --test is not detected, because lockdown adds no detection bes...; docto... | killed |
 | `DR9-doctor-no-tests-passes-silently` | `src/platform/doctor.zig` | `if (test_command.takeUnverified()) return noTestsFound();` -> `_ = test_command.takeUnverified();` | doctor: a repository with no tests to find warns that writes land unverified an... | killed |
@@ -2035,6 +2039,12 @@ python tools/verification_page.py --check
 | `T3-F6-at-not-saved` | `src/platform/fact_file.zig` | `t.at = try d.int();` -> `_ = try d.int();` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F7-returns-not-saved` | `src/platform/fact_file.zig` | `def.returns = try d.index();` -> `_ = try d.index();` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F8-enclosing-not-saved` | `src/platform/fact_file.zig` | `t.enclosing = try d.index();` -> `_ = try d.index();` | fact store: a saved csharp store opens again with every new link field | killed |
+| `RA1-run-audit-skips-commits` | `src/platform/run_audit.zig` | `try self.judgeCommits(item);` -> `` | run audit: a commit past the hook is judged on message and files | killed |
+| `RA2-run-audit-skips-working-files` | `src/platform/run_audit.zig` | `try self.judgeWorking(item);` -> `` | run audit: a file left uncommitted is judged, one already changed and untouched... | killed |
+| `RA3-run-audit-judges-untouched-dirty-files` | `src/platform/run_audit.zig` | `if (same) continue;` -> `_ = same;` | run audit: a file left uncommitted is judged, one already changed and untouched... | killed |
+| `RA4-run-reply-hides-broken-rules` | `src/protocol/open_run.zig` | `const broken = audit.findings.items.len != 0;` -> `const broken = false;` | run audit: emetgate_run answers rules_broken and is an error | killed |
+| `CG1-commit-guard-judges-the-whole-file` | `src/platform/commit_guard.zig` | `return holes;` -> `return null;` | commit guard: a violation already in HEAD does not block an unrelated line | killed |
+| `CG2-commit-guard-skips-the-message` | `src/platform/commit_guard.zig` | `if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced...` -> `` | commit guard: a message rule refuses the commit and names the rule | killed |
 
 ## What this system does not prove
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const display_path = @import("display_path.zig");
 const bounded_run = @import("bounded_run.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
@@ -1727,8 +1728,8 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
     try w.print("\nmost hits:\n", .{});
     const n_text = @min(n_heavy, top_files);
     const n_bin = @min(n_heavy_bin, top_files - n_text);
-    for (sc.heavy[0..n_text]) |f| try w.print("  {d:>7}  {s}\n", .{ f.fh.count, f.path() });
-    for (sc.heavy_bin[0..n_bin]) |f| try w.print("  {d:>7}  {s} (binary)\n", .{ f.fh.count, f.path() });
+    for (sc.heavy[0..n_text]) |f| try w.print("  {d:>7}  {s}{s}\n", .{ f.fh.count, display_path.prefix, f.path() });
+    for (sc.heavy_bin[0..n_bin]) |f| try w.print("  {d:>7}  {s}{s} (binary)\n", .{ f.fh.count, display_path.prefix, f.path() });
 
     try w.print("\nfirst hits:\n", .{});
     var shown: usize = 0;
@@ -1743,7 +1744,7 @@ pub fn search(view: View, sc: *Scratch, pattern: []const u8) !Answer {
             const pl = f.ix.place(f.fh.file, p);
             var cut: usize = @min(pl.text.len, shown_line);
             while (cut > 0 and cut < pl.text.len and pl.text[cut] & 0xC0 == 0x80) cut -= 1;
-            try w.print("{s}:{d}:{d}: {s}\n", .{ fpath, pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
+            try w.print("{s}{s}:{d}:{d}: {s}\n", .{ display_path.prefix, fpath, pl.line, pl.col, std.mem.trim(u8, pl.text[0..cut], " \t") });
         }
         shown += take;
     }

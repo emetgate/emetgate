@@ -1169,6 +1169,7 @@
       "file": "src/platform/rules.zig",
       "from": "if (decision.status != .active or !decision.enforce) continue;",
       "to": "if (decision.status != .active) continue;",
+      "all": true,
       "kills": [
         "rules: unenforced, checkless and forgotten rules never block an edit"
       ]
@@ -2226,8 +2227,8 @@
     {
       "id": "SC4-scan-ledger-read-through-recall",
       "file": "src/platform/rules.zig",
-      "from": "return enforcedFrom(gpa, try memory.peek(gpa, io, root_abs));",
-      "to": "return enforcedFrom(gpa, try memory.recall(gpa, io, root_abs));",
+      "from": "try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs))",
+      "to": "try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs))",
       "kills": [
         "scan: a torn ledger stops the ledger scan by name, --check still runs, and nothing is written",
         "scan: with no ledger there are zero rules and no workspace is created"
@@ -2694,6 +2695,7 @@
       "from": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name)) continue;",
       "to": "if (!std.mem.eql(u8, keyName(shape, tree, pair.key), name) and false) continue;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal matches a quoted key but not a computed one",
         "no_literal leaves budgeted, named, computed and shorthand values alone",
@@ -2711,6 +2713,7 @@
       "from": "if (!isLiteral(shape, tree, pair.value)) continue;",
       "to": "if (!isLiteral(shape, tree, pair.value) and false) continue;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
@@ -2728,6 +2731,7 @@
       "from": "if (isKind(part, shape.substitution)) return false;",
       "to": "if (isKind(part, shape.substitution) and false) return false;",
       "kills": [
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "no_literal leaves budgeted, named, computed and shorthand values alone",
         "python: no_literal leaves computed, named, interpolated and differently named values alone"
       ],
@@ -2756,6 +2760,8 @@
       "from": ".{ .name = \"no_literal\", .collect = noLiteral, .takes_argument = true },",
       "to": ".{ .name = \"no_literal\", .collect = noLiteral },",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
+        "c#: no_literal leaves computed, named, interpolated, positional and plain assigned values alone",
         "scope: a no_literal rule scoped to one symbol reports only its literal options",
         "no_literal counts a negated number as a literal but not other unary values",
         "no_literal refuses a missing or empty argument",
@@ -2820,6 +2826,7 @@
       "from": "if (!isKind(key, shape.quoted_key)) return tree.text(key);",
       "to": "if (!isKind(key, shape.quoted_key) or true) return tree.text(key);",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "no_literal matches a quoted key but not a computed one",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
@@ -2848,6 +2855,7 @@
       "from": "if (isNegatedLiteral(shape, tree, value)) return true;",
       "to": "if (isNegatedLiteral(shape, tree, value) and false) return true;",
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "conformance: no_literal flags only literal values of the named option, spanning the whole pair",
         "no_literal counts a negated number as a literal but not other unary values",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
@@ -2892,6 +2900,7 @@
         "no_literal"
       ],
       "kills": [
+        "c#: no_literal flags named arguments, attributes, initializers, anonymous objects and with",
         "python: no_literal flags a literal keyword argument and a literal dict entry of the named option"
       ]
     },
@@ -3976,8 +3985,8 @@
     {
       "id": "Q21-committed-query-rule-runs-without-flag",
       "file": "src/platform/rules.zig",
-      "from": "    if (!allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
-      "to": "    if (allow_repo_memory and try anyQueryOn(enforced.rules, changes)) {",
+      "from": "    if (!allow_repo_memory and try anyQueryOn(list, changes)) {",
+      "to": "    if (allow_repo_memory and try anyQueryOn(list, changes)) {",
       "kills": [
         "redteam ledger: a q: rule in a committed ledger never runs without --allow-repo-memory"
       ]
@@ -14135,6 +14144,42 @@
       ]
     },
     {
+      "id": "CSM1-short-type-ref-refused",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const ref = try (try source.symbols()).canonical(given);",
+      "to": "    const ref = given;",
+      "kills": [
+        "csharp move: a short type name the read tools accept moves too"
+      ]
+    },
+    {
+      "id": "CSM2-user-using-not-counted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            imports_added += usingsAdded(edits.items);",
+      "to": "            imports_added += 0;",
+      "kills": [
+        "csharp move: a short type name the read tools accept moves too"
+      ]
+    },
+    {
+      "id": "CSM3-type-brings-blank-line",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];\n    const r: cs.Retarget",
+      "to": "    const moved_text = source.source[cut.start..cut.end];\n    const r: cs.Retarget",
+      "kills": [
+        "csharp move: a type or member taken from the middle of a block brings no blank line along"
+      ]
+    },
+    {
+      "id": "CSM4-member-brings-blank-line",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "    const moved_text = source.source[cut.start..mb.lineEndAfter(source.source, declaration.endByte())];\n    for (try cs.mentions",
+      "to": "    const moved_text = source.source[cut.start..cut.end];\n    for (try cs.mentions",
+      "kills": [
+        "csharp move: a type or member taken from the middle of a block brings no blank line along"
+      ]
+    },
+    {
       "id": "DR7-doctor-does-not-detect",
       "file": "src/platform/doctor.zig",
       "from": "    const given = if (server.names_test) server.given else test_command.detect;",
@@ -16589,8 +16634,7 @@
       "to": "        _ = self;\n",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
-        "find after write: a watched index returns fresh hits right after each write, 30 times in a row"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },
     {
@@ -18523,6 +18567,60 @@
       "to": "_ = try d.index();",
       "kills": [
         "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "RA1-run-audit-skips-commits",
+      "file": "src/platform/run_audit.zig",
+      "from": "        try self.judgeCommits(item);\n",
+      "to": "",
+      "kills": [
+        "run audit: a commit past the hook is judged on message and files"
+      ]
+    },
+    {
+      "id": "RA2-run-audit-skips-working-files",
+      "file": "src/platform/run_audit.zig",
+      "from": "        try self.judgeWorking(item);\n",
+      "to": "",
+      "kills": [
+        "run audit: a file left uncommitted is judged, one already changed and untouched is not"
+      ]
+    },
+    {
+      "id": "RA3-run-audit-judges-untouched-dirty-files",
+      "file": "src/platform/run_audit.zig",
+      "from": "                if (same) continue;\n",
+      "to": "                _ = same;\n",
+      "kills": [
+        "run audit: a file left uncommitted is judged, one already changed and untouched is not"
+      ]
+    },
+    {
+      "id": "RA4-run-reply-hides-broken-rules",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const broken = audit.findings.items.len != 0;\n",
+      "to": "    const broken = false;\n",
+      "kills": [
+        "run audit: emetgate_run answers rules_broken and is an error"
+      ]
+    },
+    {
+      "id": "CG1-commit-guard-judges-the-whole-file",
+      "file": "src/platform/commit_guard.zig",
+      "from": "    return holes;\n",
+      "to": "    return null;\n",
+      "kills": [
+        "commit guard: a violation already in HEAD does not block an unrelated line"
+      ]
+    },
+    {
+      "id": "CG2-commit-guard-skips-the-message",
+      "file": "src/platform/commit_guard.zig",
+      "from": "    if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced.rules, message))) return 1;\n",
+      "to": "",
+      "kills": [
+        "commit guard: a message rule refuses the commit and names the rule"
       ]
     }
   ]

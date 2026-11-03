@@ -349,13 +349,21 @@ pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []co
     return recorded(gpa, io, root_abs, command, limits, version, .{ .toolchain = local });
 }
 
-pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8) !RepoRun {
-    return recorded(gpa, io, root_abs, command, limits, version, .{ .open = .{ .shell = shell, .command = command } });
+pub const OpenPlace = struct {
+    cwd: ?[]const u8 = null,
+    also_hold: []const []const u8 = &.{},
+    env: []const sandbox.EnvVar = &.{},
+};
+
+pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8, place: OpenPlace) !RepoRun {
+    return recorded(gpa, io, root_abs, command, limits, version, .{ .open = .{ .shell = shell, .command = command, .place = place } });
 }
+
+const NestedHold = struct { root: []const u8, hold: *frozen_hold.Hold };
 
 const Spawn = union(enum) {
     toolchain: []const u8,
-    open: struct { shell: open_shell.Shell, command: []const u8 },
+    open: struct { shell: open_shell.Shell, command: []const u8, place: OpenPlace = .{} },
 };
 
 fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8, spawn: Spawn) !RepoRun {
@@ -369,13 +377,33 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.FrozenHoldFailed,
     };
+    const others: []const []const u8 = switch (spawn) {
+        .toolchain => &.{},
+        .open => |open| open.place.also_hold,
+    };
+    var nested: std.ArrayList(NestedHold) = .empty;
+    for (others) |other| {
+        const held_other = frozen_hold.begin(gpa, io, other) catch |err| {
+            if (hold) |held| held.finish().deinit(gpa);
+            for (nested.items) |item| item.hold.finish().deinit(gpa);
+            return if (err == error.OutOfMemory) error.OutOfMemory else error.FrozenHoldFailed;
+        } orelse continue;
+        try nested.append(arena, .{ .root = other, .hold = held_other });
+    }
     const started_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
     const report = spawned(gpa, io, root_abs, limits, spawn) catch |err| {
         if (hold) |held| held.finish().deinit(gpa);
+        for (nested.items) |item| item.hold.finish().deinit(gpa);
         return err;
     };
     var ran: RepoRun = .{ .report = report };
     if (hold) |held| ran.frozen = held.finish();
+    for (nested.items) |item| {
+        const label = std.mem.trimStart(u8, item.root[@min(root_abs.len, item.root.len)..], "\\/");
+        const held_report = item.hold.finish();
+        defer held_report.deinit(gpa);
+        try frozen_hold.absorb(gpa, &ran.frozen, label, held_report);
+    }
     const clean = switch (ran.report.outcome) {
         .exited => |code| code == 0,
         else => false,
@@ -410,7 +438,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
 fn spawned(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Limits, spawn: Spawn) !sandbox.Report {
     return switch (spawn) {
         .toolchain => |local| runner.runToolchain(gpa, io, root_abs, local, limits),
-        .open => |open| open_shell.run(gpa, io, root_abs, open.shell, open.command, limits),
+        .open => |open| open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, open.place.env),
     };
 }
 

@@ -306,6 +306,52 @@ test "csharp move: a type moves to a new file and keeps its namespace" {
     try expectFile(&case, "src/Use.cs", "namespace Shop;\n\npublic class Use\n{\n    public Cart Make() => new Cart();\n}\n");
 }
 
+test "csharp move: a short type name the read tools accept moves too" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/Models/All.cs", .text = "namespace Shop.Models\n{\n    public class Cart\n    {\n    }\n\n    public class Line\n    {\n    }\n}\n" },
+        .{ .rel = "src/Other/Holder.cs", .text = "namespace Shop.Other\n{\n    public class Holder\n    {\n    }\n}\n" },
+        .{ .rel = "src/Use.cs", .text = "using Shop.Models;\n\nnamespace Shop\n{\n    public class Use\n    {\n        public Line Make() => new Line();\n    }\n}\n" },
+    }, false);
+    defer case.deinit();
+    const file = try case.repo.abs(testing.allocator, "src/Models/All.cs");
+    defer testing.allocator.free(file);
+    const target = try case.repo.abs(testing.allocator, "src/Other/Holder.cs");
+    defer testing.allocator.free(target);
+    const found = try named(&case, file, "Line");
+    defer testing.allocator.free(found.ref_text);
+    const outcome = try move_batch.tryMove(testing.allocator, testing.io, case.runtime, .{
+        .request = .{ .file_abs = file, .ref_text = "Line", .expected_hash = found.hash, .target_abs = target, .interface_change = true },
+        .test_command = "cmd /c exit 0",
+        .language_service = &case.session,
+    });
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expectEqual(@as(usize, 1), outcome.plan.imports_added);
+    try expectFile(&case, "src/Other/Holder.cs", "namespace Shop.Other\n{\n    public class Holder\n    {\n    }\n\n    public class Line\n    {\n    }\n}\n");
+    try expectFile(&case, "src/Use.cs", "using Shop.Models;\nusing Shop.Other;\n\nnamespace Shop\n{\n    public class Use\n    {\n        public Line Make() => new Line();\n    }\n}\n");
+}
+
+test "csharp move: a type or member taken from the middle of a block brings no blank line along" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/All.cs", .text = "namespace Shop\n{\n    public class Z\n    {\n    }\n\n    public class A\n    {\n    }\n\n    public class B\n    {\n    }\n}\n" },
+        .{ .rel = "src/Calc.cs", .text = "namespace Shop\n{\n    public static class Calc\n    {\n        public const int Base = 1;\n\n        public static int One() { return 1; }\n\n        public static int Two() { return One() + 1; }\n    }\n\n    public static class Target\n    {\n        public static int Zero() { return 0; }\n    }\n}\n" },
+        .{ .rel = "src/To.cs", .text = "namespace Shop\n{\n    public class C\n    {\n    }\n}\n" },
+    }, false);
+    defer case.deinit();
+    const moved_type = try move(&case, "src/All.cs", "A", "src/To.cs", .{});
+    defer moved_type.deinit(testing.allocator);
+    try testing.expect(moved_type.result == .committed);
+    try expectFile(&case, "src/To.cs", "namespace Shop\n{\n    public class C\n    {\n    }\n\n    public class A\n    {\n    }\n}\n");
+    const moved_member = try move(&case, "src/Calc.cs", "Calc.One", "src/Calc.cs", .{ .target_type = "Target" });
+    defer moved_member.deinit(testing.allocator);
+    try testing.expect(moved_member.result == .committed);
+    try expectFile(&case, "src/Calc.cs", "namespace Shop\n{\n    public static class Calc\n    {\n        public const int Base = 1;\n\n        public static int Two() { return Target.One() + 1; }\n    }\n\n    public static class Target\n    {\n        public static int Zero() { return 0; }\n\n        public static int One() { return 1; }\n    }\n}\n");
+}
+
 fn expectTidyCut(moved: []const u8, left: []const u8) !void {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

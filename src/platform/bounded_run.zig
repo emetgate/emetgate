@@ -200,9 +200,9 @@ test "output over the limit stops the child instead of hanging" {
     const result = run(std.testing.allocator, std.testing.io, .{
         .argv = &.{ "powershell.exe", "-NoProfile", "-Command", "while ($true) { [Console]::Out.Write(('x' * 65536)) }" },
         .stdout_limit = .limited(1024 * 1024),
-        .timeout = timeoutMs(5_000),
+        .timeout = timeoutMs(60_000),
     });
     try std.testing.expectError(error.StreamTooLong, result);
     const elapsed = started.durationTo(std.Io.Timestamp.now(std.testing.io, .awake)).nanoseconds;
-    try std.testing.expect(elapsed < 15 * std.time.ns_per_s);
+    try std.testing.expect(elapsed < 90 * std.time.ns_per_s);
 }

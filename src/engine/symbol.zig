@@ -175,6 +175,15 @@ pub const Table = struct {
         };
     }
 
+    pub fn canonical(self: Table, given: Ref) ResolveError!Ref {
+        if (!self.short_refs) return given;
+        const found = self.item(given) catch |err| switch (err) {
+            error.SymbolNotFound => return given,
+            error.AmbiguousSymbol => return err,
+        };
+        return found.ref;
+    }
+
     pub fn declarationMatching(self: Table, ref: Ref, hash: Hash) ?*const Declaration {
         for (self.declarations) |*declaration| {
             if (declaration.ref.eql(ref) and std.mem.eql(u8, &declaration.hash, &hash)) return declaration;
