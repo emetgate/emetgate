@@ -14,134 +14,26 @@
 
 # Emetgate
 
-LLM'ler hızlı ve yeteneklidir — saatlerce sürecek iş dakikalar içinde. Ama kurallarınıza uyup uymamaları kendilerine kalmış: bir model "bunu asla kullanma" ifadesini okuyup yine de kullanabilir.
+`CLAUDE.md` dosyana "yorum satırı yok" ve "Co-Authored-By yok" yazıyorsun. Model bir süre uyuyor, sonra bırakıyor. Daha uzun bir dosya yalnızca bir kez daha rica eder.
 
-Alışılmış cevap daha iyi bir istem, daha uzun bir `AGENTS.md`'dir — modelden uymasının *istendiği* kurallar. Emetgate başka bir yol tutar: model ile kaynak ağacınız arasında bir katman. Atlayabileceği bir yönerge değil — geçmek zorunda olduğu bir kapı. Model bir değişiklik önerir; çekirdek onu doğrular; geçmediği sürece hiçbir şey diske ulaşmaz.
-
-Bir MCP sunucusu olarak çalışır; Windows üzerinde, TypeScript, JavaScript, Python, C# ve Zig için. Aşağıda her yetenek parçalarına ayrılıyor — her parçanın ne olduğu ve burada ne yaptığı. Altında kodu ve gerçek çıktısı olmayan hiçbir iddia yok.
-
-## Kapı
-
-Bir değişiklik bir sembolü ve dayandığı kodun hash'ini belirtir. Emetgate yeni gövdeyi yerine koyar, dosyayı yeniden ayrıştırır, kurallarınızı çalıştırır, sonra tip denetiminizi ve testlerinizi deponun bir korumalı alan içindeki kopyasında çalıştırır. Her adım geçerse değişiklik yazılır ve bir makbuza bağlanır; herhangi bir adım başarısız olursa hiçbir şey yazılmaz.
+Emetgate, Claude Code ile kaynak kodun arasına girer. Model bir değişiklik önerir, kuralların ve testlerin bunu deponun bir kopyasında yargılar, dosya ancak geçerse değişir. Koyduğun kural, oturum ne kadar uzarsa uzasın ve kuralı çiğnemeyi modelden sen istesen bile, her yazma aracı çağrısında ve her `emetgate_commit` çağrısında denetlenir. Geçen her değişiklik, sonradan kontrol edebileceğin bir makbuz bırakır.
 
 ```
-proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
-                  └── any step fails ─▶ nothing is written (מת)
+"status":"rejected","reason":"rule_violation"
+"rule_text":"no new comments","file":"src\\cart.js","line":18
+"text":"// apply the coupon before tax"
+emetgate ✗ rejected · rule_violation · disk untouched · session 0 edits
 ```
 
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| gölge çalışma alanı | deponun yalıtılmış bir kopyası | önerilen yazma önce burada uygulanır, böylece testler ve tip denetimi gerçek ağaca dokunmadan koşar; başarısızlıkta disk hiç değişmemiştir |
-| tree-sitter | artımlı bir ayrıştırıcı | değişikliğin gerçekten ayrıştığını ve ağacı bozmadığını göstermek için dosyayı yeniden ayrıştırır |
-| in-toto makbuzu | bir tedarik zinciri köken (provenance) formatı | geçen her yazmayı, neyin neyden, hangi testlerle üretildiğine dair imzalı bir kayda bağlar — sonradan denetlenebilir |
+Emetgate bir tanıktır, garanti değildir. Neyin çalıştığını ve ne olduğunu söyler; kodun doğru ya da güvenli olduğunu söyleyemez. Bkz. [Sınırlar](#sınırlar).
 
-## Arama
+Yalnızca Windows. [Claude Code](https://claude.ai/code) ve Git gerekir.
 
-İki motor: hız için bir düz dizin, kanıt için sertifikalı bir motor.
+<p align="center"><img src="../assets/demo.gif" width="800" alt="emetgate lockdown altında bir Claude Code oturumu: prompt içinden kural ekleniyor ve kapı, testi bozan bir değişikliği reddediyor"></p>
 
-### `emetgate_find` — düz metin araması
+## Başlangıç
 
-Diske geri gitmeden düz metin ve dizinlenebilir desen araması. Sıcakta milisaniyenin altında.
-
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| sonek dizisi (SA-IS) | doğrusal zamanda kurulan, metnin her sonekinin sıralı dizisi | bir literali tek bir `O(m·log n)` ikili aramada, tüm eşleşmeleriyle birlikte bulur |
-| iki dalgacık ağacı (wavelet tree) | dizi üzerinde konum→dosya ve tekrar-zinciri haritaları | hangi eşleşmenin hangi dosyada olduğunu, dosyayı diskten yeniden okumadan söyler |
-| mmap'lenmiş `.emet` dizini | belleğe eşlenmiş tek bir dizin dosyası | arama sırasında dosyalar yeniden açılmaz; sıcakta `~0.7–1 ms` |
-
-### `emetgate_search` — sertifikalı arama
-
-Sonuçla birlikte, hiçbir şeyi kaçırmadığının kanıtını da taşıyan arama.
-
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| trigram postingleri | sıkıştırılmış bir ters dizin (Elias-Fano / bitmap) | tüm depoyu taramadan aday dosyaları hızla daraltır |
-| RFC 9162 Merkle ağacı | okunan her dosyanın SHA-256'sı üzerinde bir kök | yanıt kökü taşır, böylece tam ya da kısmi bir cevap iddia değil kanıtlanabilir olur |
-| kapalı-güvenli (fail-closed) | sayılar tutmazsa sertifika `InconsistentCertificate` olarak reddedilir | yanlış bir "tam" asla gösterilmez; kuşku varsa sessiz kalır |
-| NTFS değişiklik bariyeri | `ReadDirectoryChangesW` ile dosya-değişiklik bildirimi | yalnızca değişen bir dosya yeniden okunur (tazelik); kıyaslamada sıfır kaçırma |
-| ripgrep'e devretme | dizinin sunamayacağı bir regex (`\b`, lookaround…) | ripgrep'e devredilir; yanıt `delegated: rg` der — yetenek kaybı yok |
-
-Yanıt bir iddia değil kanıt taşır — gerçek çıktı:
-
-```
-$ search "InconsistentCertificate"
-✓ 6 matches in 429 files            # complete, with the Merkle root
-$ search "Allocator"
-partial: matches 1-46 of 1617; next offset:46
-$ search "zzzNeverOccurs"
-✓ no match in 569 files              # even zero is proven
-```
-
-> sıcak ~1.5–3.5 ms · soğuk (dizin kurulumu) 661 ms · ripgrep ile satır satır eşit
-
-## Kurallar
-
-Bir kez koyduğunuz bir politika her yazmada tutulur. Model kuralları okur ve değiştiremez.
-
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| tree-sitter sorguları | sözdizim ağacı üzerinde yapısal eşleşmeler | kapsam/sembol/yorum denetimleri: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
-| regex motoru (bütçeli) | adım-sınırlı bir eşleştirici | `forbid_regex` / `no_todo`: değişen kapsamda bir desen veya işaret avı |
-| `ledger.ndjson` | yalnızca ekleme yapılan bir kural defteri (`.emetgate/`) | kurallar burada yaşar; model okur ama yazamaz — politika insana ait kalır |
-| commit-mesajı denetimi | bir mesaj-yüzeyi kuralı | `message:conventional`: conventional commit'ler commit anında tutulur |
-
-```
-emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
-emetgate rule add "document exports"  --check require_comment --in src/ --enforce
-```
-
-## Doğrulanmış Git
-
-`emetgate verify --branch base..head` bir dalın tüm geçmişini yeniden oynatır ve kurcalamayı belli eden bir karar döndürür.
-
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| blake3 hash zinciri | her sertifika = blake3(parent ‖ oid ‖ verdict ‖ receipt) | tek bir commit'i yeniden oynatın, zincirin ucu kayar — kurcalama belli olur |
-| CAS ref'leri + özel dizin | çalışma ağacına dokunmadan write-tree / commit-tree | kapıdan geçmiş, makbuzlu bir commit — düzenleyicinizi rahatsız etmeden |
-| TLA⁺ model denetimi | commit günlüğünün biçimsel bir modeli | bir çökmenin yarım bıraktığı bir commit tutarlı bir duruma döner — kanıtlanmış |
-| in-toto makbuzları | commit'e bağlı köken (`refs/notes/emetgate`) | makbuz yok → `partial` (kapalı-güvenli); uydurma "verified" yok |
-| git rev-list yeniden oynatma | `base..head` aralığını dolaşır | her biri için tek-commit doğrulamasını yeniden koşar, zinciri örer |
-
-```
-$ emetgate verify --branch main..HEAD
-branch partial: 48 commit(s)          # no receipt → fail-closed
-  a179a7f unverified (no receipt)  cert 84c2…
-
-# tamper with one receipt:
-branch broken: 1 commit(s)
-  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
-```
-
-## Nasıl test edilir
-
-| parça | ne olduğu | burada ne yaptığı |
-| --- | --- | --- |
-| mutasyon testi | kodu bilerek bozar ve paketin bunu fark edip etmediğine bakar | testlerin yalnızca geçtiğini değil, bir hatayı *yakaladığını* kanıtlar |
-| TLA⁺ | commit günlüğünün bir model denetimi | çökme kurtarmasının doğruluğu, koddan ayrı olarak gerekçelendirilmiş |
-| fuzz & kırmızı takım | rastgele mutasyon artı saldırı derlemleri | beklenmedik veya düşmanca girdide çökme ya da kaçış yok |
-| ripgrep eşitlik kapısı | her koşuda isabet kümesini rg ile karşılaştırır | arama "hızlı ama yanlış" olamaz; satır satır denetlenir |
-
-Motor için: bugün 69 mutant: 58 öldürüldü, 6'sının eşdeğer olduğu kanıtlandı, 4'ü derinlemesine savunma olarak tutulan fazladan koruma, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içindedir.
-
-## Ölçülen
-
-| yüzey | ölçü | sonuç |
-| --- | --- | --- |
-| tam test paketi | geçti / kaldı / sızdırdı | 2386 / 0 / 0 |
-| arama eşitliği | rg satırları = emetgate | 1617=1617 · 6=6 · 2=2 |
-| arama sıcak | medyan | 1.5–3.5 ms |
-| find sıcak | medyan | 0.7–1.0 ms |
-| doğrulama (kurcalanmış makbuz) | karar | broken (yakalandı) |
-
-```
-python tests/bench/n8n_search.py   ·   zig build test
-```
-
-## Kurulum
-
-Yeni misiniz? [docs/QUICKSTART.md](../docs/QUICKSTART.md) adımlarını izleyin: kurun, `emetgate doctor` çalıştırın, sonra `emetgate lockdown`.
-
-Windows ikilisini [son sürümden](https://github.com/emetgate/emetgate/releases/latest) indirin ve klasörünü `PATH`'e ekleyin (PowerShell; ardından yeni bir terminal açın):
+Binary'yi indir ve `PATH`'e ekle (PowerShell):
 
 ```
 New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
@@ -149,41 +41,221 @@ Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download
 [Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
 ```
 
-Sonra proje klasöründe:
+Sonra yeni bir terminal aç, proje klasörüne geç ve çalıştır:
 
 ```
-emetgate lockdown --test "npm test"
+emetgate lockdown
 ```
 
-Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown`, ajanı yalnızca emetgate araçlarıyla, kapalı-güvenli olarak başlatır. `--test` verilmezse test komutu her yazmada bulunur (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, bir `.sln` ya da `.csproj`). Boş bir klasörde lockdown `git init` çalıştırır ve projenin bir test komutu olana dek yazmalar `unverified_no_tests` olarak kaydedilir.
-
-Lockdown yalnızca projenin kendi `.mcp.json` dosyasını okur, kullanıcı kapsamında kayıtlı bir sunucuyu asla okumaz. emetgate'i diğer araçların yanında bir sunucu olarak kullanmak ya da lockdown'a kendi sunucu argümanlarınızı vermek için onu proje için kaydedin:
+Kurulumun tamamı bu. Kendi kurallarını tutturmak için oturumda şunu yaz. Burada 19 yeni yorum yok, 26 Co-authored-by yok demek; `/rule pick` 30 kuralın hepsini listeler:
 
 ```
-claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
+/rule pick 19 26
 ```
 
-Bu `.mcp.json` yerindeyken lockdown test komutunu oradan alır ve `emetgate lockdown --test` reddedilir.
+Buradaki diğer satırlar isteğe bağlı:
 
-## Daha derine
+| amaç | komut | ne yapar |
+| --- | --- | --- |
+| oturum başlatmak | `emetgate lockdown` | Claude Code'u yerleşik araçları yerine emetgate araçlarıyla açar; test komutu her yazmada algılanır |
+| kurulumu kontrol etmek | `emetgate doctor` | her kontrol için bir satır; her `FAIL` onu düzelten komutla biter |
+| test komutunu belirtmek | `claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"` | algılama bir şey bulamazsa ya da yanlış komutu bulursa; `.mcp.json` yazar |
+| typecheck eklemek | aynı satır, `--typecheck "npx tsc --noEmit"` ile | `tsc` algılanmaz, adının verilmesi gerekir |
+| indirmeyi kontrol etmek | `Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256` | release sayfasındaki `emetgate.exe.sha256` ile karşılaştır |
+| kaynaktan derlemek | `zig build -Doptimize=ReleaseSafe` | Zig 0.16.0 gerekir |
 
-- [REFERENCE.md](../REFERENCE.md) — her araç
-- [VERIFICATION.md](../VERIFICATION.md) — makbuzlar ve kanıt
-- [docs/experiments/tla](../docs/experiments/tla) — TLA⁺ modelleri
-- [tests/bench](../tests/bench) — kıyaslamalar
+Her release bir SHA-256 dosyası ve build provenance attestation ile gelir. Binary henüz kod imzalı değil. Adım adım: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+
+## Oturumda ne değişir
+
+| model şunu isterse | olan |
+| --- | --- |
+| okumak ya da aramak | izin sormadan, dosyanın tamamından daha az metin gönderen araçlarla çalışır |
+| komut çalıştırmak | her komut çalışır, uzun çıktı kırpılarak döner |
+| yıkıcı komut çalıştırmak | önce sana sorulur: `rm -rf`, `git reset --hard`, `git push --force`, `DROP TABLE`, disk biçimlendirme, indirilen bir betiği shell'e aktarmak ve benzerleri |
+| dosya değiştirmek | her zamanki gibi sorulur, sonra değişiklik kapıdan geçer |
+
+Boş klasörde `git init` yapılır. Sürücü kökü, ev klasörün, sistem klasörü ya da çok büyük bir klasörde yapılmaz; lockdown orada reddeder. Zaten deposu olan klasöre dokunulmaz.
+
+## Kapı
+
+```
+proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
+                  └── a step fails ─▶ nothing is written (מת)
+```
+
+Kod değişikliği bir sembolü ve dayandığı kodun hash'ini belirtir, böylece eskimiş bir düzenleme reddedilir. Değişiklik deponun bir kopyasına uygulanır ve adımlar orada çalışır. Bir adım başarısız olursa dosyaların olduğu gibi kalır ve yanıt her başarısız testin çıktısını taşır; model tüm testleri yeniden çalıştırmadan düzeltebilir.
+
+Her adımın yaptığı ve yapmadığı:
+
+| adım | ne zaman çalışır | not |
+| --- | --- | --- |
+| reparse | her zaman, ayrıştırıcısı olan dillerde | dosyanın hâlâ ayrıştırıldığını gösterir |
+| kurallar | kuralın varsa | bkz. [Kurallar](#kurallar) |
+| typecheck | proje mypy ya da pyright yapılandırmışsa, kökünde tek bir `dotnet` projesi varsa ya da `--typecheck` ile | `tsc` algılanmaz; `--typecheck` ile ver |
+| testler | test komutu bulunduysa ve kod değiştiyse | test komutu yoksa yazma `unverified_no_tests` işaretiyle yapılır; yalnızca kod dışı dosya değiştiyse test çalışmaz |
+| makbuz | geçen her yazmada | bkz. [Makbuzlar](#makbuzlar) |
+
+Kapının test kuralı şudur: **daha önce başarısız olmayan hiçbir test başarısız olamaz.** Zaten başarısız olan bir test yazmayı engellemez, yanıt onu belirtir (`baseline_failing`, `failing_tests`). pytest ve `dotnet test`, yeni başarısız bir testin `emetgate_commit`'e kadar kalmasına da izin verir; borç `tests/debt.json` içinde tutulur, böylece önce testi yazıp sonra geçirebilirsin. Analizin kendi sembolünün dışına çıkamayacağını kanıtladığı bir değişiklik, yapılandırılmışsa tüm testler yerine kapsamlı bir test komutu çalıştırır.
+
+## Diller
+
+| | read, try, scan, kurallar | rename | move, move_file | çağrı grafiği (`facts`) | `explore`, `map` |
+| --- | :-: | :-: | :-: | :-: | :-: |
+| TypeScript, TSX, JavaScript | evet | evet | evet | evet | evet |
+| Python | evet | evet | evet | evet | `map` evet, `explore` kısmi |
+| C# | evet | evet | tipler ve statik üyeler | kısmi | `map` evet, `explore` kısmi |
+| Zig | evet (üst düzey fonksiyonlar) | hayır | hayır | hayır | hayır |
+| JSON, Markdown | bölüm okuma ve yazma | - | - | - | - |
+
+`map`, Python ve C# testlerini, route'larını ve komutlarını tanır. `explore` bazı isimleri hâlâ yanlışlıkla test sanıyor, örneğin `latest_news.py`. Rename, tipsiz bir yerel değişken üzerinden çağrılan metodu izleyemez. C# örnek üyesi taşınmaz, çünkü nesnesine bağlıdır. Dekoratörlü ya da üst düzey ifadeler içeren bir dosyadan Python sembolü taşımak `order_change:true` ister. Python ve C# için dil servisi yok. İkisinin de eşitlik çalışması sürüyor.
+
+Test komutları şunlardan algılanır: `package.json`, `build.zig`, `Cargo.toml`, `go.mod`, Python proje işaretleri, `.sln`, `.slnx`, `.csproj`, `.fsproj`, `.vbproj` ve iç içe test projeleri.
+
+## Araçlar
+
+Model 23 araç alır. Tüm parametreler: [REFERENCE.md](../REFERENCE.md).
+
+| | araçlar |
+| --- | --- |
+| anlamak | `explore` (bir sorudan tanıma, çağıranlara ve etkiye), `evidence`, `symbols`, `skeleton` |
+| okumak | `read_symbol`, `read_file` (tek çağrıda en fazla 32 dosya, JSON pointer, Markdown başlığı, satır aralığı), `list` |
+| aramak | `search` (literal ya da regex, takipli dosyalarda), `find` (herhangi bir dosyada büyük-küçük harf duyarsız literal) |
+| kod değiştirmek | `try`, `try_batch` (çok dosya, ya hepsi ya hiçbiri), `edit`, `write`, `rename`, `move`, `move_file` |
+| belge değiştirmek | `write_doc` (JSON, Markdown, aralıklar) |
+| denetlemek | `scan` (depo üzerinde tek bir denetim), `mutate` (önizleme) |
+| git ve shell | `git` (salt okunur), `git_write` (bayrak izin listesi; kayıp `force: true` ister), `commit` (makbuzla), `run` |
+
+Senin için komut satırı araçları: `doctor`, `verify`, `rule`, `rules` (terminal arayüzü), `recover`, `commit`, `receipts attach`, `facts`, `map`, `find`, `scan`, `stats`.
+
+## Kurallar
+
+`--enforce` ile koyduğun kural her yazmada tutulur; onsuz kural yalnızca kaydedilir ve gösterilir. Model kuralları okuyabilir, değiştiremez; onları değiştirecek bir komut önce sana sorar. Kurallar yalnızca sona ekleme yapılan `.emetgate/ledger.ndjson` dosyasında durur.
+
+**Kural koymak.** `/rule` satırları prompt gönderilmeden işlenir, modele hiç ulaşmaz.
+
+| nerede | komut | ne yapar |
+| --- | --- | --- |
+| oturumda | `/rule pick` | aşağıdaki 30 hazır kuralı gösterir |
+| oturumda | `/rule pick 1 19 26 in src/` | bu kuralları benimser, burada yalnızca `src/` altında |
+| oturumda | `/rule add "ban lodash" --check forbid_import:lodash --enforce` | kendi kuralını ekler |
+| oturumda | `/rule list`, `/rule supersede <id> "new text"`, `/rule forget <id>` | kuralı gösterir, değiştirir ya da kullanımdan kaldırır |
+| terminalde | `emetgate rule add ...` | aynı komutlar, eğik çizgisiz |
+| terminalde | `emetgate rules` | aynı kurallar için terminal arayüzü |
+
+`--in`, kuralı bir dosyayla, `/` ile biten bir klasörle ya da `file#symbol` ile sınırlar.
+
+**Bir kural neyi denetleyebilir.**
+
+| denetim | yazma şu durumda reddedilir |
+| --- | --- |
+| `no_comment` | yorum içeriyorsa |
+| `require_comment` | fonksiyon, metot ya da sınıfın önünde yorum yoksa |
+| `no_todo` | `TODO`, `FIXME` ya da `XXX` içeriyorsa |
+| `forbid:<text>` | bu metni içeriyorsa |
+| `require:<text>` | bu metni içermiyorsa |
+| `forbid_regex:<pattern>` | bu regex eşleşiyorsa |
+| `no_literal:<option>` | bu seçeneği sabit yazıyorsa, örn. `timeout: 30000` üzerinde `no_literal:timeout` |
+| `forbid_import:<module>` | bu modülü içe aktarıyorsa |
+| `max_function_lines:<n>` | bir fonksiyon n satırdan uzunsa |
+| `q:<query>` | bu tree-sitter sorgusu eşleşiyorsa |
+| `added:<check>` | denetim yalnızca değişikliğin eklediklerinde başarısızsa; eski kod yazmayı engellemez |
+| `cmd:<command>` | sandbox'taki kopyada çalışan kendi komutun ihlal bildirirse |
+| `frozen` | kuralın `--in` kapsamındaki bir yolu değiştiriyorsa |
+| `message:<check>` | commit mesajı şunu çiğniyorsa: `forbid`, `require`, `max_lines`, `max_subject`, `max_line`, `conventional` |
+
+**`/rule pick` içindeki hazır kurallar.**
+
+| grup | kurallar |
+| --- | --- |
+| kod stili, JS ve TS | `console.log`, `debugger`, `alert`, `var`, `any`, `document.write`, `innerHTML`, `dangerouslySetInnerHTML`, odaklı testler (`.only`), `@ts-ignore` yok |
+| kod stili, Python | `print`, `exec`, `assert`, çıplak `except`, `pickle` yok |
+| kod stili, C# | `Console.WriteLine`, `Debug.WriteLine`, `Thread.Sleep` yok |
+| kod stili, her dil | yeni yorum yok, tanımlarda doc comment, fonksiyonlar en fazla 50 satır, `TODO`/`FIXME`/`XXX` yok |
+| güvenlik | `eval`, sabit yazılmış sırlar (regex ile), `http://` URL'leri yok |
+| git düzeni | `Co-authored-by` yok, "Generated with Claude" yok, `WIP` yok, conventional commit başlığı |
+| mimari | bir yolu dondur |
+
+`frozen` bir yol yazma araçlarıyla değişemez ve `emetgate_run` her komuttan sonra onu geri koyar. `emetgate_run` üzerinden `git commit` önce sana sorar.
+
+## Makbuzlar
+
+Geçen bir yazma, neyin neyden ve hangi testlerle üretildiğini anlatan bir [in-toto](https://in-toto.io) kaydına bağlanır. `emetgate_commit` bunu `refs/notes/emetgate` altında git notu olarak saklar.
+
+```
+$ emetgate verify --branch main..HEAD
+branch partial: 48 commit(s)          # no receipt: not called verified
+  a179a7f unverified (no receipt)  cert 84c2…
+
+# after tampering with one receipt:
+branch broken: 1 commit(s)
+  3ff23a0 MISMATCH  cert ec79…
+```
+
+Bir commit `verified`, `merged`, `unverified` ya da `mismatch` olur; bir aralık `verified`, `partial`, `broken` ya da `empty` olur ve boş aralık başarısız sayılır. `tools/verify_py/emetgate_verify.py` makbuzları Python'da bağımsız olarak denetler.
+
+Makbuzlar imzalı değildir ve zincirin ucu yayımlanmaz. Bu, commit'iyle tutarsız düzenlenmiş bir makbuzu yakalar. Yeni ve tutarlı bir makbuzla birlikte yeniden yazılmış bir commit'i yakalamaz.
+
+## Arama
+
+İki arama aracı var ve ikisi de dosyanın tamamını geri göndermez.
+
+| | `search` | `find` |
+| --- | --- | --- |
+| nereye bakar | `dir` altındaki git takipli metin dosyaları | git'in listelediği her dosya, takipli ya da takipsiz, yok sayılmamış |
+| neyi eşler | büyük-küçük harf duyarlı literal ya da `regex:true` ile regex | her harf büyüklüğünde literal, her bayt, her dil |
+| indeks | trigram | suffix array ve wavelet matrix, belleğe eşlenen tek dosyada |
+| yanıt | her dosya bir kez, sonra her isabet için `line:text`, tanımda `*` | isabet ve dosya sayıları, en çok isabet alan 20 dosya, ilk 40 isabet |
+| çok isabet olunca | `partial`, devam edilecek sonraki offset ile | yanıt aynı boyutta kalır |
+| daraltma | `kinds:["code"]` yorumları ve metinleri atlar | - |
+| ne için | kod | log, yapılandırma, üretilmiş ve takipsiz dosyalar |
+
+`search` ayrıca okuduğu dosyalar üzerinde bir Merkle kökü (RFC 9162) ile yanıt verir, böylece tam yanıt ile kısmi yanıt yanıtın içinde ayırt edilir. İndeksin karşılayamadığı regex ripgrep'e gider ve yanıt `delegated: rg` der. Sertifikanın sayıları tutmazsa yanıt `InconsistentCertificate` olarak reddedilir.
+
+```
+$ search "InconsistentCertificate"
+✓ 6 matches in 429 files
+$ search "Allocator"
+partial: matches 1-46 of 1617; next offset:46
+$ search "zzzNeverOccurs"
+✓ no match in 569 files
+```
+
+n8n üzerinde: yeni oturumun ilk araması 5.5 ile 22.7 ms, sonraki aramalar 1.9 ile 10.1 ms; rg 27.2 ile 80.9 ms, git grep 29.1 ile 65.7 ms; depo başına bir kez yapılan ilk indeks oluşturma 91 ile 1,335 ms (2026-09-27, tarama bant genişliği 3.13 GB/s).
+
+## Nasıl test ediliyor
+
+Mutasyon testi kodu bilerek bozar ve test paketinin fark edip etmediğine bakar. Fuzz ve red-team korpusları beklenmedik ve düşmanca girdi verir. CI her pull request'te tüm testleri Debug ve ReleaseSafe'te çalıştırır, gecelik çalışma tüm mutasyon korpusunu kapsar.
+
+Motor için: bugün 69 mutant: 58 öldürüldü, 6 eşdeğer olduğu kanıtlandı, 4 fazladan koruma derinlemesine savunma için tutuldu, 1 açık. Liste [VERIFICATION.md](../VERIFICATION.md) içinde.
 
 ## Sınırlar
 
-Yalnızca Windows; TypeScript, JavaScript, Python, C# ve Zig. Korumalı alan yazmaları engeller, okumaları ya da ağı değil. Kapıdan geçmek, bir değişikliğin ayrıştığını ve *sizin* testlerinizi geçtiğini kanıtlar — yalnızca o testler kadar güçlüdür. Kıyaslamalar bizim kendi kıyaslamalarımız, tek bir makineden ve yeniden üretilebilir.
+- Yalnızca Windows.
+- **Kapıdan geçmek, değişikliğin ayrıştırıldığını ve testlerinden geçtiğini kanıtlar.** Testlerin kadar güçlüdür, test yoksa pek bir şey kanıtlamaz (`unverified_no_tests`).
+- **Kurallar yalnızca sen koyduktan sonra tutulur ve yazma araçlarını ve `emetgate_commit`'i yargılar.** `emetgate_run` üzerinden çalışan komut yargılanmaz: modelin çalıştırdığı bir betik yorum ekleyebilir, geri konan yalnızca `frozen` yollardır. Oradaki `git commit` önce sana sorar, mesaj kuralları onu okumaz.
+- **Bir testin zayıfladığını hiçbir şey denetlemez.** Test klasöründe `frozen` kuralı yoksa, testi değiştiren ve geçen bir düzenleme yazılır.
+- **`emetgate_run` lockdown'da sandbox'lı değildir.** Komut senin izinlerinle çalışır.
+- **Yıkıcı komut sorusu komutun kelimelerini okur.** Modelin yazıp çalıştırdığı bir betiğin içini görmez; yani duvar değil, hız kesicidir. Onayladığını oku.
+- **`frozen`'ın delikleri var.** Modelin çalıştırdığı bir betiğin yaptığı commit soru sormaz; `frozen_committed` içinde bildirilir ve `emetgate verify` ona verified demez. Yok sayılan dosyalar, takipsiz build ve cache klasörleri, sembolik bağlar, submodule klasörleri ve komuttan uzun yaşayan süreçler tutulmaz. `commit` dışındaki `emetgate_git_write` komutları, örneğin `reset`, `restore` ya da `stash`, frozen bir yolu yine de oynatabilir.
+- Kapının kendi test çalıştırmalarının etrafındaki sandbox yazmaları engeller, okumaları ya da ağı engellemez.
+- Python ve C#'ın boşlukları [Diller](#diller) altında.
+- Ölçümler bizim, tek makineden ve [tests/bench](../tests/bench) ile yeniden üretilebilir.
+
+## Daha derine
+
+- [docs/QUICKSTART.md](../docs/QUICKSTART.md): adım adım kurulum
+- [REFERENCE.md](../REFERENCE.md): her araç ve bayrak; `.mcp.json` kurulumu, `--commit`, `--typecheck`, `--allow-run` ve `.emetgaterc.json` dahil
+- [VERIFICATION.md](../VERIFICATION.md): makbuzlar ve kanıt
 
 ## İsim nereden geliyor
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="1899 tarihli bir kalem çizimi: Haham Loew elini kaldırır ve golemin yüzü dumanda belirir, alnında İbranice harfler" width="220" align="left">
+  <img src="../assets/golem-ales-light.jpg" alt="1899 tarihli bir kalem çizimi: Rabbi Loew elini kaldırıyor, golemin yüzü dumandan beliriyor, alnında İbranice harfler" width="220" align="left">
 </picture>
 
-Prag efsanesinde golem, alnındaki **אמת** (*emet*, "hakikat") kelimesiyle hayata gelir. İlk harfi silin, **אמת** **מת** (*met*, "ölü") olur — golem durur. Kapı, bir değişiklik tuttuğunda ilk harfi yazar; başarısız bir test onu siler.
+Prag efsanesinde golem, alnındaki **אמת** (*emet*, "hakikat") kelimesiyle canlanır. İlk harfi silersen **אמת**, **מת** (*met*, "ölü") olur ve golem durur. Kapı, değişiklik tutarsa ilk harfi yazar; başarısız bir test onu siler.
 
 <br clear="left">
 
