@@ -123,7 +123,6 @@ static bool scan_automatic_semicolon(TSLexer *lexer, const bool *valid_symbols, 
         case '*':
         case '%':
         case '>':
-        case '<':
         case '=':
         case '?':
         case '^':
@@ -132,6 +131,12 @@ static bool scan_automatic_semicolon(TSLexer *lexer, const bool *valid_symbols, 
         case '/':
         case ':':
             return false;
+
+        case '<':
+            if (valid_symbols[LOGICAL_OR]) {
+                return false;
+            }
+            break;
 
         case '{':
             if (valid_symbols[FUNCTION_SIGNATURE_AUTOMATIC_SEMICOLON]) {
