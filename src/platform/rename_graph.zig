@@ -65,13 +65,15 @@ const Place = struct {
 const Graph = struct {
     gpa: Allocator,
     profile: *const Profile,
+    old: []const u8,
+    sites: ?*Sites,
     store: facts_store.Store,
     rels: std.ArrayList([]const u8) = .empty,
     snapshots: std.ArrayList(*Snapshot) = .empty,
     ids: std.ArrayList(facts_store.FileId) = .empty,
 
-    fn init(gpa: Allocator, profile: *const Profile) Graph {
-        return .{ .gpa = gpa, .profile = profile, .store = facts_store.Store.init(gpa) };
+    fn init(gpa: Allocator, profile: *const Profile, old: []const u8, sites: ?*Sites) Graph {
+        return .{ .gpa = gpa, .profile = profile, .old = old, .sites = sites, .store = facts_store.Store.init(gpa) };
     }
 
     fn deinit(self: *Graph) void {
@@ -106,7 +108,8 @@ const Graph = struct {
         defer self.gpa.free(listing);
         var files = std.mem.tokenizeScalar(u8, listing, 0);
         while (files.next()) |rel| {
-            if (registry.forPath(rel) != self.profile) continue;
+            const other = registry.forPath(rel) orelse continue;
+            if (other.rename != self.profile.rename) continue;
             try self.addRel(rel);
         }
     }
@@ -153,15 +156,25 @@ const Graph = struct {
     }
 
     fn load(self: *Graph, io: std.Io, runtime: *Runtime, root: []const u8, from: usize) !void {
-        for (self.rels.items[from..], from..) |rel, i| {
+        var i = from;
+        while (i < self.rels.items.len) {
+            const rel = self.rels.items[i];
             const abs = try self.absOf(self.gpa, root, @intCast(i));
             defer self.gpa.free(abs);
             const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
+            if (snapshot.tree.root().hasError()) {
+                defer snapshot.destroy();
+                if (std.mem.indexOf(u8, snapshot.source, self.old) != null) {
+                    if (self.sites) |sites| sites.add(rel, snapshot.source, snapshot.tree.root().firstError().startByte());
+                    return error.SourceHasErrors;
+                }
+                self.gpa.free(self.rels.orderedRemove(i));
+                continue;
+            }
             {
                 errdefer snapshot.destroy();
                 try self.snapshots.append(self.gpa, snapshot);
             }
-            if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
             var scratch = std.heap.ArenaAllocator.init(self.gpa);
             defer scratch.deinit();
             const found = try facts_extract.extract(scratch.allocator(), snapshot);
@@ -175,6 +188,7 @@ const Graph = struct {
             const id = try self.store.ensureFile(rel);
             _ = try self.store.replace(id, snapshot.profile, symbol.fileHash(snapshot.source), arena, kept, &.{});
             try self.ids.append(self.gpa, id);
+            i += 1;
         }
     }
 
@@ -264,7 +278,12 @@ const Locator = struct {
                     .def => |d| graph.placeOf(d.id) orelse continue,
                     .unresolved => continue,
                 };
-                if (linked.eql(self.target)) try self.prove(file, ref.start);
+                if (!linked.eql(self.target)) continue;
+                try self.prove(file, ref.start);
+                switch (ref.target) {
+                    .binding => |b| if (std.mem.eql(u8, st.facts.bindings[b].local, self.old)) try self.prove(file, st.facts.bindings[b].start),
+                    else => {},
+                }
             }
         }
     }
@@ -417,6 +436,7 @@ const Locator = struct {
                 if (self.isProven(file, leaf.span.start)) continue;
                 if (declares(st.facts.defs, leaf.span.start)) continue;
                 if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;
+                if (graph.def(self.target).parent == 0 and rename.isKeyAt(snapshot, leaf.span)) continue;
                 if (leaf.shorthand) {
                     const sites = self.sites orelse return error.RenameUnresolved;
                     sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);
@@ -483,7 +503,7 @@ pub fn supports(profile: *const Profile) bool {
 pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file_abs: []const u8, offset: u32, old: []const u8, sites: ?*Sites) !Found {
     const profile = registry.forPath(file_abs) orelse return error.UnsupportedLanguage;
     if (!supports(profile)) return error.UnsupportedLanguage;
-    var graph = Graph.init(gpa, profile);
+    var graph = Graph.init(gpa, profile, old, sites);
     defer graph.deinit();
     const declaring_rel = try repo.relativeUnder(gpa, root, file_abs);
     defer gpa.free(declaring_rel);

@@ -43,8 +43,13 @@ pub fn callRename(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
         buffer.clearRetainingCapacity();
         if (err == error.AmbiguousSymbol) _ = recovery.ambiguity(gpa, io, runtime, policy.root, "", file, sym);
         if (err == error.DynamicReference and dynamic.count != 0) wire.setFix("{s} is also reached dynamically at {s}{s}; pass allow_dynamic:true to rename the static references and get these sites back to review by hand", .{ sym, dynamic.list(), if (dynamic.count > 8) " and more" else "" });
+        if (err == error.IncompleteRename and dynamic.left().len != 0) wire.setFix("{s} is still named at {s}, in a file the rename would not touch: nothing links it to this declaration; nothing was written; fix the import there or rename that site by hand with {s}emetgate_try_batch", .{ sym, dynamic.left(), tool_names.prefix() });
         if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix("the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_try_batch old_string/new_string items, one per file, with replace_all:true", .{ @errorName(cause), sym, tool_names.prefix() });
-        if (err == error.RenameUnresolved and unresolved.count != 0) wire.setFix("{s} has references that could not be proven at {s}{s}: the type of a receiver there does not follow from an annotation, a constructor or a call with one provable return type; nothing was written; add an annotation there and retry, or rename these sites by hand with {s}emetgate_try_batch", .{ sym, unresolved.list(), if (unresolved.count > 8) " and more" else "", tool_names.prefix() });
+        if (err == error.RenameUnresolved and unresolved.count != 0) wire.setFix("{s} has references that could not be proven at {s}{s}: an import there does not link to this declaration, or the type of a receiver there does not follow from an annotation, a constructor or a call with one provable return type; nothing was written; add an annotation there and retry, or rename these sites by hand with {s}emetgate_try_batch", .{ sym, unresolved.list(), if (unresolved.count > 8) " and more" else "", tool_names.prefix() });
+        if (err == error.SourceHasErrors) {
+            const broken = if (unresolved.count != 0) unresolved.list() else dynamic.left();
+            if (broken.len != 0) wire.setFix("{s} does not parse and may name {s}, so its references cannot be proven; nothing was written; fix that file, or if it is valid code the parser cannot read, rename by hand with {s}emetgate_try_batch", .{ broken, sym, tool_names.prefix() });
+        }
         if (err == error.WrittenButNotIndexed) {
             try wire.writeNotIndexed(&buffer.writer, file);
         } else {

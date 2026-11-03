@@ -1173,3 +1173,99 @@ test "rename facts: a C# type parameter hides a class of the same name in its ow
     try testing.expectError(error.RenameUnresolved, case.planWith("T.cs", "T.Total", "Grand", true, &sites));
     try testing.expectEqualStrings("T.cs:10, T.cs:17, T.cs:18", sites.list());
 }
+
+test "rename facts: a Python re-export under its own name renames the name, the alias and every user" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "p/__init__.py", .text = "from .m import helper as helper\n\n__all__ = [\"helper\"]\nprint(helper(1))\n" },
+        .{ .rel = "p/m.py", .text = "def helper(v):\n    return v\n" },
+        .{ .rel = "o.py", .text = "from p import helper\n\nprint(helper(2))\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("p/m.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "p/__init__.py", "from .m import double as double\n\n__all__ = [\"double\"]\nprint(double(1))\n");
+    try expectSource(planned, "o.py", "from p import double\n\nprint(double(2))\n");
+}
+
+test "rename facts: a Python import under another alias keeps the alias" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "p/__init__.py", .text = "from .m import helper as h\n\nprint(h(1))\n" },
+        .{ .rel = "p/m.py", .text = "def helper(v):\n    return v\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("p/m.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "p/__init__.py", "from .m import double as h\n\nprint(h(1))\n");
+}
+
+test "rename facts: a Python keyword argument of the same name is another name and stays" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "b.py", .text = "from a import helper\n\nrun(helper=helper())\n" },
+        .{ .rel = "c.py", .text = "run(helper=1)\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("a.py", "helper", "double", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "b.py", "from a import double\n\nrun(helper=double())\n");
+    try testing.expectError(error.FileNotPlanned, expectSource(planned, "c.py", ""));
+}
+
+test "rename facts: a Python attribute of the same name on an unknown receiver is still unresolved" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "b.py", .text = "def go(x):\n    return x.helper()\n" },
+    });
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.plan("a.py", "helper", "double", true));
+}
+
+test "rename facts: a Python method is still unresolved beside a keyword argument of its name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "class C:\n    def helper(self):\n        return 1\n" },
+        .{ .rel = "b.py", .text = "run(helper=1)\n" },
+    });
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.plan("a.py", "C.helper", "double", true));
+}
+
+test "rename facts: a file left naming the function is reported by file and line" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "b.py", .text = "print(1)\nfrom c import helper\nprint(helper())\n" },
+        .{ .rel = "c.py", .text = "def helper():\n    return 2\n" },
+    });
+    defer case.deinit();
+    const file = try case.repo.abs(testing.allocator, "a.py");
+    defer testing.allocator.free(file);
+    var dynamic: rename_batch.DynamicSites = .{};
+    const hash = try case.hashOf(file, "helper");
+    try testing.expectError(error.IncompleteRename, rename_batch.plan(testing.allocator, testing.io, case.runtime, case.repo.root_abs, .{
+        .file_abs = file,
+        .ref_text = "helper",
+        .expected_hash = hash,
+        .new_name = "double",
+        .interface_change = true,
+        .dynamic = &dynamic,
+    }, null));
+    try testing.expectEqualStrings("b.py:2", dynamic.left());
+}
+
+test "rename facts: a python file the parser rejects is named by file and line when it names the symbol" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const broken = "print(1)\nhelper = (\n";
+    var case = try Case.init(&.{
+        .{ .rel = "a.py", .text = "def helper():\n    return 1\n" },
+        .{ .rel = "b.py", .text = broken },
+    });
+    defer case.deinit();
+    var sites: rename_graph.Sites = .{};
+    try testing.expectError(error.SourceHasErrors, case.planWith("a.py", "helper", "double", true, &sites));
+    try testing.expect(std.mem.startsWith(u8, sites.list(), "b.py:"));
+}
