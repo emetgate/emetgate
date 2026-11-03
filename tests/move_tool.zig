@@ -157,12 +157,13 @@ test "move: the tool reports the class, the files and the derived imports" {
     try case.expectFile("src/app.ts", app_new);
 }
 
-test "move: without the language service a local unused declaration moves, an exported one is unresolved" {
+test "move: a language service that dies leaves a local unused declaration movable, an exported one unresolved" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const math = "function scale(x: number): number {\n  return x * 2;\n}\n" ++ math_src;
     var case: Case = undefined;
-    try initMath(&case, math, app_src, &.{}, false);
+    try initMath(&case, math, app_src, &.{}, true);
     defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
     try testing.expectError(error.MoveUnresolved, move(&case, "src/math.ts", "area", "src/shapes.ts", .{}));
     const outcome = try move(&case, "src/math.ts", "scale", "src/scale.ts", .{ .interface_change = false });
     defer outcome.deinit(testing.allocator);

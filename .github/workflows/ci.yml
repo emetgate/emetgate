@@ -81,6 +81,12 @@ jobs:
           path: .zig-cache
           key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
           restore-keys: zig-cache-${{ matrix.optimize }}-
+      - name: Install TypeScript for the real language service tests
+        shell: pwsh
+        run: |
+          npm install --no-audit --no-fund --prefix "$env:RUNNER_TEMP/tsdep" typescript@5.9.3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "EMETGATE_TEST_TYPESCRIPT=$env:RUNNER_TEMP\tsdep\node_modules\typescript" >> $env:GITHUB_ENV
       - name: Part ${{ matrix.part }} of 4 of the tests, split by tests/test_times.tsv
         shell: pwsh
         run: |
@@ -201,6 +207,12 @@ jobs:
             $dirty
             exit 1
           }
+      - name: Install TypeScript for the real language service tests
+        shell: pwsh
+        run: |
+          npm install --no-audit --no-fund --prefix "$env:RUNNER_TEMP/tsdep" typescript@5.9.3
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          "EMETGATE_TEST_TYPESCRIPT=$env:RUNNER_TEMP\tsdep\node_modules\typescript" >> $env:GITHUB_ENV
       - run: zig build mutate-tool
       - name: A twelfth of the mutation corpus from the schema binary, the twelve slices cover all of it
         shell: pwsh

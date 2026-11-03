@@ -168,25 +168,27 @@ test "rename: a stale symbol hash is refused before the language service is aske
 const local_src = "function add(a: number): number {\n  return a + 1;\n}\nexport function twice(x: number): number {\n  return add(add(x));\n}\n";
 const local_new = "function inc(a: number): number {\n  return a + 1;\n}\nexport function twice(x: number): number {\n  return inc(inc(x));\n}\n";
 
-test "rename: without the language service a local unexported symbol is renamed by the text path and says so" {
+test "rename: a language service that dies leaves a local unexported symbol to the text path and says so" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
-    try case.init(&.{ .{ .rel = "src/a.ts", .text = local_src }, .{ .rel = "src/b.ts", .text = "export const other = 1;\n" } }, false);
+    try case.init(&.{ .{ .rel = "src/a.ts", .text = local_src }, .{ .rel = "src/b.ts", .text = "export const other = 1;\n" } }, true);
     defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
     const outcome = try case.rename("src/a.ts", "add", "inc", false, null);
     defer outcome.deinit(testing.allocator);
     try testing.expect(outcome.result == .committed);
     try testing.expectEqual(rename_batch.Resolver.text, outcome.plan.resolver);
-    try testing.expectEqual(@as(?anyerror, error.TypeScriptNotInstalled), outcome.plan.fallback);
+    try testing.expect(outcome.plan.fallback != null);
     try case.expectFile("src/a.ts", local_new);
 }
 
-test "rename: without the language service an exported symbol or a name another file mentions is unresolved" {
+test "rename: a language service that dies leaves an exported symbol or a name another file mentions unresolved" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     {
         var alone: Case = undefined;
-        try alone.init(&.{.{ .rel = "src/a.ts", .text = a_src }}, false);
+        try alone.init(&.{.{ .rel = "src/a.ts", .text = a_src }}, true);
         defer alone.deinit();
+        try alone.repo.setPlan("{\"exit\":true}");
         try testing.expectError(error.RenameUnresolved, alone.rename("src/a.ts", "add", "sum", true, null));
         try alone.expectFile("src/a.ts", a_src);
     }
@@ -199,18 +201,20 @@ test "rename: without the language service an exported symbol or a name another 
         try exported.expectOld();
     }
     var mentioned: Case = undefined;
-    try mentioned.init(&.{ .{ .rel = "src/a.ts", .text = local_src }, .{ .rel = "src/b.ts", .text = "// add lives in a.ts\nexport const other = 1;\n" } }, false);
+    try mentioned.init(&.{ .{ .rel = "src/a.ts", .text = local_src }, .{ .rel = "src/b.ts", .text = "// add lives in a.ts\nexport const other = 1;\n" } }, true);
     defer mentioned.deinit();
+    try mentioned.repo.setPlan("{\"exit\":true}");
     try testing.expectError(error.RenameUnresolved, mentioned.rename("src/a.ts", "add", "inc", false, null));
     try mentioned.expectFile("src/a.ts", local_src);
 }
 
-test "rename: without the language service a local name with a second binder is unresolved" {
+test "rename: a language service that dies leaves a local name with a second binder unresolved" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const shadowed = "function add(a: number): number {\n  return a + 1;\n}\nexport function g(add: number): number {\n  return add;\n}\n";
     var case: Case = undefined;
-    try case.init(&.{.{ .rel = "src/a.ts", .text = shadowed }}, false);
+    try case.init(&.{.{ .rel = "src/a.ts", .text = shadowed }}, true);
     defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
     try testing.expectError(error.RenameUnresolved, case.rename("src/a.ts", "add", "inc", false, null));
     try case.expectFile("src/a.ts", shadowed);
 }

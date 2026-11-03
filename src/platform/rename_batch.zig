@@ -168,7 +168,8 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     var resolver: Resolver = .text;
     var fallback: ?anyerror = error.NoLanguageService;
     var free_uses = false;
-    if (!base.profile.language_service and rename_graph.supports(base.profile)) {
+    const service_missing = if (session) |s| s.missing() else false;
+    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {
         const found = try rename_graph.locate(gpa, io, runtime, root, request.file_abs, offset, old, request.unresolved);
         defer found.deinit(gpa);
         for (found.proven) |p| try locations.add(gpa, try gpa.dupe(u8, p.abs), p.span);
@@ -177,7 +178,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         member = found.member;
         free_uses = found.free_uses;
     } else if (session) |s| {
-        switch (try fromService(gpa, io, root, s, request.file_abs, offset, !request.interface_change, &locations)) {
+        switch (try fromService(gpa, io, root, s, request.file_abs, offset, !request.interface_change, &locations, request.unresolved)) {
             .ok => {
                 resolver = .language_service;
                 fallback = null;
@@ -374,7 +375,7 @@ fn keepOf(location: tsserver.Location) rename.Keep {
     return .none;
 }
 
-fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, keep_keys: bool, locations: *Locations) !ServiceAnswer {
+fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.Session, file_abs: []const u8, offset: u32, keep_keys: bool, locations: *Locations, sites: ?*rename_graph.Sites) !ServiceAnswer {
     const client = session.get() catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => return .{ .unavailable = err },
@@ -394,7 +395,25 @@ fn fromService(gpa: Allocator, io: std.Io, root: []const u8, session: *tsserver.
         const abs = try jailLocation(gpa, io, root, location.file);
         try locations.addKept(gpa, abs, .{ .start = location.start, .end = location.end }, keepOf(location));
     }
+    if (answer.value.unresolved.len != 0) {
+        if (sites) |slot| for (answer.value.unresolved) |use| try addServiceSite(gpa, io, root, slot, use);
+        return error.RenameUnresolved;
+    }
     return .ok;
+}
+
+fn addServiceSite(gpa: Allocator, io: std.Io, root: []const u8, sites: *rename_graph.Sites, use: tsserver.Location) !void {
+    const abs = try gpa.dupe(u8, use.file);
+    defer gpa.free(abs);
+    std.mem.replaceScalar(u8, abs, '/', '\\');
+    const rel = repo.relativeUnder(gpa, root, abs) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return error.RenameUnresolved,
+    };
+    defer gpa.free(rel);
+    const source = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(64 * 1024 * 1024)) catch return error.RenameUnresolved;
+    defer gpa.free(source);
+    sites.add(rel, source, use.start);
 }
 
 fn jailLocation(gpa: Allocator, io: std.Io, root: []const u8, file: []const u8) ![]u8 {

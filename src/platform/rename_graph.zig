@@ -417,6 +417,11 @@ const Locator = struct {
                 if (self.isProven(file, leaf.span.start)) continue;
                 if (declares(st.facts.defs, leaf.span.start)) continue;
                 if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;
+                if (leaf.shorthand) {
+                    const sites = self.sites orelse return error.RenameUnresolved;
+                    sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);
+                    continue;
+                }
                 if (resolution.binderAt(leaf.span)) |b| {
                     if (!resolution.binders[b].import) continue;
                 }

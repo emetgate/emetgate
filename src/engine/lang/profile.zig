@@ -330,6 +330,7 @@ pub const Facts = struct {
     member_wrappers: []const []const u8 = &.{},
     constructions: []const Construction = &.{},
     initializers: []const Initializer = &.{},
+    commonjs: ?CommonJs = null,
     calls_construct: bool = false,
     inherited_overloads: bool = false,
     sole_binder_types: bool = false,
@@ -411,6 +412,22 @@ fn isWordByte(c: u8) bool {
 }
 
 pub const InertRules = enum { none, python };
+
+pub const CommonJs = struct {
+    module_exports: []const u8,
+    exports_prefix: []const u8,
+    module_exports_prefix: []const u8,
+    expression_statement: []const u8,
+    assignment: []const u8,
+    variable_kinds: []const []const u8,
+    object_pattern: []const u8,
+    shorthand_pattern: []const u8,
+    pair_pattern: []const u8,
+    object: []const u8,
+    shorthand: []const u8,
+    pair: []const u8,
+    loader: []const u8,
+};
 
 pub const Profile = struct {
     name: []const u8,

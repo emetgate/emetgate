@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2796**
-- Mutations declared in `tests/mutations.json`: **1942**
-  - killed: **1892**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2827**
+- Mutations declared in `tests/mutations.json`: **1962**
+  - killed: **1912**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1276 mutation(s).
+1296 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -880,9 +880,9 @@ python tools/verification_page.py --check
 | `RN1-alpha-hash-check-skipped` | `src/engine/rename.zig` | `if (!std.mem.eql(u8, &a, &b)) return error.AlphaMismatch;` -> `if (a.len != b.len) return error.AlphaMismatch;` | rename: renaming one of two free uses of a name breaks its alpha hash | killed |
 | `RN2-symbol-alpha-check-skipped` | `src/engine/rename.zig` | `for (after.symbols) \|a\| {             if (!mapping.same(b.ref...` -> `for (after.symbols) \|a\| {             if (!mapping.same(b.ref...` | defense in depth: every symbol a rename touches lies inside a touched top-level statement... | defense in depth |
 | `RN3-export-approval-skipped` | `src/platform/rename_batch.zig` | `if (interface_change and !request.interface_change) return erro...` -> `` | rename: a rename that reaches other modules is refused without the interface_ch...; renam... | killed |
-| `RN4-text-path-accepts-exported` | `src/platform/rename_batch.zig` | `if (try rename.exportedName(gpa, base, old)) return error.Renam...` -> `` | rename: without the language service an exported symbol or a name another file ... | killed |
-| `RN5-text-path-ignores-other-files` | `src/platform/rename_batch.zig` | `if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnres...` -> `if (abs.len == 0) return error.RenameUnresolved;` | rename: without the language service an exported symbol or a name another file ... | killed |
-| `RN6-text-path-ignores-second-binder` | `src/platform/rename_batch.zig` | `if (try rename.binderCount(gpa, base, old) != 1) return error.R...` -> `` | rename: without the language service a local name with a second binder is unres... | killed |
+| `RN4-text-path-accepts-exported` | `src/platform/rename_batch.zig` | `if (try rename.exportedName(gpa, base, old)) return error.Renam...` -> `` | rename: a language service that dies leaves an exported symbol or a name anothe... | killed |
+| `RN5-text-path-ignores-other-files` | `src/platform/rename_batch.zig` | `if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnres...` -> `if (abs.len == 0) return error.RenameUnresolved;` | rename: a language service that dies leaves an exported symbol or a name anothe... | killed |
+| `RN6-text-path-ignores-second-binder` | `src/platform/rename_batch.zig` | `if (try rename.binderCount(gpa, base, old) != 1) return error.R...` -> `` | rename: a language service that dies leaves a local name with a second binder u... | killed |
 | `RN7-location-not-an-identifier-skipped` | `src/engine/rename.zig` | `if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span....` -> `` | red team rename: a location inside a comment or a string is refused and both st...; renam... | killed |
 | `RN8-free-occurrence-check-skipped` | `src/engine/rename.zig` | `if (try freeOccurrence(gpa, next, old, false)) return error.Inc...` -> `_ = .{ gpa, next, old };` | defense in depth: the independent resolution before the rename (SC3) already refuses a pr... | defense in depth |
 | `RN9-untouched-file-not-checked` | `src/platform/rename_batch.zig` | `if (renamed == null and try rename.freeOccurrence(gpa, snapshot...` -> `_ = gpa;` | red team rename: a service that skips a whole file that still calls the old nam... | killed |
@@ -919,7 +919,7 @@ python tools/verification_page.py --check
 | `FM8-stale-import-proof-skipped` | `src/platform/file_move.zig` | `try proveNoStaleImport(w, after, request, files.items, texts.it...` -> `` | move file: the proof catches a user left behind and an own import left unrewrit... | killed |
 | `FM9-own-import-proof-skipped` | `src/platform/file_move.zig` | `try proveOwnImports(w, before, after, request, moved, afters.it...` -> `` | move file: the proof catches a user left behind and an own import left unrewrit... | killed |
 | `FM10-service-edit-mismatch-accepted` | `src/platform/file_move.zig` | `if (!found) return error.ServiceMismatch;` -> `if (!found and false) return error.ServiceMismatch;` | move file: the language service proposing a different edit set is refused | killed |
-| `FM11-literal-require-accepted` | `src/platform/file_move.zig` | `if (tsserver.sameFile(target, request.from_abs)) return error.D...` -> `_ = target;` | move file: a require or a computed import that reaches the file is refused | killed |
+| `FM11-literal-require-accepted` | `src/platform/file_move.zig` | `if (!service_missing and snapshot.profile.facts.?.commonjs == n...` -> `` | move file: a require or a computed import that reaches the file is refused | killed |
 | `RUN1-allowlist-check-skipped` | `src/platform/run_command.zig` | `const entry = match(allowed, requested) orelse return .{ .refus...` -> `const entry = match(allowed, requested) orelse requested;` | a request runs only the allowlist entry it equals byte for byte; run tool: a command the ... | killed |
 | `RUN2-metacharacter-check-relaxed` | `src/platform/run_command.zig` | `pub const shell_metacharacters = "&\|<>^%!;'$()\r\n\x00";` -> `pub const shell_metacharacters = "\x00";` | an allowlist entry with a shell metacharacter is refused; run policy: an --allow-run entr... | killed |
 | `RUN3-in-working-tree` | `src/platform/run_command.zig` | `runner.runStages(gpa, io, location.shadow, null, options.comman...` -> `runner.runStages(gpa, io, options.root_abs, null, options.comma...` | redteam run: an allowed script cannot write outside the shadow, runs from the s... | killed |
@@ -1458,8 +1458,8 @@ python tools/verification_page.py --check
 | `LF4-large-source-classified-as-code` | `src/protocol/search_v1.zig` | `if (!parsed and wants_spans) item.unclassified = true;` -> `` | search text: a text file over the parse limit is searched line by line without ... | killed |
 | `LF5-too-large-entry-reused` | `src/platform/search_session.zig` | `if (live.kind == .file and search_index.sameStamp(v.record(b).s...` -> `if (live.kind == .file and search_index.sameStamp(v.record(b).s...` | search text: a file an older index left out as too large is read again once the... | killed |
 | `LF6-reread-rule-inverted` | `src/platform/search_index.zig` | `return state == .large and stamp.size <= max_indexed_file_bytes;` -> `return state == .large and stamp.size > max_indexed_file_bytes;` | an entry left out as too large is read again once the size limit admits it; search text: ... | killed |
-| `CSR1-facts-resolver-never-chosen` | `src/platform/rename_batch.zig` | `if (!base.profile.language_service and rename_graph.supports(ba...` -> `if (false and rename_graph.supports(base.profile)) {` | rename facts: a C# static method called from another file is renamed at its dec...; renam... | killed |
-| `CSR2-facts-resolver-for-service-languages` | `src/platform/rename_batch.zig` | `if (!base.profile.language_service and rename_graph.supports(ba...` -> `if (rename_graph.supports(base.profile)) {` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
+| `CSR1-facts-resolver-never-chosen` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (false and rename_graph.supports(base.profile)) {` | rename facts: a C# static method called from another file is renamed at its dec...; renam... | killed |
+| `CSR2-facts-resolver-for-service-languages` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (rename_graph.supports(base.profile)) {` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
 | `CSR3-free-uses-not-passed` | `src/platform/rename_batch.zig` | `.{ .free_uses = free_uses, .kept_keys` -> `.{ .free_uses = false, .kept_keys` | rename facts: a C# class is renamed at its declaration, constructor, new, param... | killed |
 | `CSR4-visibility-not-an-interface-change` | `src/platform/rename_batch.zig` | `or (resolver == .facts and visibleAt(base, offset, old))` -> `` | rename facts: a public C# method in one file still needs interface approval | killed |
 | `CSR5-free-use-reported-as-mismatch` | `src/engine/rename.zig` | `if (free_uses) continue;` -> `if (free_uses and false) continue;` | rename facts: a C# class is renamed at its declaration, constructor, new, param... | killed |
@@ -2045,6 +2045,26 @@ python tools/verification_page.py --check
 | `RA4-run-reply-hides-broken-rules` | `src/protocol/open_run.zig` | `const broken = audit.findings.items.len != 0;` -> `const broken = false;` | run audit: emetgate_run answers rules_broken and is an error | killed |
 | `CG1-commit-guard-judges-the-whole-file` | `src/platform/commit_guard.zig` | `return holes;` -> `return null;` | commit guard: a violation already in HEAD does not block an unrelated line | killed |
 | `CG2-commit-guard-skips-the-message` | `src/platform/commit_guard.zig` | `if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced...` -> `` | commit guard: a message rule refuses the commit and names the rule | killed |
+| `T3-1-missing-service-keeps-refusing` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (!base.profile.language_service and rename_graph.supports(ba...` | js without typescript: a method called on a new object is renamed by the facts ... | killed |
+| `T3-2-service-missing-ignored` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return true;` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return fals...` | js without typescript: moving a file rewrites import, require and literal impor... | killed |
+| `T3-3-text-move-with-users-refused` | `src/platform/file_move.zig` | `if (resolver == .text and users != 0 and !service_missing) retu...` -> `if (resolver == .text and users != 0) return error.FileMoveUnre...` | js without typescript: moving a file rewrites import, require and literal impor... | killed |
+| `T3-4-alias-import-accepted` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `` | js without typescript: an alias import ending in the file's name is refused | killed |
+| `T3-5-installed-package-counts-as-alias` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `if (aliasMayNameFile(entry.spec, stem, base_url)) return error....` | js without typescript: an import of an installed package with the file's name i... | killed |
+| `T3-6-self-locating-file-moves` | `src/platform/file_move.zig` | `if (locatesItself(moved.source)) return error.DynamicPathUse;` -> `` | js without typescript: a moved file that locates itself is refused | killed |
+| `T3-7-path-in-string-accepted` | `src/platform/file_move.zig` | `if (try namesPathInString(w, before, snapshot, abs, request.fro...` -> `` | js without typescript: a string naming the file's path is refused | killed |
+| `T3-8-shorthand-accepted` | `src/platform/rename_graph.zig` | `if (leaf.shorthand) {                     const sites = self.si...` -> `if (false) {                     const sites = self.sites orels...` | js without typescript: an object shorthand of a renamed function is refused | killed |
+| `T3-9-commonjs-user-ignored` | `src/platform/move_batch.zig` | `if (!isUser(users.items, abs)) return error.MoveUnresolved;` -> `` | js without typescript: moving a function a commonjs file requires is refused | killed |
+| `T3-10-requires-not-collected` | `src/engine/facts_extract.zig` | `if (self.f.commonjs) \|cjs\| try self.collectRequires(cjs);` -> `` | js without typescript: destructured require follows a commonjs rename | killed |
+| `T3-11-untyped-uses-ignored` | `src/platform/rename_batch.zig` | `if (answer.value.unresolved.len != 0) {` -> `if (false) {` | real typescript: a member reached through an untyped parameter is refused and n... | killed |
+| `T3-12-host-reports-no-untyped-use` | `src/platform/tsserver_host.js` | `return { can_rename: true, locations: locations, unresolved: un...` -> `return { can_rename: true, locations: locations, unresolved: []...` | real typescript: a member reached through an untyped parameter is refused and n...; real ... | killed |
+| `T3-13-local-counts-as-member` | `src/platform/tsserver_host.js` | `if (!ts.isIdentifier(at) \|\| !reachableByName(checker, at)) re...` -> `if (!ts.isIdentifier(at)) return [];` | real typescript: a local variable with an untyped member of the same name still... | killed |
+| `T3-14-typed-use-counts-as-untyped` | `src/platform/tsserver_host.js` | `untyped = Boolean(checker.getTypeAtLocation(node.expression).fl...` -> `untyped = true;` | real typescript: a member use with a known type elsewhere does not block the re... | killed |
+| `T3-15-shorthand-loses-key` | `src/platform/tsserver_host.js` | `const text = held && keepsObjectKey(l) ? held : l;` -> `const text = l;` | real typescript: an object shorthand of a renamed function keeps its key | killed |
+| `T3-16-export-shorthand-keeps-key` | `src/platform/tsserver_host.js` | `return !/^(module\.)?exports\b/.test(owner.left.getText(source)...` -> `return true;` | real typescript: a commonjs export shorthand follows the rename | killed |
+| `T3-17-using-static-user-left-behind` | `src/platform/cs_symbol_move.zig` | `try cs.insertUsing(arena, unit, using_static_line, &refs.edits)...` -> `` | csharp move: a member reached through using static brings the new using static ... | killed |
+| `T3-18-using-static-added-twice` | `src/platform/cs_symbol_move.zig` | `if (!try hasUsingStatic(arena, unit, full_target)) {` -> `if (true) {` | csharp move: a using static already naming the receiving type is not added twice | killed |
+| `T3-19-using-static-capture-accepted` | `src/platform/cs_symbol_move.zig` | `if ((try cs.mentions(arena, unit, target_members)).len != 0) re...` -> `` | csharp move: a using static user that also names a member of the receiving type... | killed |
+| `T3-20-new-type-clash-accepted` | `src/platform/cs_symbol_move.zig` | `if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) r...` -> `` | csharp move: a new target type the namespace already has is refused | killed |
 
 ## What this system does not prove
 

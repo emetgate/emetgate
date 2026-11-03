@@ -6,6 +6,7 @@ const modules = @import("../engine/modules.zig");
 const tsserver = @import("tsserver.zig");
 const batch_plan = @import("batch_plan.zig");
 const py = @import("py_modules.zig");
+const rename = @import("../engine/rename.zig");
 const cs = @import("cs_modules.zig");
 const mb = @import("move_batch.zig");
 const paths = @import("module_paths.zig");
@@ -570,8 +571,7 @@ fn newOwnerText(arena: Allocator, index: *const Index, unit: Unit, scopes: []con
     return std.fmt.allocPrint(arena, "{s}.{s}", .{ owner.namespace, owner.name });
 }
 
-fn refusals(arena: Allocator, index: *const Index, unit: Unit, full_owner: []const u8, owner_short: []const u8, member: []const u8, owner_namespace: []const u8) !void {
-    const tree = &unit.snapshot.tree;
+fn reachedByUsingStatic(arena: Allocator, unit: Unit, full_owner: []const u8, member: []const u8) !bool {
     for (unit.usings) |entry| {
         if (entry.spec_kind != .using_static) continue;
         const text = try cs.clean(arena, entry.spec);
@@ -580,8 +580,20 @@ fn refusals(arena: Allocator, index: *const Index, unit: Unit, full_owner: []con
         while (current.len != 0) : (current = cs.parentOf(current)) {
             if (std.mem.eql(u8, try cs.join(arena, current, text), full_owner)) hit = true;
         }
-        if (hit and (try cs.mentions(arena, unit, &.{member})).len != 0) return error.MoveMemberDependency;
+        if (hit and (try cs.mentions(arena, unit, &.{member})).len != 0) return true;
     }
+    return false;
+}
+
+fn hasUsingStatic(arena: Allocator, unit: Unit, full: []const u8) !bool {
+    for (unit.usings) |entry| {
+        if (entry.spec_kind == .using_static and std.mem.eql(u8, try cs.clean(arena, entry.spec), full)) return true;
+    }
+    return false;
+}
+
+fn refusals(arena: Allocator, index: *const Index, unit: Unit, full_owner: []const u8, owner_short: []const u8, member: []const u8, owner_namespace: []const u8) !void {
+    const tree = &unit.snapshot.tree;
     for (unit.usings) |entry| {
         if (entry.spec_kind != .using_alias) continue;
         if (!std.mem.eql(u8, try cs.clean(arena, entry.spec), full_owner)) continue;
@@ -747,6 +759,21 @@ fn isExtension(snapshot: *const Snapshot, declaration: ts.Node) bool {
     return false;
 }
 
+fn scaffold(cx: anytype, request: mb.Request, source: *Snapshot, owner: Owner, opened: *std.ArrayList(*Snapshot)) !*Snapshot {
+    const arena = cx.arena;
+    const name = request.target_type orelse return error.MoveNeedsTargetType;
+    if (!rename.validName(name)) return error.MoveNeedsTargetType;
+    const newline = cs.newlineOf(source.source);
+    const access: []const u8 = if (cs.modifierOn(source, owner.node, "public")) "public" else "internal";
+    const text = if (owner.namespace.len == 0)
+        try std.mem.concat(arena, u8, &.{ access, " static class ", name, newline, "{", newline, "}", newline })
+    else
+        try std.mem.concat(arena, u8, &.{ "namespace ", owner.namespace, ";", newline, newline, access, " static class ", name, newline, "{", newline, "}", newline });
+    const snapshot = try py.load(cx, request.target_abs, text);
+    try opened.append(arena, snapshot);
+    return snapshot;
+}
+
 fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snapshot, located: Located, opened: *std.ArrayList(*Snapshot)) !mb.Plan {
     const arena = w.arena;
     const cx = cxOf(w);
@@ -781,7 +808,8 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
     const owner: Owner = .{ .node = owner_node, .body = body, .name = owner_name, .namespace = (try cs.scopesAt(arena, source_unit, owner_node))[0] };
     const full_owner = try cs.join(arena, owner.namespace, owner.name);
 
-    const target_snapshot = if (same_file) source else (target orelse return error.MoveNeedsTargetType);
+    const creating = !same_file and target == null;
+    const target_snapshot = if (same_file) source else if (target) |t| t else try scaffold(cx, request, source, owner, opened);
     const target_unit = if (same_file) source_unit else try cs.unitOf(arena, request.target_abs, target_snapshot);
     const target_owner = try findTargetType(arena, target_unit, request.target_type, if (same_file) owner_node else null);
     if (std.mem.eql(u8, target_owner.node.kind(), "enum_declaration") or std.mem.eql(u8, target_owner.node.kind(), "delegate_declaration") or std.mem.eql(u8, target_owner.node.kind(), "interface_declaration")) return error.MoveNeedsTargetType;
@@ -791,8 +819,13 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
     var known: std.ArrayList(Unit) = .empty;
     try known.append(arena, source_unit);
     if (!same_file) try known.append(arena, target_unit);
-    const units = try cs.loadUnits(cx, known.items, opened, &.{ member, owner.name });
+    const units = try cs.loadUnits(cx, known.items, opened, if (creating) &.{ member, owner.name, target_owner.name } else &.{ member, owner.name });
     const index = try Index.init(arena, units);
+    if (creating) for (units) |unit| {
+        if (tsserver.sameFile(unit.abs, request.target_abs)) continue;
+        const clash = findTargetType(arena, unit, target_owner.name, null) catch continue;
+        if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) return error.TargetNameTaken;
+    };
 
     const own_members = try memberNames(arena, source, owner.body);
     var duplicates: usize = 0;
@@ -830,6 +863,8 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
     var references: usize = 0;
     var usings_added: usize = 0;
     const using_line = try std.fmt.allocPrint(arena, "using {s};", .{target_owner.namespace});
+    const full_target = try cs.join(arena, target_owner.namespace, target_owner.name);
+    const using_static_line = try std.fmt.allocPrint(arena, "using static {s};", .{full_target});
     for (units) |unit| {
         try refusals(arena, &index, unit, full_owner, owner.name, member, owner.namespace);
         const is_source = tsserver.sameFile(unit.abs, request.file_abs);
@@ -839,6 +874,14 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
         if (refs.need_using) {
             try cs.insertUsing(arena, unit, using_line, &refs.edits);
             usings_added += 1;
+        }
+        if (try reachedByUsingStatic(arena, unit, full_owner, member)) {
+            if (is_source or is_target) return error.MoveMemberDependency;
+            if ((try cs.mentions(arena, unit, target_members)).len != 0) return error.MoveMemberDependency;
+            if (!try hasUsingStatic(arena, unit, full_target)) {
+                try cs.insertUsing(arena, unit, using_static_line, &refs.edits);
+                usings_added += 1;
+            }
         }
         if (is_source) {
             try source_edits.appendSlice(arena, refs.edits.items);
@@ -891,7 +934,7 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
         const at = std.mem.lastIndexOf(u8, after_target, moved_text) orelse return error.IncompleteMove;
         moved_span = .{ .start = @intCast(at), .end = @intCast(at + moved_text.len) };
         outputs.items[0] = .{ .abs = request.file_abs, .before = source, .text = after_source, .holes = try mb.holesOf(arena, source_moved) };
-        outputs.items[1] = .{ .abs = request.target_abs, .before = target_snapshot, .text = after_target, .ref_text = member, .body = moved_span, .holes = try mb.holesOf(arena, target_moved) };
+        outputs.items[1] = .{ .abs = request.target_abs, .before = target, .creates = creating, .text = after_target, .ref_text = member, .body = moved_span, .holes = try mb.holesOf(arena, target_moved) };
     }
 
     var afters: std.ArrayList(*Snapshot) = .empty;
@@ -942,7 +985,7 @@ fn planMember(w: mb.Work, request: mb.Request, source: *Snapshot, target: ?*Snap
         .fallback = null,
         .interface_change = interface_change,
         .order_change = order_change,
-        .creates_target = false,
+        .creates_target = creating,
         .users = users,
         .imports_added = needed.len + usings_added,
         .moved_hash = moved_hash,

@@ -5451,7 +5451,7 @@
       "from": "    if (try rename.exportedName(gpa, base, old)) return error.RenameUnresolved;\n",
       "to": "",
       "kills": [
-        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+        "rename: a language service that dies leaves an exported symbol or a name another file mentions unresolved"
       ]
     },
     {
@@ -5460,7 +5460,7 @@
       "from": "        if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnresolved;",
       "to": "        if (abs.len == 0) return error.RenameUnresolved;",
       "kills": [
-        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+        "rename: a language service that dies leaves an exported symbol or a name another file mentions unresolved"
       ]
     },
     {
@@ -5469,7 +5469,7 @@
       "from": "    if (try rename.binderCount(gpa, base, old) != 1) return error.RenameUnresolved;\n",
       "to": "",
       "kills": [
-        "rename: without the language service a local name with a second binder is unresolved"
+        "rename: a language service that dies leaves a local name with a second binder unresolved"
       ]
     },
     {
@@ -5908,8 +5908,8 @@
     {
       "id": "FM11-literal-require-accepted",
       "file": "src/platform/file_move.zig",
-      "from": "                if (tsserver.sameFile(target, request.from_abs)) return error.DynamicPathUse;",
-      "to": "                _ = target;",
+      "from": "                if (!service_missing and snapshot.profile.facts.?.commonjs == null) return error.DynamicPathUse;",
+      "to": "",
       "kills": [
         "move file: a require or a computed import that reaches the file is refused"
       ]
@@ -12425,7 +12425,7 @@
     {
       "id": "CSR1-facts-resolver-never-chosen",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
       "to": "    if (false and rename_graph.supports(base.profile)) {",
       "kills": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call",
@@ -12436,7 +12436,7 @@
     {
       "id": "CSR2-facts-resolver-for-service-languages",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
       "to": "    if (rename_graph.supports(base.profile)) {",
       "kills": [
         "rename kinds: a class is renamed in its declaration, an import, extends, a return type, a variable type and new"
@@ -18621,6 +18621,187 @@
       "to": "",
       "kills": [
         "commit guard: a message rule refuses the commit and names the rule"
+      ]
+    },
+    {
+      "id": "T3-1-missing-service-keeps-refusing",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
+      "to": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "kills": [
+        "js without typescript: a method called on a new object is renamed by the facts resolver"
+      ]
+    },
+    {
+      "id": "T3-2-service-missing-ignored",
+      "file": "src/platform/tsserver.zig",
+      "from": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return true;",
+      "to": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return false;",
+      "kills": [
+        "js without typescript: moving a file rewrites import, require and literal import()"
+      ]
+    },
+    {
+      "id": "T3-3-text-move-with-users-refused",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (resolver == .text and users != 0 and !service_missing) return error.FileMoveUnresolved;",
+      "to": "    if (resolver == .text and users != 0) return error.FileMoveUnresolved;",
+      "kills": [
+        "js without typescript: moving a file rewrites import, require and literal import()"
+      ]
+    },
+    {
+      "id": "T3-4-alias-import-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
+      "to": "",
+      "kills": [
+        "js without typescript: an alias import ending in the file's name is refused"
+      ]
+    },
+    {
+      "id": "T3-5-installed-package-counts-as-alias",
+      "file": "src/platform/file_move.zig",
+      "from": "                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
+      "to": "                if (aliasMayNameFile(entry.spec, stem, base_url)) return error.FileMoveUnresolved;",
+      "kills": [
+        "js without typescript: an import of an installed package with the file's name is not an alias"
+      ]
+    },
+    {
+      "id": "T3-6-self-locating-file-moves",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (locatesItself(moved.source)) return error.DynamicPathUse;",
+      "to": "",
+      "kills": [
+        "js without typescript: a moved file that locates itself is refused"
+      ]
+    },
+    {
+      "id": "T3-7-path-in-string-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "        if (try namesPathInString(w, before, snapshot, abs, request.from_abs, edits.rewrites.items)) return error.DynamicPathUse;",
+      "to": "",
+      "kills": [
+        "js without typescript: a string naming the file's path is refused"
+      ]
+    },
+    {
+      "id": "T3-8-shorthand-accepted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (leaf.shorthand) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
+      "to": "                if (false) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
+      "kills": [
+        "js without typescript: an object shorthand of a renamed function is refused"
+      ]
+    },
+    {
+      "id": "T3-9-commonjs-user-ignored",
+      "file": "src/platform/move_batch.zig",
+      "from": "            if (!isUser(users.items, abs)) return error.MoveUnresolved;",
+      "to": "",
+      "kills": [
+        "js without typescript: moving a function a commonjs file requires is refused"
+      ]
+    },
+    {
+      "id": "T3-10-requires-not-collected",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (self.f.commonjs) |cjs| try self.collectRequires(cjs);",
+      "to": "",
+      "kills": [
+        "js without typescript: destructured require follows a commonjs rename"
+      ]
+    },
+    {
+      "id": "T3-11-untyped-uses-ignored",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (answer.value.unresolved.len != 0) {",
+      "to": "    if (false) {",
+      "kills": [
+        "real typescript: a member reached through an untyped parameter is refused and names the site"
+      ]
+    },
+    {
+      "id": "T3-12-host-reports-no-untyped-use",
+      "file": "src/platform/tsserver_host.js",
+      "from": "    return { can_rename: true, locations: locations, unresolved: untypedUses(request.file, position, found) };",
+      "to": "    return { can_rename: true, locations: locations, unresolved: [] };",
+      "kills": [
+        "real typescript: a member reached through an untyped parameter is refused and names the site",
+        "real typescript: a destructured parameter with no type is refused"
+      ]
+    },
+    {
+      "id": "T3-13-local-counts-as-member",
+      "file": "src/platform/tsserver_host.js",
+      "from": "  if (!ts.isIdentifier(at) || !reachableByName(checker, at)) return [];",
+      "to": "  if (!ts.isIdentifier(at)) return [];",
+      "kills": [
+        "real typescript: a local variable with an untyped member of the same name still renames"
+      ]
+    },
+    {
+      "id": "T3-14-typed-use-counts-as-untyped",
+      "file": "src/platform/tsserver_host.js",
+      "from": "        untyped = Boolean(checker.getTypeAtLocation(node.expression).flags & ts.TypeFlags.Any);",
+      "to": "        untyped = true;",
+      "kills": [
+        "real typescript: a member use with a known type elsewhere does not block the rename"
+      ]
+    },
+    {
+      "id": "T3-15-shorthand-loses-key",
+      "file": "src/platform/tsserver_host.js",
+      "from": "      const text = held && keepsObjectKey(l) ? held : l;",
+      "to": "      const text = l;",
+      "kills": [
+        "real typescript: an object shorthand of a renamed function keeps its key"
+      ]
+    },
+    {
+      "id": "T3-16-export-shorthand-keeps-key",
+      "file": "src/platform/tsserver_host.js",
+      "from": "  return !/^(module\\.)?exports\\b/.test(owner.left.getText(source));",
+      "to": "  return true;",
+      "kills": [
+        "real typescript: a commonjs export shorthand follows the rename"
+      ]
+    },
+    {
+      "id": "T3-17-using-static-user-left-behind",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "                try cs.insertUsing(arena, unit, using_static_line, &refs.edits);\n                usings_added += 1;",
+      "to": "",
+      "kills": [
+        "csharp move: a member reached through using static brings the new using static along"
+      ]
+    },
+    {
+      "id": "T3-18-using-static-added-twice",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            if (!try hasUsingStatic(arena, unit, full_target)) {",
+      "to": "            if (true) {",
+      "kills": [
+        "csharp move: a using static already naming the receiving type is not added twice"
+      ]
+    },
+    {
+      "id": "T3-19-using-static-capture-accepted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            if ((try cs.mentions(arena, unit, target_members)).len != 0) return error.MoveMemberDependency;",
+      "to": "",
+      "kills": [
+        "csharp move: a using static user that also names a member of the receiving type is refused"
+      ]
+    },
+    {
+      "id": "T3-20-new-type-clash-accepted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "        if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) return error.TargetNameTaken;",
+      "to": "",
+      "kills": [
+        "csharp move: a new target type the namespace already has is refused"
       ]
     }
   ]

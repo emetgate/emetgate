@@ -314,6 +314,7 @@ const CsharpWalk = struct {
 
 pub const DynamicSpec = struct {
     literal: ?[]const u8,
+    start: u32 = 0,
 };
 
 pub fn dynamicSpecs(arena: Allocator, snapshot: *const Snapshot) ![]DynamicSpec {
@@ -328,7 +329,7 @@ pub fn dynamicSpecs(arena: Allocator, snapshot: *const Snapshot) ![]DynamicSpec 
                     const arguments = node.childByField(snapshot.profile.call.arguments_field);
                     const first = if (arguments) |a| a.namedChild(0) else null;
                     const literal = if (first) |f| (if (std.mem.eql(u8, f.kind(), g.literal_argument) and arguments.?.namedChildCount() == 1) unquoted(snapshot.tree.text(f)) else null) else null;
-                    try out.append(arena, .{ .literal = literal });
+                    try out.append(arena, .{ .literal = literal, .start = if (first) |f| f.startByte() + 1 else 0 });
                 }
             }
         }

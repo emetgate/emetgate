@@ -276,6 +276,7 @@ test {
     _ = @import("tests/move_tool.zig");
     _ = @import("tests/move_python.zig");
     _ = @import("tests/move_csharp.zig");
+    _ = @import("tests/js_without_service.zig");
     _ = @import("tests/node_tool.zig");
     _ = @import("tests/redteam_node.zig");
     _ = @import("tests/create_kinds.zig");

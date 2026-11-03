@@ -194,14 +194,15 @@ test "rename kinds: a local export alias keeps its public name and only the loca
     try case.expectFile("src/engine.ts", expected);
 }
 
-test "rename kinds: without the language service a local class is renamed by the text path, a type and a value of one name are unresolved" {
+test "rename kinds: a language service that dies leaves a local class to the text path, a type and a value of one name unresolved" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     {
         const source = "class Cache {\n  size = 0;\n}\nexport function make(): number {\n  const c: Cache = new Cache();\n  return c.size;\n}\n";
         const expected = "class Store {\n  size = 0;\n}\nexport function make(): number {\n  const c: Store = new Store();\n  return c.size;\n}\n";
         var case: Case = undefined;
-        try case.init(&.{.{ .rel = "src/cache.ts", .text = source }}, false);
+        try case.init(&.{.{ .rel = "src/cache.ts", .text = source }}, true);
         defer case.deinit();
+        try case.repo.setPlan("{\"exit\":true}");
         const outcome = try renameDeclaration(&case, "src/cache.ts", "Cache", "Store", false);
         defer outcome.deinit(testing.allocator);
         try expectCommitted(outcome);
@@ -210,8 +211,9 @@ test "rename kinds: without the language service a local class is renamed by the
     }
     const both = "type Mode = number;\nconst Mode = 1;\nexport function f(m: Mode): number {\n  return m + Mode;\n}\n";
     var case: Case = undefined;
-    try case.init(&.{.{ .rel = "src/mode.ts", .text = both }}, false);
+    try case.init(&.{.{ .rel = "src/mode.ts", .text = both }}, true);
     defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
     try testing.expectError(error.RenameUnresolved, renameDeclaration(&case, "src/mode.ts", "Mode", "Kind", false));
     try case.expectFile("src/mode.ts", both);
 }

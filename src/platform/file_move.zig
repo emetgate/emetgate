@@ -19,6 +19,7 @@ const py_file_move = @import("py_file_move.zig");
 const cs = @import("cs_modules.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
+const traversal = @import("../engine/traversal.zig");
 
 const Allocator = std.mem.Allocator;
 const Prepared = batch_plan.Prepared;
@@ -257,6 +258,79 @@ fn crossCheck(w: Work, session: *tsserver.Session, from_abs: []const u8, to_abs:
     }
 }
 
+fn locatesItself(source: []const u8) bool {
+    for ([_][]const u8{ "import.meta.url", "import.meta.dirname", "import.meta.filename", "__dirname", "__filename" }) |word| {
+        if (std.mem.indexOf(u8, source, word) != null) return true;
+    }
+    return false;
+}
+
+fn namesPathInString(w: Work, before: paths.Existing, snapshot: *const Snapshot, abs: []const u8, from_abs: []const u8, rewrites: []const Rewrite) !bool {
+    const g = snapshot.profile.rename orelse return false;
+    const m = snapshot.profile.modules orelse return false;
+    const base = std.fs.path.basename(from_abs);
+    var walker = traversal.Walker.init(snapshot.tree.root());
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const node = entry.node;
+        const kind = node.kind();
+        if (std.mem.eql(u8, kind, m.import_statement) or std.mem.eql(u8, kind, m.export_statement)) {
+            if (node.childByField(m.source_field) != null) {
+                walker.skipChildren();
+                continue;
+            }
+        }
+        if (!std.mem.eql(u8, kind, g.literal_argument)) continue;
+        walker.skipChildren();
+        const start = node.startByte() + 1;
+        var rewritten = false;
+        for (rewrites) |r| {
+            if (r.start == start) rewritten = true;
+        }
+        if (rewritten) continue;
+        const raw = snapshot.tree.text(node);
+        if (raw.len < 2) continue;
+        const inner = raw[1 .. raw.len - 1];
+        if (paths.isRelative(inner)) {
+            const target = (try paths.resolveSpec(w.arena, before, abs, inner)) orelse continue;
+            if (tsserver.sameFile(target, from_abs)) return true;
+            continue;
+        }
+        if (inner.len > base.len and std.mem.endsWith(u8, inner, base)) {
+            const separator = inner[inner.len - base.len - 1];
+            if (separator == '/' or separator == '\\') return true;
+        }
+    }
+    return false;
+}
+
+fn declaresBaseUrl(w: Work) !bool {
+    for ([_][]const u8{ "tsconfig.json", "jsconfig.json" }) |name| {
+        const abs = try std.fmt.allocPrint(w.arena, "{s}\\{s}", .{ w.root, name });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(w.io, abs, w.arena, .limited(1024 * 1024)) catch continue;
+        if (std.mem.indexOf(u8, bytes, "\"baseUrl\"") != null) return true;
+    }
+    return false;
+}
+
+fn installedPackage(w: Work, spec: []const u8) !bool {
+    var parts = std.mem.splitScalar(u8, spec, '/');
+    const first = parts.first();
+    const second = parts.next() orelse "";
+    const name = if (first.len != 0 and first[0] == '@') try std.fmt.allocPrint(w.arena, "{s}\\{s}", .{ first, second }) else first;
+    const abs = try std.fmt.allocPrint(w.arena, "{s}\\node_modules\\{s}", .{ w.root, name });
+    std.Io.Dir.cwd().access(w.io, abs, .{}) catch return false;
+    return true;
+}
+
+fn aliasMayNameFile(spec: []const u8, stem: []const u8, base_url: bool) bool {
+    const slash = std.mem.lastIndexOfScalar(u8, spec, '/');
+    const last = if (slash) |s| spec[s + 1 ..] else spec;
+    const bare = last[0 .. std.mem.lastIndexOfScalar(u8, last, '.') orelse last.len];
+    if (!std.mem.eql(u8, bare, stem)) return false;
+    return slash != null or base_url;
+}
+
 pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, request: Request, session: ?*tsserver.Session) !Plan {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -299,11 +373,20 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         const span = specSpan(own_style_source, entry.spec);
         try files.items[0].rewrites.append(arena, .{ .file = request.from_abs, .start = span.start, .end = span.end, .text = spec, .resolved = target });
     }
+    const service_missing = if (session) |s| s.missing() else false;
+    const rewrite_literals = service_missing or moved.profile.facts.?.commonjs != null;
     for (try modules.dynamicSpecs(arena, moved)) |d| {
         const literal = d.literal orelse return error.DynamicPathUse;
-        if (paths.isRelative(literal)) return error.DynamicPathUse;
+        if (!paths.isRelative(literal)) continue;
+        if (!rewrite_literals) return error.DynamicPathUse;
+        const target = (try paths.resolveSpec(arena, before, request.from_abs, literal)) orelse return error.DynamicPathUse;
+        const spec = try paths.relativeSpec(arena, request.to_abs, target, paths.emittedExtension(paths.specExtension(literal), target));
+        if (std.mem.eql(u8, spec, literal)) continue;
+        try files.items[0].rewrites.append(arena, .{ .file = request.from_abs, .start = d.start, .end = d.start + @as(u32, @intCast(literal.len)), .text = spec, .resolved = target });
     }
+    if (locatesItself(moved.source)) return error.DynamicPathUse;
 
+    const base_url = try declaresBaseUrl(w);
     var users: usize = 0;
     var skipped_user = false;
     const stem = stemOf(request.from_abs);
@@ -320,7 +403,10 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
         try opened.append(arena, snapshot);
         var edits: FileEdits = .{ .abs = abs, .snapshot = snapshot };
         for (try modules.imports(arena, snapshot)) |entry| {
-            if (!paths.isRelative(entry.spec)) continue;
+            if (!paths.isRelative(entry.spec)) {
+                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;
+                continue;
+            }
             const target = (try paths.resolveSpec(arena, before, abs, entry.spec)) orelse continue;
             if (!tsserver.sameFile(target, request.from_abs)) continue;
             const spec = try paths.relativeSpec(arena, abs, request.to_abs, paths.emittedExtension(paths.specExtension(entry.spec), request.to_abs));
@@ -331,9 +417,13 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             if (d.literal) |literal| {
                 if (!paths.isRelative(literal)) continue;
                 const target = (try paths.resolveSpec(arena, before, abs, literal)) orelse continue;
-                if (tsserver.sameFile(target, request.from_abs)) return error.DynamicPathUse;
+                if (!tsserver.sameFile(target, request.from_abs)) continue;
+                if (!service_missing and snapshot.profile.facts.?.commonjs == null) return error.DynamicPathUse;
+                const spec = try paths.relativeSpec(arena, abs, request.to_abs, paths.emittedExtension(paths.specExtension(literal), request.to_abs));
+                try edits.rewrites.append(arena, .{ .file = abs, .start = d.start, .end = d.start + @as(u32, @intCast(literal.len)), .text = spec, .resolved = request.to_abs });
             } else if (std.mem.indexOf(u8, snapshot.source, stem) != null) return error.DynamicPathUse;
         }
+        if (try namesPathInString(w, before, snapshot, abs, request.from_abs, edits.rewrites.items)) return error.DynamicPathUse;
         if (edits.rewrites.items.len == 0) continue;
         users += 1;
         if (faulted(.skip_user) and !skipped_user) {
@@ -357,7 +447,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             },
         }
     }
-    if (resolver == .text and users != 0) return error.FileMoveUnresolved;
+    if (resolver == .text and users != 0 and !service_missing) return error.FileMoveUnresolved;
 
     var texts: std.ArrayList([]const u8) = .empty;
     var afters: std.ArrayList(*Snapshot) = .empty;
@@ -373,7 +463,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
             else => |e| return e,
         };
         try afters.append(arena, snapshot);
-        try proveUnchanged(f.snapshot, snapshot);
+        try proveOnlyRewritten(f.snapshot, snapshot, f.rewrites.items, false);
         for (f.rewrites.items) |r| {
             const importer = if (i == 0) request.to_abs else f.abs;
             const resolved = (try paths.resolveSpec(arena, after, importer, r.text)) orelse return error.UnresolvedImport;
@@ -498,18 +588,6 @@ fn rewriteHoles(gpa: Allocator, rewrites: []const Rewrite) ![]symbol.Hole {
         hole.* = .{ .old = .{ .start = r.start, .end = r.end }, .new = .{ .start = start, .end = end } };
     }
     return holes;
-}
-
-fn proveUnchanged(before: *Snapshot, after: *Snapshot) !void {
-    const a = try before.symbols();
-    const b = after.symbols() catch return error.MutationSyntaxInvalid;
-    if (a.symbols.len != b.symbols.len or a.declarations.len != b.declarations.len) return error.BodyChanged;
-    for (a.symbols, b.symbols) |x, y| {
-        if (!x.ref.eql(y.ref) or !std.mem.eql(u8, &x.hash, &y.hash)) return error.BodyChanged;
-    }
-    for (a.declarations, b.declarations) |x, y| {
-        if (!x.ref.eql(y.ref) or !std.mem.eql(u8, &x.hash, &y.hash)) return error.BodyChanged;
-    }
 }
 
 fn proveNoStaleImport(w: Work, after: paths.Existing, request: Request, files: []const FileEdits, texts: []const []const u8) !void {

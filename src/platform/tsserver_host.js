@@ -79,6 +79,73 @@ function span(file, textSpan) {
   return { file: file, start: toBytes(text, textSpan.start), end: toBytes(text, textSpan.start + textSpan.length) };
 }
 
+function nodeAt(source, position) {
+  let node = source;
+  for (;;) {
+    const inner = ts.forEachChild(node, (child) => (child.getStart(source) <= position && position < child.end ? child : undefined));
+    if (!inner) return node;
+    node = inner;
+  }
+}
+
+function keepsObjectKey(location) {
+  const source = sourceOf(location.fileName);
+  const shorthand = nodeAt(source, location.textSpan.start).parent;
+  if (!shorthand || !ts.isShorthandPropertyAssignment(shorthand)) return false;
+  const owner = shorthand.parent.parent;
+  if (!owner || !ts.isBinaryExpression(owner)) return true;
+  return !/^(module\.)?exports\b/.test(owner.left.getText(source));
+}
+
+function reachableByName(checker, node) {
+  let symbol = checker.getSymbolAtLocation(node);
+  if (!symbol) return false;
+  if (symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+  if (symbol.flags & (ts.SymbolFlags.Property | ts.SymbolFlags.Method | ts.SymbolFlags.Accessor)) return true;
+  return Boolean(checker.getExportSymbolOfSymbol(symbol).parent);
+}
+
+function untypedBinding(checker, pattern, name) {
+  const type = checker.getTypeAtLocation(pattern);
+  if (type.flags & ts.TypeFlags.Any) return true;
+  const property = type.getProperty(name);
+  return !property || !property.declarations || property.declarations.every((d) => ts.isBindingElement(d));
+}
+
+function untypedUses(file, position, found) {
+  const program = service.getProgram();
+  const checker = program.getTypeChecker();
+  const at = nodeAt(sourceOf(file), position);
+  if (!ts.isIdentifier(at) || !reachableByName(checker, at)) return [];
+  const name = at.text;
+  const covered = new Set(found.map((l) => l.fileName + ':' + l.textSpan.start));
+  const out = [];
+  for (const source of program.getSourceFiles()) {
+    if (source.isDeclarationFile || program.isSourceFileFromExternalLibrary(source) || !source.text.includes(name)) continue;
+    const visit = (node) => {
+      let id = null;
+      let untyped = false;
+      if (ts.isPropertyAccessExpression(node) && node.name.text === name) {
+        id = node.name;
+        untyped = Boolean(checker.getTypeAtLocation(node.expression).flags & ts.TypeFlags.Any);
+      } else if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+        const key = node.propertyName || node.name;
+        if (ts.isIdentifier(key) && key.text === name) {
+          id = key;
+          untyped = untypedBinding(checker, node.parent, name);
+        }
+      }
+      if (id && untyped && !covered.has(source.fileName + ':' + id.getStart(source))) {
+        const start = id.getStart(source);
+        out.push({ file: source.fileName, start: toBytes(source.text, start), end: toBytes(source.text, id.end) });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return out;
+}
+
 function handle(request) {
   load();
   if (request.op === 'ping') return { version: String(ts.version) };
@@ -97,9 +164,20 @@ function handle(request) {
   if (request.op === 'rename') {
     const info = service.getRenameInfo(request.file, position, { allowRenameOfImportPath: false });
     if (!info.canRename) return { can_rename: false, reason: String(info.localizedErrorMessage || '') };
-    const found = service.findRenameLocations(request.file, position, false, false, { providePrefixAndSuffixTextForRename: request.keep_keys !== false }) || [];
-    const locations = found.map((l) => Object.assign(span(l.fileName, l.textSpan), { prefix: String(l.prefixText || ''), suffix: String(l.suffixText || '') }));
-    return { can_rename: true, locations: locations };
+    const keep = request.keep_keys !== false;
+    const found = service.findRenameLocations(request.file, position, false, false, { providePrefixAndSuffixTextForRename: keep }) || [];
+    const kept = new Map();
+    if (!keep) {
+      for (const l of service.findRenameLocations(request.file, position, false, false, { providePrefixAndSuffixTextForRename: true }) || []) {
+        if (l.prefixText || l.suffixText) kept.set(l.fileName + ':' + l.textSpan.start, l);
+      }
+    }
+    const locations = found.map((l) => {
+      const held = kept.get(l.fileName + ':' + l.textSpan.start);
+      const text = held && keepsObjectKey(l) ? held : l;
+      return Object.assign(span(l.fileName, l.textSpan), { prefix: String(text.prefixText || ''), suffix: String(text.suffixText || '') });
+    });
+    return { can_rename: true, locations: locations, unresolved: untypedUses(request.file, position, found) };
   }
   if (request.op === 'references') {
     const references = [];

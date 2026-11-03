@@ -1454,7 +1454,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "CsPartialType", "a partial type is declared in several files and they must share a namespace: move the parts together with emetgate_try_batch" },
     .{ "CsFileScopedType", "a `file` type is only visible inside its own file: remove the modifier first, then retry" },
     .{ "CsTargetNamespace", "the target has several namespaces, or a different global namespace layout, so the type has no single place: pick another target" },
-    .{ "MoveNeedsTargetType", "name the receiving type with target_type: the target file has more than one type or none" },
+    .{ "MoveNeedsTargetType", "name the receiving type with target_type: the target file has more than one type or none, or does not exist yet" },
     .{ "MoveMemberDependency", "the member uses other members of its own type without qualifying them, or is reached through a derived type or `using static`: qualify those uses or make it an instance of the target type first" },
     .{ "MoveNotStatic", "only static or const members can move between types: an instance member depends on its object, so refactor with emetgate_try_batch" },
     .{ "ExportDefault", "a default export cannot be moved; move it by hand with emetgate_try_batch" },

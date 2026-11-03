@@ -319,6 +319,84 @@ const Extractor = struct {
                 },
             }
         }
+        if (self.f.commonjs) |cjs| try self.collectRequires(cjs);
+    }
+
+    fn collectRequires(self: *Extractor, cjs: profile_mod.CommonJs) Error!void {
+        const root = self.snapshot.tree.root();
+        var i: u32 = 0;
+        while (root.namedChild(i)) |statement| : (i += 1) {
+            if (!oneOf(statement.kind(), cjs.variable_kinds)) continue;
+            var j: u32 = 0;
+            while (statement.namedChild(j)) |declarator| : (j += 1) {
+                if (!std.mem.eql(u8, declarator.kind(), self.profile.declarator)) continue;
+                const value = declarator.childByField("value") orelse continue;
+                if (!std.mem.eql(u8, value.kind(), self.profile.call.node)) continue;
+                const callee = value.childByField(self.profile.call.function_field) orelse continue;
+                if (!std.mem.eql(u8, self.raw(callee), cjs.loader) or self.binderOfUse(callee.startByte()) != null) continue;
+                const arguments = value.childByField(self.profile.call.arguments_field) orelse continue;
+                const literal = arguments.namedChild(0) orelse continue;
+                if (arguments.namedChildCount() != 1 or !std.mem.eql(u8, literal.kind(), self.g.literal_argument)) continue;
+                const name = declarator.childByField("name") orelse continue;
+                self.module_mode = true;
+                const spec: u32 = @intCast(self.specs.items.len);
+                try self.specs.append(self.arena, .{ .text = try self.keep(unquote(self.raw(literal))), .line = lineOf(literal), .kind = .dynamic });
+                if (std.mem.eql(u8, name.kind(), self.profile.identifier)) {
+                    _ = try self.addBinding(spec, facts.namespace_name, try self.text(name), name.startByte(), false);
+                    continue;
+                }
+                if (!std.mem.eql(u8, name.kind(), cjs.object_pattern)) continue;
+                var k: u32 = 0;
+                while (name.namedChild(k)) |part| : (k += 1) {
+                    if (std.mem.eql(u8, part.kind(), cjs.shorthand_pattern)) {
+                        const shown = try self.text(part);
+                        const b = try self.addBinding(spec, shown, shown, part.startByte(), false);
+                        try self.addImportRef(shown, part.startByte(), b);
+                    } else if (std.mem.eql(u8, part.kind(), cjs.pair_pattern)) {
+                        const key = part.childByField("key") orelse continue;
+                        const local = part.childByField("value") orelse continue;
+                        if (!std.mem.eql(u8, local.kind(), self.profile.identifier)) continue;
+                        const b = try self.addBinding(spec, try self.text(key), try self.text(local), local.startByte(), false);
+                        try self.addImportRef(try self.text(key), key.startByte(), b);
+                    }
+                }
+            }
+        }
+    }
+
+    fn collectModuleExports(self: *Extractor, cjs: profile_mod.CommonJs) Error!void {
+        const root = self.snapshot.tree.root();
+        var i: u32 = 0;
+        while (root.namedChild(i)) |statement| : (i += 1) {
+            if (!std.mem.eql(u8, statement.kind(), cjs.expression_statement)) continue;
+            const assignment = statement.namedChild(0) orelse continue;
+            if (!std.mem.eql(u8, assignment.kind(), cjs.assignment)) continue;
+            const left = self.raw(assignment.childByField("left") orelse continue);
+            const right = assignment.childByField("right") orelse continue;
+            if (std.mem.eql(u8, left, cjs.module_exports)) {
+                self.module_mode = true;
+                if (!std.mem.eql(u8, right.kind(), cjs.object)) continue;
+                var j: u32 = 0;
+                while (right.namedChild(j)) |part| : (j += 1) {
+                    if (std.mem.eql(u8, part.kind(), cjs.shorthand)) {
+                        try self.exportBinder(try self.text(part), part.startByte());
+                    } else if (std.mem.eql(u8, part.kind(), cjs.pair)) {
+                        const key = part.childByField("key") orelse continue;
+                        const value = part.childByField("value") orelse continue;
+                        try self.exportName(try self.text(key), value);
+                    }
+                }
+                continue;
+            }
+            const name = if (std.mem.startsWith(u8, left, cjs.module_exports_prefix))
+                left[cjs.module_exports_prefix.len..]
+            else if (std.mem.startsWith(u8, left, cjs.exports_prefix))
+                left[cjs.exports_prefix.len..]
+            else
+                continue;
+            self.module_mode = true;
+            try self.exportName(try self.keep(name), right);
+        }
     }
 
     fn addBinding(self: *Extractor, spec: u32, imported: []const u8, local: []const u8, start: u32, type_only: bool) Error!u32 {
@@ -807,6 +885,7 @@ const Extractor = struct {
             if (self.m.exports_bindings) try self.exportBindings();
             return;
         }
+        if (self.f.commonjs) |cjs| try self.collectModuleExports(cjs);
         const root = self.snapshot.tree.root();
         var i: u32 = 0;
         while (root.namedChild(i)) |statement| : (i += 1) {
@@ -850,7 +929,11 @@ const Extractor = struct {
 
     fn exportName(self: *Extractor, exported: []const u8, local: ts.Node) Error!void {
         if (!std.mem.eql(u8, local.kind(), self.profile.identifier)) return;
-        const binder = self.binderOfUse(local.startByte()) orelse return;
+        try self.exportBinder(exported, local.startByte());
+    }
+
+    fn exportBinder(self: *Extractor, exported: []const u8, use: u32) Error!void {
+        const binder = self.binderOfUse(use) orelse return;
         const target = self.targetOfBinder(binder) orelse return;
         switch (target) {
             .local => |d| {
