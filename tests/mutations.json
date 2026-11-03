@@ -12426,7 +12426,7 @@
       "id": "CSR1-facts-resolver-never-chosen",
       "file": "src/platform/rename_batch.zig",
       "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
-      "to": "    if (false and rename_graph.supports(base.profile)) {",
+      "to": "    if (false and rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
       "kills": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call",
         "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
@@ -12437,7 +12437,7 @@
       "id": "CSR2-facts-resolver-for-service-languages",
       "file": "src/platform/rename_batch.zig",
       "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
-      "to": "    if (rename_graph.supports(base.profile)) {",
+      "to": "    _ = service_missing;\n    if (rename_graph.supports(base.profile)) {",
       "kills": [
         "rename kinds: a class is renamed in its declaration, an import, extends, a return type, a variable type and new"
       ]
@@ -12699,8 +12699,8 @@
     {
       "id": "CSR29-unaccounted-occurrence-accepted",
       "file": "src/platform/rename_graph.zig",
-      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n",
-      "to": "                const sites = self.sites orelse continue;\n",
+      "from": "                    if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;\n                }\n                const sites = self.sites orelse return error.RenameUnresolved;\n",
+      "to": "                    if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;\n                }\n                const sites = self.sites orelse continue;\n",
       "kills": [
         "rename facts: a C# member call on a receiver of unknown type refuses the rename",
         "rename facts: a Python method called on a receiver of unknown type is refused"
@@ -15544,8 +15544,8 @@
     {
       "id": "L4E-unresolved-stops-at-first-site",
       "file": "src/platform/rename_graph.zig",
-      "from": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);",
-      "to": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;",
+      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n            }\n",
+      "to": "                const sites = self.sites orelse return error.RenameUnresolved;\n                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;\n            }\n",
       "kills": [
         "rename facts: an unproven reference refuses the rename and names every site it could not prove"
       ]
@@ -15607,8 +15607,8 @@
     {
       "id": "L4L-written-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
-      "to": "_ = written;\n            if (binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "to": "_ = written;\n            if (self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
         "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
       ]
@@ -15616,7 +15616,7 @@
     {
       "id": "L4M-module-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "to": "_ = .{ binder, root };\n            if (written.contains(start.*) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
         "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
@@ -18627,7 +18627,7 @@
       "id": "T3-1-missing-service-keeps-refusing",
       "file": "src/platform/rename_batch.zig",
       "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
-      "to": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "to": "    _ = service_missing;\n    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
       "kills": [
         "js without typescript: a method called on a new object is renamed by the facts resolver"
       ]
@@ -18654,7 +18654,7 @@
       "id": "T3-4-alias-import-accepted",
       "file": "src/platform/file_move.zig",
       "from": "                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
-      "to": "",
+      "to": "                if (false and aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
       "kills": [
         "js without typescript: an alias import ending in the file's name is refused"
       ]
@@ -18772,7 +18772,7 @@
       "id": "T3-17-using-static-user-left-behind",
       "file": "src/platform/cs_symbol_move.zig",
       "from": "                try cs.insertUsing(arena, unit, using_static_line, &refs.edits);\n                usings_added += 1;",
-      "to": "",
+      "to": "                _ = .{ using_static_line, unit };",
       "kills": [
         "csharp move: a member reached through using static brings the new using static along"
       ]
@@ -18799,9 +18799,55 @@
       "id": "T3-20-new-type-clash-accepted",
       "file": "src/platform/cs_symbol_move.zig",
       "from": "        if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) return error.TargetNameTaken;",
-      "to": "",
+      "to": "        _ = clash;",
       "kills": [
         "csharp move: a new target type the namespace already has is refused"
+      ]
+    },
+    {
+      "id": "T3-21-module-constant-loses-its-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start",
+      "to": "if (written.contains(start.*) or binder.scope.start",
+      "kills": [
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+      ]
+    },
+    {
+      "id": "T3-22-python-module-name-keeps-its-type",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .module_names_rebindable = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "T3-23-destructuring-write-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (!oneOf(target.kind(), self.f.write_patterns)) {\n",
+      "to": "        if (true) {\n",
+      "kills": [
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+      ]
+    },
+    {
+      "id": "T3-24-for-of-write-ignored",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "    .{ .parent = \"for_in_statement\", .field = \"left\" },\n",
+      "to": "",
+      "kills": [
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+      ]
+    },
+    {
+      "id": "T3-25-return-change-not-reshaped",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "    .return_statement = \"return_statement\",\n",
+      "to": "",
+      "all": true,
+      "kills": [
+        "fact store: an edit that changes what a function returns reshapes the file"
       ]
     }
   ]

@@ -146,6 +146,29 @@ test "facts extract: declared parameter types, constructed constants and paramet
     try testing.expectEqualStrings("dep", x.facts.member_types[0].name);
 }
 
+test "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const cases = [_]struct { source: []const u8, typed: bool }{
+        .{ .source = "class Foo { go() { return 1; } }\nconst w = new Foo();\nw.go();\n", .typed = true },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nw.go();\n", .typed = true },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nw = other();\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nfunction r() { w = other(); }\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n[w] = other();\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n({ w } = other());\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n({ k: w } = other());\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nfor (w of other()) w.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nfunction r() {\n  let w = new Foo();\n  [w] = other();\n  return w.go();\n}\n", .typed = false },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |js| {
+            var x = if (js) try extractJs(runtime, case.source) else try extractTs(runtime, case.source);
+            defer x.deinit();
+            try testing.expectEqual(case.typed, (try x.ref(.call, "go", 0)).target == .member_of_type);
+        }
+    }
+}
+
 test "facts extract: a property of an unknown value, a computed callee, eval and a callback stay unresolved with a reason" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);

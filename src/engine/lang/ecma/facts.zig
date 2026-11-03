@@ -8,6 +8,7 @@ const writes = [_]FieldSite{
     .{ .parent = "assignment_expression", .field = "left" },
     .{ .parent = "augmented_assignment_expression", .field = "left" },
     .{ .parent = "update_expression", .field = "argument" },
+    .{ .parent = "for_in_statement", .field = "left" },
 };
 
 const call_like = [_]FieldSite{
@@ -80,6 +81,8 @@ pub const typescript: Facts = .{
     .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .value_field = "value" }},
     .calls_construct = true,
     .sole_binder_types = true,
+    .write_patterns = &.{ "array_pattern", "object_pattern" },
+    .write_pattern_names = &.{ "identifier", "shorthand_property_identifier_pattern" },
     .return_sites = &.{.{ .parent = "function_declaration", .field = "return_type" }},
     .return_statement = "return_statement",
     .generator_kinds = &.{"yield_expression"},
@@ -118,6 +121,8 @@ pub const javascript: Facts = .{
     .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .value_field = "value" }},
     .calls_construct = true,
     .sole_binder_types = true,
+    .write_patterns = &.{ "array_pattern", "object_pattern" },
+    .write_pattern_names = &.{ "identifier", "shorthand_property_identifier_pattern" },
     .return_sites = &.{.{ .parent = "function_declaration", .field = "return_type" }},
     .return_statement = "return_statement",
     .generator_kinds = &.{"yield_expression"},

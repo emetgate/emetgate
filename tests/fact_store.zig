@@ -320,7 +320,7 @@ test "fact store: an in-memory edit relinks the file and moves the snapshot root
     defer test_util.closeRuntime(runtime);
     var fixture = try Fixture.init(&.{
         .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
-        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { f(); return 1; }\n" },
         .{ .path = "c.ts", .data = "export const c = 3;\n" },
     });
     defer fixture.deinit();
@@ -339,6 +339,21 @@ test "fact store: an in-memory edit relinks the file and moves the snapshot root
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     try testing.expectEqual(@as(usize, 0), (try callerPaths(arena.allocator(), repo, "f")).len);
+}
+
+test "fact store: an edit that changes what a function returns reshapes the file" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const update = try repo.updateSource("b.ts", "import { f } from \"./a\";\nexport function g() { return 2; }\n");
+    try testing.expect(update.reshaped);
 }
 
 test "fact store: evidence never shows a line of a file that changed after the snapshot as current" {

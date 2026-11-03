@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2827**
-- Mutations declared in `tests/mutations.json`: **1962**
-  - killed: **1912**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2829**
+- Mutations declared in `tests/mutations.json`: **1967**
+  - killed: **1917**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1296 mutation(s).
+1301 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1458,8 +1458,8 @@ python tools/verification_page.py --check
 | `LF4-large-source-classified-as-code` | `src/protocol/search_v1.zig` | `if (!parsed and wants_spans) item.unclassified = true;` -> `` | search text: a text file over the parse limit is searched line by line without ... | killed |
 | `LF5-too-large-entry-reused` | `src/platform/search_session.zig` | `if (live.kind == .file and search_index.sameStamp(v.record(b).s...` -> `if (live.kind == .file and search_index.sameStamp(v.record(b).s...` | search text: a file an older index left out as too large is read again once the... | killed |
 | `LF6-reread-rule-inverted` | `src/platform/search_index.zig` | `return state == .large and stamp.size <= max_indexed_file_bytes;` -> `return state == .large and stamp.size > max_indexed_file_bytes;` | an entry left out as too large is read again once the size limit admits it; search text: ... | killed |
-| `CSR1-facts-resolver-never-chosen` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (false and rename_graph.supports(base.profile)) {` | rename facts: a C# static method called from another file is renamed at its dec...; renam... | killed |
-| `CSR2-facts-resolver-for-service-languages` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (rename_graph.supports(base.profile)) {` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
+| `CSR1-facts-resolver-never-chosen` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (false and rename_graph.supports(base.profile) and (!base.pr...` | rename facts: a C# static method called from another file is renamed at its dec...; renam... | killed |
+| `CSR2-facts-resolver-for-service-languages` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `_ = service_missing;     if (rename_graph.supports(base.profile...` | rename kinds: a class is renamed in its declaration, an import, extends, a retu... | killed |
 | `CSR3-free-uses-not-passed` | `src/platform/rename_batch.zig` | `.{ .free_uses = free_uses, .kept_keys` -> `.{ .free_uses = false, .kept_keys` | rename facts: a C# class is renamed at its declaration, constructor, new, param... | killed |
 | `CSR4-visibility-not-an-interface-change` | `src/platform/rename_batch.zig` | `or (resolver == .facts and visibleAt(base, offset, old))` -> `` | rename facts: a public C# method in one file still needs interface approval | killed |
 | `CSR5-free-use-reported-as-mismatch` | `src/engine/rename.zig` | `if (free_uses) continue;` -> `if (free_uses and false) continue;` | rename facts: a C# class is renamed at its declaration, constructor, new, param... | killed |
@@ -1486,7 +1486,7 @@ python tools/verification_page.py --check
 | `CSR26-any-namespace-visible` | `src/platform/rename_graph.zig` | `if (try self.enclosedBy(file, node, namespace)) return at;     ...` -> `_ = .{ file, node, namespace };         return at;` | rename facts: a C# method call on a type from a namespace the file does not imp... | killed |
 | `CSR27-using-scope-not-checked` | `src/platform/rename_graph.zig` | `if (node.startByte() < holder.startByte() or node.endByte() > h...` -> `_ = .{ holder, node };` | rename facts: a using directive inside another namespace block does not reach a... | killed |
 | `CSR28-alias-directive-imports-a-namespace` | `src/platform/rename_graph.zig` | `if (directive.childByField("name") != null) continue;` -> `` | an alias directive's first named child is the alias name, which never equals a namespace ... | survives (unclassified) |
-| `CSR29-unaccounted-occurrence-accepted` | `src/platform/rename_graph.zig` | `const sites = self.sites orelse return error.RenameUnresolved;` -> `const sites = self.sites orelse continue;` | rename facts: a C# member call on a receiver of unknown type refuses the rename; rename f... | killed |
+| `CSR29-unaccounted-occurrence-accepted` | `src/platform/rename_graph.zig` | `if (use.binder) \|b\| if (!resolution.binders[b].import and !se...` -> `if (use.binder) \|b\| if (!resolution.binders[b].import and !se...` | rename facts: a C# member call on a receiver of unknown type refuses the rename; rename f... | killed |
 | `CSR30-import-binder-accepted-unproven` | `src/platform/rename_graph.zig` | `if (!resolution.binders[b].import) continue;` -> `_ = b;                     continue;` | rename facts: an import inside a Python function is not an attribute of its mod...; renam... | killed |
 | `CSR31-target-kind-not-checked` | `src/platform/rename_graph.zig` | `if (!renameable(target)) return error.RenameUnresolved;` -> `` | every symbol-table ref that targetOf accepts is a function, class, field, enum member or ... | survives (unclassified) |
 | `CSR32-global-type-never-built` | `src/engine/facts_extract.zig` | `if (!self.f.global_types) return null;` -> `if (true) return null;` | rename facts: a C# static method called from another file is renamed at its dec... | killed |
@@ -1738,15 +1738,15 @@ python tools/verification_page.py --check
 | `L4B-python-interpolation-not-a-hole` | `src/engine/lang/python/profile.zig` | `.string_holes = &.{"interpolation"},` -> `` | rename facts: a Python function called inside an f-string interpolation is rena... | killed |
 | `L4C-csharp-interpolation-not-a-hole` | `src/engine/lang/csharp/profile.zig` | `.string_holes = &.{"interpolation"},` -> `` | rename facts: a C# method called inside an interpolated string is renamed there... | killed |
 | `L4D-type-string-names-unchecked` | `src/engine/rename.zig` | `or typeStringNames(g, node, text, name)) and record(` -> `) and record(` | rename facts: a Python class named inside a string annotation is a dynamic refe... | killed |
-| `L4E-unresolved-stops-at-first-site` | `src/platform/rename_graph.zig` | `sites.add(graph.rels.items[file], snapshot.source, leaf.span.st...` -> `sites.add(graph.rels.items[file], snapshot.source, leaf.span.st...` | rename facts: an unproven reference refuses the rename and names every site it ... | killed |
+| `L4E-unresolved-stops-at-first-site` | `src/platform/rename_graph.zig` | `const sites = self.sites orelse return error.RenameUnresolved; ...` -> `const sites = self.sites orelse return error.RenameUnresolved; ...` | rename facts: an unproven reference refuses the rename and names every site it ... | killed |
 | `L4F-unresolved-sites-not-refused` | `src/platform/rename_graph.zig` | `if (self.sites) \|sites\| if (sites.count != 0) return error.Re...` -> `` | rename facts: an unproven reference refuses the rename and names every site it ... | killed |
 | `L4G-declaration-wrappers-skipped` | `src/engine/lang/python/rename.zig` | `.wrappers = &.{"decorated_definition"},` -> `` | python declarations: a decorated class and its annotated fields are declared, a... | killed |
 | `L4H-python-constructions-ignored` | `src/engine/lang/python/facts.zig` | `.constructions = &.{.{ .node = "assignment", .name_field = "lef...` -> `` | rename facts: a Python method reached through a typed parameter, a constructed ... | killed |
 | `L4I-python-calls-do-not-construct` | `src/engine/lang/python/facts.zig` | `.calls_construct = true,` -> `` | rename facts: a Python method reached through a typed parameter, a constructed ... | killed |
 | `L4J-python-typed-parameters-untyped` | `src/engine/lang/python/facts.zig` | `.{ .node = "typed_parameter", .name_field = "", .type_field = "...` -> `` | rename facts: a Python method reached through a typed parameter, a constructed ... | killed |
 | `L4K-python-binders-not-sole-checked` | `src/engine/lang/python/facts.zig` | `.sole_binder_types = true,` -> `` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
-| `L4L-written-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or binder.scope.start == root.sta...` -> `_ = written;             if (binder.scope.start == root.startBy...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
-| `L4M-module-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or binder.scope.start == root.sta...` -> `_ = .{ binder, root };             if (written.contains(start.*...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
+| `L4L-written-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `_ = written;             if (self.f.module_names_rebindable and...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
+| `L4M-module-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `_ = .{ binder, root };             if (written.contains(start.*...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
 | `L4N-rebound-binders-keep-type` | `src/engine/facts_extract.zig` | `or !self.soleBinder(i)) try doomed` -> `) try doomed` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
 | `L4O-csharp-constructions-ignored` | `src/engine/lang/csharp/facts.zig` | `.constructions = &.{.{ .node = "variable_declarator", .name_fie...` -> `` | rename facts: a C# property reached bare, through var, target-typed new, a fiel... | killed |
 | `L4P-csharp-property-not-a-binder` | `src/engine/lang/csharp/rename.zig` | `.{ .parent = "property_declaration", .field = "name", .scope = ...` -> `` | rename facts: a C# property reached bare, through var, target-typed new, a fiel... | killed |
@@ -2045,10 +2045,10 @@ python tools/verification_page.py --check
 | `RA4-run-reply-hides-broken-rules` | `src/protocol/open_run.zig` | `const broken = audit.findings.items.len != 0;` -> `const broken = false;` | run audit: emetgate_run answers rules_broken and is an error | killed |
 | `CG1-commit-guard-judges-the-whole-file` | `src/platform/commit_guard.zig` | `return holes;` -> `return null;` | commit guard: a violation already in HEAD does not block an unrelated line | killed |
 | `CG2-commit-guard-skips-the-message` | `src/platform/commit_guard.zig` | `if (try refused(gpa, w, try rules.evaluateMessage(gpa, enforced...` -> `` | commit guard: a message rule refuses the commit and names the rule | killed |
-| `T3-1-missing-service-keeps-refusing` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `if (!base.profile.language_service and rename_graph.supports(ba...` | js without typescript: a method called on a new object is renamed by the facts ... | killed |
+| `T3-1-missing-service-keeps-refusing` | `src/platform/rename_batch.zig` | `if (rename_graph.supports(base.profile) and (!base.profile.lang...` -> `_ = service_missing;     if (!base.profile.language_service and...` | js without typescript: a method called on a new object is renamed by the facts ... | killed |
 | `T3-2-service-missing-ignored` | `src/platform/tsserver.zig` | `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return true;` -> `std.Io.Dir.cwd().access(self.io, marker, .{}) catch return fals...` | js without typescript: moving a file rewrites import, require and literal impor... | killed |
 | `T3-3-text-move-with-users-refused` | `src/platform/file_move.zig` | `if (resolver == .text and users != 0 and !service_missing) retu...` -> `if (resolver == .text and users != 0) return error.FileMoveUnre...` | js without typescript: moving a file rewrites import, require and literal impor... | killed |
-| `T3-4-alias-import-accepted` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `` | js without typescript: an alias import ending in the file's name is refused | killed |
+| `T3-4-alias-import-accepted` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `if (false and aliasMayNameFile(entry.spec, stem, base_url) and ...` | js without typescript: an alias import ending in the file's name is refused | killed |
 | `T3-5-installed-package-counts-as-alias` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `if (aliasMayNameFile(entry.spec, stem, base_url)) return error....` | js without typescript: an import of an installed package with the file's name i... | killed |
 | `T3-6-self-locating-file-moves` | `src/platform/file_move.zig` | `if (locatesItself(moved.source)) return error.DynamicPathUse;` -> `` | js without typescript: a moved file that locates itself is refused | killed |
 | `T3-7-path-in-string-accepted` | `src/platform/file_move.zig` | `if (try namesPathInString(w, before, snapshot, abs, request.fro...` -> `` | js without typescript: a string naming the file's path is refused | killed |
@@ -2061,10 +2061,15 @@ python tools/verification_page.py --check
 | `T3-14-typed-use-counts-as-untyped` | `src/platform/tsserver_host.js` | `untyped = Boolean(checker.getTypeAtLocation(node.expression).fl...` -> `untyped = true;` | real typescript: a member use with a known type elsewhere does not block the re... | killed |
 | `T3-15-shorthand-loses-key` | `src/platform/tsserver_host.js` | `const text = held && keepsObjectKey(l) ? held : l;` -> `const text = l;` | real typescript: an object shorthand of a renamed function keeps its key | killed |
 | `T3-16-export-shorthand-keeps-key` | `src/platform/tsserver_host.js` | `return !/^(module\.)?exports\b/.test(owner.left.getText(source)...` -> `return true;` | real typescript: a commonjs export shorthand follows the rename | killed |
-| `T3-17-using-static-user-left-behind` | `src/platform/cs_symbol_move.zig` | `try cs.insertUsing(arena, unit, using_static_line, &refs.edits)...` -> `` | csharp move: a member reached through using static brings the new using static ... | killed |
+| `T3-17-using-static-user-left-behind` | `src/platform/cs_symbol_move.zig` | `try cs.insertUsing(arena, unit, using_static_line, &refs.edits)...` -> `_ = .{ using_static_line, unit };` | csharp move: a member reached through using static brings the new using static ... | killed |
 | `T3-18-using-static-added-twice` | `src/platform/cs_symbol_move.zig` | `if (!try hasUsingStatic(arena, unit, full_target)) {` -> `if (true) {` | csharp move: a using static already naming the receiving type is not added twice | killed |
 | `T3-19-using-static-capture-accepted` | `src/platform/cs_symbol_move.zig` | `if ((try cs.mentions(arena, unit, target_members)).len != 0) re...` -> `` | csharp move: a using static user that also names a member of the receiving type... | killed |
-| `T3-20-new-type-clash-accepted` | `src/platform/cs_symbol_move.zig` | `if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) r...` -> `` | csharp move: a new target type the namespace already has is refused | killed |
+| `T3-20-new-type-clash-accepted` | `src/platform/cs_symbol_move.zig` | `if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) r...` -> `_ = clash;` | csharp move: a new target type the namespace already has is refused | killed |
+| `T3-21-module-constant-loses-its-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `if (written.contains(start.*) or binder.scope.start` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
+| `T3-22-python-module-name-keeps-its-type` | `src/engine/lang/python/facts.zig` | `.module_names_rebindable = true,` -> `` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
+| `T3-23-destructuring-write-ignored` | `src/engine/facts_extract.zig` | `if (!oneOf(target.kind(), self.f.write_patterns)) {` -> `if (true) {` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
+| `T3-24-for-of-write-ignored` | `src/engine/lang/ecma/facts.zig` | `.{ .parent = "for_in_statement", .field = "left" },` -> `` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
+| `T3-25-return-change-not-reshaped` | `src/engine/lang/ecma/facts.zig` | `.return_statement = "return_statement",` -> `` | fact store: an edit that changes what a function returns reshapes the file | killed |
 
 ## What this system does not prove
 

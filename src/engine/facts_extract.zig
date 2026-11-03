@@ -612,8 +612,7 @@ const Extractor = struct {
             for (self.f.writes) |site| {
                 if (!std.mem.eql(u8, site.parent, kind)) continue;
                 const target = node.childByField(site.field) orelse continue;
-                const binder = self.binderOfUse(target.startByte()) orelse continue;
-                try written.put(self.arena, binder, {});
+                try self.markWritten(target, &written);
             }
             if (std.mem.eql(u8, kind, self.profile.declarator)) {
                 if (node.childByField("name")) |name| {
@@ -628,6 +627,18 @@ const Extractor = struct {
         try self.collectReturns();
     }
 
+    fn markWritten(self: *Extractor, target: ts.Node, written: *std.AutoHashMapUnmanaged(u32, void)) Error!void {
+        if (!oneOf(target.kind(), self.f.write_patterns)) {
+            if (self.binderOfUse(target.startByte())) |binder| try written.put(self.arena, binder, {});
+            return;
+        }
+        var walker = traversal.Walker.init(target);
+        defer walker.deinit();
+        while (walker.next()) |entry| {
+            if (oneOf(entry.node.kind(), self.f.write_pattern_names)) try self.rebound_names.put(self.arena, self.raw(entry.node), {});
+        }
+    }
+
     fn dropRebound(self: *Extractor, written: *const std.AutoHashMapUnmanaged(u32, void)) Error!void {
         const root = self.snapshot.tree.root();
         var doomed: std.ArrayList(u32) = .empty;
@@ -638,7 +649,7 @@ const Extractor = struct {
                 continue;
             };
             const binder = self.every.binders[i];
-            if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);
+            if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);
         }
         for (doomed.items) |start| _ = self.typed_at.remove(start);
         var dropped = true;

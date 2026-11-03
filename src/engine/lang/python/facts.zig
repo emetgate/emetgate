@@ -68,6 +68,7 @@ pub const python: Facts = .{
     .constructions = &.{.{ .node = "assignment", .name_field = "left", .value_field = "right" }},
     .calls_construct = true,
     .sole_binder_types = true,
+    .module_names_rebindable = true,
     .return_sites = &.{.{ .parent = "function_definition", .field = "return_type" }},
     .return_statement = "return_statement",
     .generator_kinds = &.{"yield"},
