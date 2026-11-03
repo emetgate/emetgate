@@ -410,6 +410,8 @@ fn isWordByte(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
 }
 
+pub const InertRules = enum { none, python };
+
 pub const Profile = struct {
     name: []const u8,
     extensions: []const []const u8,
@@ -443,7 +445,7 @@ pub const Profile = struct {
     empty_body: []const u8,
     expression_statement: []const u8,
     loud_statement: ?*const fn (statement: ts.Node) bool = null,
-    inert_statement: ?*const fn (snapshot: *const @import("../loader.zig").Snapshot, statement: ts.Node) bool = null,
+    inert_rules: InertRules = .none,
     eager_parameters: bool = false,
     prose_strings: []const []const u8,
     directives: []const []const u8,

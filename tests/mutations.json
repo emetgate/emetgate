@@ -18481,8 +18481,8 @@
     {
       "id": "T3-I57-hook-not-set",
       "file": "src/engine/lang/python/profile.zig",
-      "from": ".inert_statement = python_inert.isInert,",
-      "to": ".inert_statement = null,",
+      "from": ".inert_rules = .python,",
+      "to": ".inert_rules = .none,",
       "kills": [
         "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one",
         "python move: a dataclass, a property and guarded blocks are no module effect"
@@ -18491,8 +18491,8 @@
     {
       "id": "T3-I58-hook-trusted-blindly",
       "file": "src/engine/modules.zig",
-      "from": "if (!inert(snapshot, statement)) return true;",
-      "to": "if (false and !inert(snapshot, statement)) return true;",
+      "from": ".python => if (!python_inert.isInert(snapshot, statement)) return true,",
+      "to": ".python => if (false and !python_inert.isInert(snapshot, statement)) return true,",
       "kills": [
         "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
       ]

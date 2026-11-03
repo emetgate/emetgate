@@ -44,14 +44,14 @@ pub const Workspace = struct {
     policy: Policy,
     environ: ?*const std.process.Environ.Map,
     primary: *Served,
-    session: ?[]u8,
+    session: ?[:0]u8,
     arena: std.heap.ArenaAllocator,
     repositories: std.ArrayList(Repository) = .empty,
     below: std.ArrayList([]const u8) = .empty,
     scanned: bool = false,
     cut: bool = false,
 
-    pub fn init(gpa: Allocator, io: std.Io, runtime: *Runtime, policy: Policy, environ: ?*const std.process.Environ.Map, primary: *Served, session: ?[]u8) Workspace {
+    pub fn init(gpa: Allocator, io: std.Io, runtime: *Runtime, policy: Policy, environ: ?*const std.process.Environ.Map, primary: *Served, session: ?[:0]u8) Workspace {
         const self: Workspace = .{
             .gpa = gpa,
             .io = io,

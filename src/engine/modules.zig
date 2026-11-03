@@ -3,6 +3,7 @@ const ts = @import("tree_sitter.zig");
 const symbol = @import("symbol.zig");
 const scope = @import("scope.zig");
 const symmetry = @import("symmetry.zig");
+const python_inert = @import("lang/python/inert.zig");
 const facts = @import("facts.zig");
 const profile_mod = @import("lang/profile.zig");
 const Snapshot = @import("loader.zig").Snapshot;
@@ -343,8 +344,10 @@ pub fn hasModuleEffects(snapshot: *const Snapshot) bool {
     while (root.namedChild(i)) |statement| : (i += 1) {
         if (snapshot.profile.isComment(statement.kind())) continue;
         if (!symmetry.statementHasEffect(snapshot.profile, statement)) continue;
-        const inert = snapshot.profile.inert_statement orelse return true;
-        if (!inert(snapshot, statement)) return true;
+        switch (snapshot.profile.inert_rules) {
+            .none => return true,
+            .python => if (!python_inert.isInert(snapshot, statement)) return true,
+        }
     }
     return false;
 }
