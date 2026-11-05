@@ -62,23 +62,27 @@ const Entry = struct {
 // Files are kept as hard links, not copies: a copy gets new times and a new file id, so the
 // stat data in .git/index would no longer match and git would rehash what a real crash leaves
 // trusted. Directory times are put back too. The journal records absolute paths, so a state is
-// checked by putting it back at the root it was taken from.
+// checked by putting it back at the root it was taken from. A commit that also writes outside
+// the repository root (a linked worktree) is recorded over all of its roots at once.
 pub const Snapshots = struct {
-    root_abs: []const u8,
+    roots: []const []const u8,
     store: testing.TmpDir,
     store_abs: []const u8,
     arena: std.heap.ArenaAllocator,
-    saved: std.ArrayList([]const Entry) = .empty,
+    saved: std.ArrayList([]const []const Entry) = .empty,
     failure: ?anyerror = null,
 
-    pub fn init(root_abs: []const u8) !Snapshots {
+    pub fn init(roots: []const []const u8) !Snapshots {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
+        if (roots.len == 0) return error.NoRoots;
         var store = testing.tmpDir(.{});
         errdefer store.cleanup();
         var arena: std.heap.ArenaAllocator = .init(testing.allocator);
         errdefer arena.deinit();
         const store_abs = try store.dir.realPathFileAlloc(testing.io, ".", arena.allocator());
-        return .{ .root_abs = root_abs, .store = store, .store_abs = store_abs, .arena = arena };
+        const owned = try arena.allocator().alloc([]const u8, roots.len);
+        for (roots, owned) |root, *slot_root| slot_root.* = try arena.allocator().dupe(u8, root);
+        return .{ .roots = owned, .store = store, .store_abs = store_abs, .arena = arena };
     }
 
     pub fn deinit(self: *Snapshots) void {
@@ -103,22 +107,29 @@ pub const Snapshots = struct {
         return false;
     }
 
-    fn slot(self: *Snapshots, number: usize) ![]const u8 {
-        return std.fmt.allocPrint(self.arena.allocator(), "{s}\\{d}", .{ self.store_abs, number });
+    fn slot(arena: std.mem.Allocator, store_abs: []const u8, number: usize, index: usize) ![]const u8 {
+        return std.fmt.allocPrint(arena, "{s}\\{d}\\{d}", .{ store_abs, number, index });
     }
 
     fn save(self: *Snapshots) !void {
         const arena = self.arena.allocator();
-        const dest_abs = try self.slot(self.saved.items.len + 1);
+        const per_root = try arena.alloc([]const Entry, self.roots.len);
+        for (self.roots, per_root, 0..) |root_abs, *entries, index| {
+            entries.* = try saveRoot(arena, root_abs, try slot(arena, self.store_abs, self.saved.items.len + 1, index));
+        }
+        try self.saved.append(arena, per_root);
+    }
+
+    fn saveRoot(arena: std.mem.Allocator, root_abs: []const u8, dest_abs: []const u8) ![]const Entry {
         try Dir.cwd().createDirPath(testing.io, dest_abs);
-        var root = try Dir.openDirAbsolute(testing.io, self.root_abs, .{ .iterate = true });
+        var root = try Dir.openDirAbsolute(testing.io, root_abs, .{ .iterate = true });
         defer root.close(testing.io);
         var entries: std.ArrayList(Entry) = .empty;
         var walker = try root.walk(testing.allocator);
         defer walker.deinit();
         while (try walker.next(testing.io)) |found| {
             const path = try arena.dupe(u8, found.path);
-            const from = try join(arena, self.root_abs, path);
+            const from = try join(arena, root_abs, path);
             const to = try join(arena, dest_abs, path);
             switch (found.kind) {
                 .directory => {
@@ -137,8 +148,8 @@ pub const Snapshots = struct {
                 },
             }
         }
-        try entries.append(arena, .{ .path = ".", .kind = .{ .directory = try timesOf(self.root_abs) } });
-        try self.saved.append(arena, entries.items);
+        try entries.append(arena, .{ .path = ".", .kind = .{ .directory = try timesOf(root_abs) } });
+        return entries.items;
     }
 
     pub fn restore(self: *Snapshots, number: usize) !void {
@@ -146,13 +157,19 @@ pub const Snapshots = struct {
         var scratch: std.heap.ArenaAllocator = .init(testing.allocator);
         defer scratch.deinit();
         const arena = scratch.allocator();
-        const entries = self.saved.items[number - 1];
-        const source_abs = try self.slot(number);
-        var root = try Dir.openDirAbsolute(testing.io, self.root_abs, .{ .iterate = true });
-        try clear(root);
-        root.close(testing.io);
+        for (self.roots) |root_abs| {
+            var root = try Dir.openDirAbsolute(testing.io, root_abs, .{ .iterate = true });
+            defer root.close(testing.io);
+            try clear(root);
+        }
+        for (self.roots, self.saved.items[number - 1], 0..) |root_abs, entries, index| {
+            try restoreRoot(arena, root_abs, try slot(arena, self.store_abs, number, index), entries, number);
+        }
+    }
+
+    fn restoreRoot(arena: std.mem.Allocator, root_abs: []const u8, source_abs: []const u8, entries: []const Entry, number: usize) !void {
         for (entries) |entry| {
-            const to = try join(arena, self.root_abs, entry.path);
+            const to = try join(arena, root_abs, entry.path);
             switch (entry.kind) {
                 .directory => try Dir.cwd().createDirPath(testing.io, to),
                 .file => |file| {
@@ -168,12 +185,79 @@ pub const Snapshots = struct {
         while (k > 0) {
             k -= 1;
             switch (entries[k].kind) {
-                .directory => |times| try setTimes(try join(arena, self.root_abs, entries[k].path), times),
+                .directory => |times| try setTimes(try join(arena, root_abs, entries[k].path), times),
                 .file => {},
             }
         }
     }
 };
+
+// A crash scenario is a type with:
+//   init(*Case, Params) !void, deinit(*Case) void, label(*Case) []const u8,
+//   roots(*Case) []const []const u8, the folders the write may change;
+//   write(*Case, *const disk.Step) !bool, true when the write stopped at the step;
+//   recovered(*Case) !bool, recover and check, true when the commit landed;
+//   settled(*Case) !bool, check the state an uninterrupted write leaves.
+// Only one runtime may be open at a time, so every case is closed before the next opens.
+
+pub fn expectEveryStep(comptime Case: type, params: Case.Params, min_steps: usize) !void {
+    const outcomes = try outcomesBySnapshots(Case, params);
+    defer testing.allocator.free(outcomes);
+    try testing.expect(outcomes.len >= min_steps);
+    const steps = outcomes.len;
+    for ([_]usize{ 1, (steps + 1) / 2, steps }) |stop| try testing.expectEqual(outcomes[stop - 1], try outcomeOfCut(Case, params, stop));
+}
+
+pub fn expectEveryCut(comptime Case: type, params: Case.Params, min_steps: usize) !void {
+    try emetgate.test_util.slow();
+    var stop: usize = 1;
+    while (true) : (stop += 1) {
+        _ = outcomeOfCut(Case, params, stop) catch |err| switch (err) {
+            error.StepDidNotStop => break,
+            else => |e| return e,
+        };
+    }
+    try testing.expect(stop - 1 >= min_steps);
+}
+
+fn report(label: []const u8, stop: usize, landed: bool) void {
+    std.debug.print("{s}: a crash after step {d} recovers to {s}\n", .{ label, stop, if (landed) "the commit" else "the old tree" });
+}
+
+fn outcomesBySnapshots(comptime Case: type, params: Case.Params) ![]bool {
+    var case: Case = undefined;
+    try case.init(params);
+    defer case.deinit();
+    var snapshots = try Snapshots.init(case.roots());
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    const stopped = try case.write(&step);
+    if (snapshots.failure) |err| return err;
+    try testing.expect(!stopped);
+    try testing.expect(try case.settled());
+    const outcomes = try testing.allocator.alloc(bool, snapshots.taken());
+    errdefer testing.allocator.free(outcomes);
+    for (outcomes, 1..) |*outcome, stop| {
+        errdefer std.debug.print("{s}: snapshot after step {d} failed\n", .{ case.label(), stop });
+        try snapshots.restore(stop);
+        outcome.* = try case.recovered();
+        report(case.label(), stop, outcome.*);
+    }
+    return outcomes;
+}
+
+fn outcomeOfCut(comptime Case: type, params: Case.Params, stop: usize) !bool {
+    var case: Case = undefined;
+    try case.init(params);
+    defer case.deinit();
+    var at: StopAt = .{ .target = stop };
+    const step = at.step();
+    if (!try case.write(&step)) return error.StepDidNotStop;
+    errdefer std.debug.print("{s}: cut after step {d} failed\n", .{ case.label(), stop });
+    const landed = try case.recovered();
+    report(case.label(), stop, landed);
+    return landed;
+}
 
 fn join(arena: std.mem.Allocator, base: []const u8, rel: []const u8) ![]const u8 {
     if (std.mem.eql(u8, rel, ".")) return base;
