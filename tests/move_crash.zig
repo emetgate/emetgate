@@ -90,5 +90,5 @@ test "move crash: a three-file move to a new file cut after every commit step re
 
 test "move crash: a three-file move cut for real at every commit step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crash_steps.expectEveryCut(Move, {}, 6);
+    try crash_steps.expectCutsNoWayBack(Move, {}, 6);
 }

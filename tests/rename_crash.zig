@@ -97,6 +97,6 @@ test "rename crash: a three-file rename cut after every commit step recovers to 
 
 test "rename crash: a rename cut for real at every commit step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crash_steps.expectEveryCut(Rename, two, 2 * two.files.len);
-    try crash_steps.expectEveryCut(Rename, three, 2 * three.files.len);
+    try crash_steps.expectCutsNoWayBack(Rename, two, 2 * two.files.len);
+    try crash_steps.expectCutsNoWayBack(Rename, three, 2 * three.files.len);
 }

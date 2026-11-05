@@ -173,7 +173,7 @@ test "file move crash: a move into two new directories with two users cut after 
 
 test "file move crash: a move cut for real at every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    for ([_]bool{ false, true }) |crash_in_recovery| try crash_steps.expectEveryCut(FileMove, crash_in_recovery, 8);
+    for ([_]bool{ false, true }) |crash_in_recovery| try crash_steps.expectCutsNoWayBack(FileMove, crash_in_recovery, 8);
 }
 
 test "file move crash: a rename whose directory entry was not made durable before the crash recovers to all old" {

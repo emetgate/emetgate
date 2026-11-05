@@ -47,7 +47,7 @@ const Entry = struct {
     path: []const u8,
     kind: union(enum) {
         directory: Times,
-        file: struct { digest: Digest, copied: bool },
+        file: struct { linked_digest: ?Digest },
     },
 };
 
@@ -127,7 +127,7 @@ pub const Snapshots = struct {
                     if (vanishes(path)) continue;
                     const copied = isAppended(path);
                     try place(from, to, copied);
-                    try entries.append(arena, .{ .path = path, .kind = .{ .file = .{ .digest = try digestOf(to), .copied = copied } } });
+                    try entries.append(arena, .{ .path = path, .kind = .{ .file = .{ .linked_digest = if (copied) null else try digestOf(to) } } });
                 },
                 else => {
                     std.debug.print("snapshot: {s} is a {t}, which a snapshot does not hold\n", .{ path, found.kind });
@@ -160,11 +160,11 @@ pub const Snapshots = struct {
             switch (entry.kind) {
                 .directory => try Dir.cwd().createDirPath(testing.io, to),
                 .file => |file| {
-                    try place(try join(arena, source_abs, entry.path), to, file.copied);
-                    if (!std.mem.eql(u8, &file.digest, &try digestOf(to))) {
+                    try place(try join(arena, source_abs, entry.path), to, file.linked_digest == null);
+                    if (file.linked_digest) |digest| if (!std.mem.eql(u8, &digest, &try digestOf(to))) {
                         std.debug.print("snapshot {d}: {s} was changed in place after it was taken\n", .{ number, entry.path });
                         return error.SnapshotChanged;
-                    }
+                    };
                 },
             }
         }
@@ -179,7 +179,6 @@ pub const Snapshots = struct {
     }
 };
 
-
 pub fn expectEveryStep(comptime Case: type, params: Case.Params, min_steps: usize) !void {
     testing.allocator.free(try everyStepOutcomes(Case, params, min_steps));
 }
@@ -187,22 +186,37 @@ pub fn expectEveryStep(comptime Case: type, params: Case.Params, min_steps: usiz
 pub fn everyStepOutcomes(comptime Case: type, params: Case.Params, min_steps: usize) ![]bool {
     const outcomes = try outcomesBySnapshots(Case, params);
     errdefer testing.allocator.free(outcomes);
-    try testing.expect(outcomes.len >= min_steps);
-    const steps = outcomes.len;
-    for ([_]usize{ 1, (steps + 1) / 2, steps }) |stop| try testing.expectEqual(outcomes[stop - 1], try outcomeOfCut(Case, params, stop));
+    try testing.expect(outcomes.len != 0 and outcomes.len >= min_steps);
+    const sampled = [_]usize{ 1, (outcomes.len + 1) / 2, outcomes.len };
+    for (sampled, 0..) |stop, k| {
+        if (std.mem.indexOfScalar(usize, sampled[0..k], stop) != null) continue;
+        const landed = try outcomeOfCut(Case, params, stop) orelse return error.StepDidNotStop;
+        try testing.expectEqual(outcomes[stop - 1], landed);
+    }
     return outcomes;
 }
 
 pub fn expectEveryCut(comptime Case: type, params: Case.Params, min_steps: usize) !void {
+    testing.allocator.free(try everyCutOutcomes(Case, params, min_steps));
+}
+
+pub fn everyCutOutcomes(comptime Case: type, params: Case.Params, min_steps: usize) ![]bool {
     try emetgate.test_util.slow();
+    const snapshot = try outcomesBySnapshots(Case, params);
+    defer testing.allocator.free(snapshot);
+    var cuts: std.ArrayList(bool) = .empty;
+    errdefer cuts.deinit(testing.allocator);
     var stop: usize = 1;
-    while (true) : (stop += 1) {
-        _ = outcomeOfCut(Case, params, stop) catch |err| switch (err) {
-            error.StepDidNotStop => break,
-            else => |e| return e,
-        };
-    }
-    try testing.expect(stop - 1 >= min_steps);
+    while (try outcomeOfCut(Case, params, stop)) |landed| : (stop += 1) try cuts.append(testing.allocator, landed);
+    try testing.expect(cuts.items.len != 0 and cuts.items.len >= min_steps);
+    try testing.expectEqualSlices(bool, snapshot, cuts.items);
+    return cuts.toOwnedSlice(testing.allocator);
+}
+
+pub fn expectCutsNoWayBack(comptime Case: type, params: Case.Params, min_steps: usize) !void {
+    const cuts = try everyCutOutcomes(Case, params, min_steps);
+    defer testing.allocator.free(cuts);
+    try expectNoWayBack(cuts);
 }
 
 pub fn expectNoWayBack(outcomes: []const bool) !void {
@@ -227,22 +241,31 @@ fn outcomesBySnapshots(comptime Case: type, params: Case.Params) ![]bool {
     try testing.expect(try case.settled());
     const outcomes = try testing.allocator.alloc(bool, snapshots.taken());
     errdefer testing.allocator.free(outcomes);
+    var broken: usize = 0;
     for (outcomes, 1..) |*outcome, stop| {
-        errdefer std.debug.print("{s}: snapshot after step {d} failed\n", .{ case.label(), stop });
         try snapshots.restore(stop);
-        outcome.* = try case.recovered();
+        outcome.* = case.recovered() catch |err| {
+            std.debug.print("{s}: a crash after step {d} breaks the invariants ({t})\n", .{ case.label(), stop, err });
+            broken += 1;
+            outcome.* = false;
+            continue;
+        };
         report(case.label(), stop, outcome.*);
     }
+    try testing.expectEqual(@as(usize, 0), broken);
     return outcomes;
 }
 
-fn outcomeOfCut(comptime Case: type, params: Case.Params, stop: usize) !bool {
+fn outcomeOfCut(comptime Case: type, params: Case.Params, stop: usize) !?bool {
     var case: Case = undefined;
     try case.init(params);
     defer case.deinit();
     var at: StopAt = .{ .target = stop };
     const step = at.step();
-    if (!try case.write(&step)) return error.StepDidNotStop;
+    if (!try case.write(&step)) {
+        try testing.expect(try case.settled());
+        return null;
+    }
     errdefer std.debug.print("{s}: cut after step {d} failed\n", .{ case.label(), stop });
     const landed = try case.recovered();
     report(case.label(), stop, landed);
@@ -254,16 +277,7 @@ fn join(arena: std.mem.Allocator, base: []const u8, rel: []const u8) ![]const u8
     return std.fmt.allocPrint(arena, "{s}\\{s}", .{ base, rel });
 }
 
-fn samePath(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |x, y| {
-        const xs = x == '/' or x == '\\';
-        const ys = y == '/' or y == '\\';
-        if (xs != ys) return false;
-        if (!xs and std.ascii.toLower(x) != std.ascii.toLower(y)) return false;
-    }
-    return true;
-}
+const samePath = change_watch.samePath;
 
 fn vanishes(path: []const u8) bool {
     for (vanishing_files) |file| {
