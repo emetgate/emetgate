@@ -9,6 +9,7 @@ const fixture = @import("ts_fixture.zig");
 const rename_case = @import("rename_tool.zig");
 const move_file_case = @import("move_file_tool.zig");
 const common = @import("commit_batch.zig");
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
 const Env = common.Env;
@@ -21,17 +22,6 @@ const setup_new = "## Setup\n\nnew\n";
 const hand_src = "export const hand = 1;\n";
 const hand_edited = "export const hand = 2;\n";
 const hand: fixture.File = .{ .rel = "src/hand.ts", .text = hand_src };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Kind = enum { batch, move_file };
 
@@ -123,23 +113,24 @@ fn expectInvariants(env: *Env, before: []const u8, report: ?disk.RecoverReport) 
 }
 
 fn crashAtEveryStep(kind: Kind) !void {
+    var world: World = .{ .kind = kind };
+    try world.init(kind);
+    defer world.deinit();
+    const env = &world.env;
+    const before = try env.head();
+    var snapshots = crash_steps.Snapshots.init(env.repo.root_abs);
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    var request: commit_plan.Request = .{ .message = common.message };
+    defer request.deinit(testing.allocator);
+    try testing.expect(!try world.run(&step, &request));
+    if (snapshots.failure) |err| return err;
+    try testing.expect(try expectInvariants(env, before, null));
+    try testing.expectEqualStrings(request.oid.?, try env.head());
+    try testing.expect(snapshots.taken != 0);
     var broken: usize = 0;
-    var stop: usize = 1;
-    while (true) : (stop += 1) {
-        var world: World = .{ .kind = kind };
-        try world.init(kind);
-        defer world.deinit();
-        const env = &world.env;
-        const before = try env.head();
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-        var request: commit_plan.Request = .{ .message = common.message };
-        defer request.deinit(testing.allocator);
-        if (!try world.run(&step, &request)) {
-            try testing.expect(try expectInvariants(env, before, null));
-            try testing.expectEqualStrings(request.oid.?, try env.head());
-            break;
-        }
+    for (1..snapshots.taken + 1) |stop| {
+        try snapshots.restore(stop);
         const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
         const moved = expectInvariants(env, before, report) catch |err| {
             broken += 1;
