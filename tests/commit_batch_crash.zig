@@ -10,6 +10,7 @@ const rename_case = @import("rename_tool.zig");
 const move_file_case = @import("move_file_tool.zig");
 const common = @import("commit_batch.zig");
 const crash_steps = @import("crash_steps.zig");
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const Env = common.Env;
@@ -116,34 +117,74 @@ fn expectInvariants(env: *Env, before: []const u8, report: ?disk.RecoverReport) 
     return moved;
 }
 
-fn crashAtEveryStep(kind: Kind) !void {
+fn recovered(kind: Kind, env: *Env, before: []const u8, stop: usize) !?bool {
+    const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
+    const moved = expectInvariants(env, before, report) catch |err| {
+        std.debug.print("{t}: a crash after step {d} breaks the invariants ({t}); status after recover:\n{s}\nhead moved: {}\n", .{ kind, stop, err, try env.git(&.{ "status", "--porcelain", "--untracked-files=all" }), !std.mem.eql(u8, before, try env.head()) });
+        return null;
+    };
+    std.debug.print("{t}: a crash after step {d} recovers to {s}\n", .{ kind, stop, if (moved) "the commit" else "the old tree" });
+    return moved;
+}
+
+fn cutAt(kind: Kind, stop: usize) !?bool {
+    var world: World = .{ .kind = kind };
+    try world.init(kind);
+    defer world.deinit();
+    const before = try world.env.head();
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
+    var request: commit_plan.Request = .{ .message = common.message };
+    defer request.deinit(testing.allocator);
+    if (!try world.run(&step, &request)) return error.StepDidNotStop;
+    return recovered(kind, &world.env, before, stop);
+}
+
+fn snapshotOutcomes(kind: Kind) ![]?bool {
     var world: World = .{ .kind = kind };
     try world.init(kind);
     defer world.deinit();
     const env = &world.env;
     const before = try env.head();
-    var snapshots = crash_steps.Snapshots.init(env.repo.root_abs);
+    var snapshots = try crash_steps.Snapshots.init(env.repo.root_abs);
     defer snapshots.deinit();
     const step = snapshots.step();
     var request: commit_plan.Request = .{ .message = common.message };
     defer request.deinit(testing.allocator);
-    try testing.expect(!try world.run(&step, &request));
+    const stopped = try world.run(&step, &request);
     if (snapshots.failure) |err| return err;
+    try testing.expect(!stopped);
     try testing.expect(try expectInvariants(env, before, null));
     try testing.expectEqualStrings(request.oid.?, try env.head());
-    try testing.expect(snapshots.taken != 0);
-    world.settle();
-    var broken: usize = 0;
-    for (1..snapshots.taken + 1) |stop| {
+    try testing.expect(snapshots.taken() != 0);
+    const outcomes = try testing.allocator.alloc(?bool, snapshots.taken());
+    errdefer testing.allocator.free(outcomes);
+    for (outcomes, 1..) |*outcome, stop| {
         try snapshots.restore(stop);
-        const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
-        const moved = expectInvariants(env, before, report) catch |err| {
-            broken += 1;
-            std.debug.print("{t}: a crash after step {d} breaks the invariants ({t}); status after recover:\n{s}\nhead moved: {}\n", .{ kind, stop, err, try env.git(&.{ "status", "--porcelain", "--untracked-files=all" }), !std.mem.eql(u8, before, try env.head()) });
-            continue;
-        };
-        std.debug.print("{t}: a crash after step {d} recovers to {s}\n", .{ kind, stop, if (moved) "the commit" else "the old tree" });
+        outcome.* = try recovered(kind, env, before, stop);
     }
+    return outcomes;
+}
+
+fn crashAtEveryStep(kind: Kind) !void {
+    const outcomes = try snapshotOutcomes(kind);
+    defer testing.allocator.free(outcomes);
+    for (outcomes) |outcome| try testing.expect(outcome != null);
+    const steps = outcomes.len;
+    for ([_]usize{ 1, (steps + 1) / 2, steps }) |stop| try testing.expectEqual(outcomes[stop - 1], try cutAt(kind, stop));
+}
+
+fn cutAtEveryStep(kind: Kind) !void {
+    var broken: usize = 0;
+    var stop: usize = 1;
+    while (true) : (stop += 1) {
+        const outcome = cutAt(kind, stop) catch |err| switch (err) {
+            error.StepDidNotStop => break,
+            else => |e| return e,
+        };
+        if (outcome == null) broken += 1;
+    }
+    try testing.expect(stop > 1);
     try testing.expectEqual(@as(usize, 0), broken);
 }
 
@@ -155,4 +196,16 @@ test "commit batch crash: a crash after any step of a committing try_batch recov
 test "commit batch crash: a crash after any step of a committing file move recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     try crashAtEveryStep(.move_file);
+}
+
+test "commit batch crash: a try_batch cut for real at every step recovers to no write or to the whole commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try test_util.slow();
+    try cutAtEveryStep(.batch);
+}
+
+test "commit batch crash: a file move cut for real at every step recovers to no write or to the whole commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try test_util.slow();
+    try cutAtEveryStep(.move_file);
 }
