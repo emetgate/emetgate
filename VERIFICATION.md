@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2831**
-- Mutations declared in `tests/mutations.json`: **1967**
-  - killed: **1917**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2839**
+- Mutations declared in `tests/mutations.json`: **1966**
+  - killed: **1916**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1301 mutation(s).
+1300 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1745,7 +1745,7 @@ python tools/verification_page.py --check
 | `L4I-python-calls-do-not-construct` | `src/engine/lang/python/facts.zig` | `.calls_construct = true,` -> `` | rename facts: a Python method reached through a typed parameter, a constructed ... | killed |
 | `L4J-python-typed-parameters-untyped` | `src/engine/lang/python/facts.zig` | `.{ .node = "typed_parameter", .name_field = "", .type_field = "...` -> `` | rename facts: a Python method reached through a typed parameter, a constructed ... | killed |
 | `L4K-python-binders-not-sole-checked` | `src/engine/lang/python/facts.zig` | `.sole_binder_types = true,` -> `` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
-| `L4L-written-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `_ = written;             if (self.f.module_names_rebindable and...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
+| `L4L-written-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `_ = written;             if (self.f.module_names_rebindable and...` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
 | `L4M-module-binders-keep-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `_ = .{ binder, root };             if (written.contains(start.*...` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
 | `L4N-rebound-binders-keep-type` | `src/engine/facts_extract.zig` | `or !self.soleBinder(i)) try doomed` -> `) try doomed` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
 | `L4O-csharp-constructions-ignored` | `src/engine/lang/csharp/facts.zig` | `.constructions = &.{.{ .node = "variable_declarator", .name_fie...` -> `` | rename facts: a C# property reached bare, through var, target-typed new, a fiel... | killed |
@@ -1783,7 +1783,7 @@ python tools/verification_page.py --check
 | `L5V-csharp-initializer-members-not-bound` | `src/engine/facts_extract.zig` | `if (std.mem.eql(u8, kind, initializer.entry)) try self.initiali...` -> `if (std.mem.eql(u8, kind, initializer.entry)) {}` | rename facts: a C# property set in an object initializer or a with expression i... | killed |
 | `L5W-csharp-with-initializer-not-bound` | `src/engine/lang/csharp/facts.zig` | `.{ .entry = "with_initializer", .owner = "with_expression", .ob...` -> `` | rename facts: a C# property set in an object initializer or a with expression i... | killed |
 | `L5X-csharp-initializer-name-is-a-use` | `src/engine/lang/csharp/rename.zig` | `.{ .parent = "assignment_expression", .field = "left", .grandpa...` -> `` | rename facts: a C# property set in an object initializer or a with expression i... | killed |
-| `L5Y-member-of-other-class-unaccounted` | `src/platform/rename_graph.zig` | `if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(fi...` -> `if (linkedElsewhere(st, leaf.span.start)) continue;` | rename facts: a same-named C# property of another class is left alone beside th... | killed |
+| `L5Y-member-of-other-class-unaccounted` | `src/platform/rename_graph.zig` | `if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(fi...` -> `if (linkedElsewhere(st, leaf.span.start)) continue;` | rename facts: a member read through a class that has no such member and no base... | killed |
 | `L5Z-member-of-derived-class-set-aside` | `src/platform/rename_graph.zig` | `} else if (!graph.hasBase(found)) {` -> `} else {` | defense in depth: a class with a base that declares the member again is already refused b... | defense in depth |
 | `L6A-alpha-renamed-members-not-apart` | `src/engine/alpha.zig` | `const renamed = listed or (member and within(distinct, node.sta...` -> `const renamed = listed or (member and within(distinct, node.sta...` | rename: renaming one of two same-named properties keeps the other apart in the ...; renam... | killed |
 | `L6B-alpha-renamed-plain-names-apart` | `src/engine/alpha.zig` | `const member = oneOf(kind, g.property_kinds) or sites.isPropert...` -> `const member = true;` | rename: renaming one of two free uses of a name breaks its alpha hash | killed |
@@ -1930,7 +1930,7 @@ python tools/verification_page.py --check
 | `T3-R1-rebound-name-kept-typed` | `src/engine/facts_extract.zig` | `if (self.rebound_names.contains(names[index])) return false;` -> `if (false and self.rebound_names.contains(names[index])) return...` | rename facts: a Python method through a local whose type cannot be proven refus... | killed |
 | `T3-R2-built-from-rebound-kept` | `src/engine/facts_extract.zig` | `if (self.typed_at.contains(entry.value_ptr.*)) continue;` -> `if (true or self.typed_at.contains(entry.value_ptr.*)) continue;` | rename facts: a Python local built through a rebound local stays unproven | killed |
 | `T3-R3-called-name-not-sole` | `src/engine/facts_extract.zig` | `if (self.f.sole_binder_types and !self.isSoleBinder(binder)) re...` -> `if (false and !self.isSoleBinder(binder)) return null;` | rename facts: a Python call of a name its own file rebinds gives no type | killed |
-| `T3-R4-returning-def-not-sole` | `src/engine/facts_extract.zig` | `if (self.f.sole_binder_types and !self.isSoleBinder(name.startB...` -> `if (false and !self.isSoleBinder(name.startByte())) return null;` | rename facts: a Python function its module rebinds gives no type to an importer | killed |
+| `T3-R4-returning-def-not-sole` | `src/engine/facts_extract.zig` | `if (self.f.sole_binder_types and !self.isSoleBinder(name.startB...` -> `if (false and !self.isSoleBinder(name.startByte())) return null;` | facts extract: a Python function gives no return type once its module rebinds it | killed |
 | `T3-R5-async-def-returns-type` | `src/engine/facts_extract.zig` | `if (hasToken(node, "async") or !self.plainlyDecorated(node)) re...` -> `if (!self.plainlyDecorated(node)) return null;` | rename facts: a Python method through a local whose type cannot be proven refus... | killed |
 | `T3-R6-decorated-def-returns-type` | `src/engine/facts_extract.zig` | `if (hasToken(node, "async") or !self.plainlyDecorated(node)) re...` -> `if (hasToken(node, "async")) return null;` | rename facts: a Python method through a local whose type cannot be proven refus... | killed |
 | `T3-R7-generator-returns-type` | `src/engine/facts_extract.zig` | `if (oneOf(kind, self.f.generator_kinds)) return null;` -> `if (false and oneOf(kind, self.f.generator_kinds)) return null;` | rename facts: a Python generator that also returns a constructor gives no type | killed |
@@ -1938,11 +1938,11 @@ python tools/verification_page.py --check
 | `T3-R9-overload-returns-type` | `src/engine/facts_extract.zig` | `if (names.get(overloadKey(self.defs.items[d])) != 1) continue;` -> `if (false and names.get(overloadKey(self.defs.items[d])) != 1) ...` | rename facts: a C# method through var whose type cannot be proven refuses and n... | killed |
 | `T3-R10-nullable-not-unwrapped` | `src/engine/facts_extract.zig` | `if (self.f.nullable_type) \|nullable\| if (std.mem.eql(u8, kind...` -> `if (self.f.nullable_type) \|nullable\| if (false and std.mem.eq...` | rename facts: a C# method through var from a call with a declared return type i... | killed |
 | `T3-R11-generic-leaf-not-taken` | `src/engine/facts_extract.zig` | `if (!self.f.global_types or !self.isGeneric(node.kind())) retur...` -> `if (true or !self.isGeneric(node.kind())) return node;` | fact store: a csharp generic new links to the generic class, bare or qualified | killed |
-| `T3-R14-parameter-as-name` | `src/engine/facts_extract.zig` | `if (self.isTypeParameter(node)) {` -> `if (false and self.isTypeParameter(node)) {` | fact store: a csharp type parameter makes no reference to a class of the same n... | killed |
+| `T3-R14-parameter-as-name` | `src/engine/facts_extract.zig` | `if (self.isTypeParameter(node)) {` -> `if (false and self.isTypeParameter(node)) {` | fact store: a csharp new of a type parameter links to no class of the same name | killed |
 | `T3-R15-parameter-as-global` | `src/engine/facts_extract.zig` | `or self.isTypeParameter(current)) return null;` -> `) return null;` | rename facts: a C# type parameter is never the class of the same name | killed |
 | `T3-R16-csharp-type-bound-in-file` | `src/engine/facts_extract.zig` | `if (!self.f.global_types) return false;         const def = sel...` -> `if (true) return false;         const def = self.def_at_name.get` | fact store: a csharp type declared twice in one file is unproven and the neares... | killed |
 | `T3-R17-method-return-inferred` | `src/engine/facts_extract.zig` | `if (self.defs.items[def].parent != 0) return null;` -> `if (false and self.defs.items[def].parent != 0) return null;` | rename facts: a Python method through a local whose type cannot be proven refus... | killed |
-| `T3-R18-every-using-is-static` | `src/engine/facts_extract.zig` | `if (!hasToken(directive, "static") or directive.childByField("n...` -> `if (directive.childByField("name") != null) return;` | fact store: a csharp using follows a namespace that appears or disappears on re...; fact ... | killed |
+| `T3-R18-every-using-is-static` | `src/engine/facts_extract.zig` | `if (!hasToken(directive, "static") or directive.childByField("n...` -> `if (directive.childByField("name") != null) return;` | fact store: a plain csharp using makes no reference to the namespace it names | killed |
 | `T3-R19-generic-hides-the-role` | `src/engine/facts_extract.zig` | `or (self.f.global_types and self.isGeneric(self.path.items[at -...` -> `or (false and self.isGeneric(self.path.items[at - 1].node.kind(...` | fact store: a csharp generic new links to the generic class, bare or qualified | killed |
 | `T3-R20-qualified-name-not-a-ref` | `src/engine/facts_extract.zig` | `if (self.f.qualified_type) \|qualified\| if (std.mem.eql(u8, ki...` -> `if (self.f.qualified_type) \|qualified\| if (false and std.mem....` | fact store: a csharp generic new links to the generic class, bare or qualified | killed |
 | `T3-R21-global-path-not-static` | `src/engine/facts_extract.zig` | `self.binderOfUse(object.startByte()) == null) or (try self.dott...` -> `self.binderOfUse(object.startByte()) == null) or false` | fact store: a csharp namespace-qualified static call links through its full path | killed |
@@ -1999,7 +1999,6 @@ python tools/verification_page.py --check
 | `T3-I23-try-else-unchecked` | `src/engine/lang/python/inert.zig` | `if (!inertBlock(snapshot, child.childByField("body"))) return f...` -> `if (false and !inertBlock(snapshot, child.childByField("body"))...` | modules: a python statement that can run no user code at import is no module ef... | killed |
 | `T3-I24-except-value-unchecked` | `src/engine/lang/python/inert.zig` | `} else if (symmetry.hasEffect(snapshot.profile, child)) return ...` -> `} else if (false and symmetry.hasEffect(snapshot.profile, child...` | modules: a python statement that can run no user code at import is no module ef... | killed |
 | `T3-I25-except-block-unchecked` | `src/engine/lang/python/inert.zig` | `if (eql(child.kind(), "block")) {             if (!inertBlock(s...` -> `if (eql(child.kind(), "block")) {             if (false and !in...` | modules: a python statement that can run no user code at import is no module ef... | killed |
-| `T3-I27-try-comment-refused` | `src/engine/lang/python/inert.zig` | `if (snapshot.profile.isComment(kind)) continue;` -> `if (false and snapshot.profile.isComment(kind)) continue;` | modules: a python statement that can run no user code at import is no module ef... | killed |
 | `T3-I28-base-unchecked` | `src/engine/lang/python/inert.zig` | `if (symmetry.hasEffect(snapshot.profile, bases)) return false;` -> `if (false and symmetry.hasEffect(snapshot.profile, bases)) retu...` | modules: a python statement that can run no user code at import is no module ef... | killed |
 | `T3-I29-method-signature-unchecked` | `src/engine/lang/python/inert.zig` | `if (symmetry.statementHasEffect(snapshot.profile, definition.?)...` -> `if (false and symmetry.statementHasEffect(snapshot.profile, def...` | modules: a python statement that can run no user code at import is no module ef... | killed |
 | `T3-I30-method-decorator-unchecked` | `src/engine/lang/python/inert.zig` | `if (!allDecorators(snapshot, member, isMethodDecorator)) return...` -> `if (false and !allDecorators(snapshot, member, isMethodDecorato...` | modules: a python statement that can run no user code at import is no module ef... | killed |
@@ -2034,7 +2033,7 @@ python tools/verification_page.py --check
 | `T3-F1-called-flag-not-saved` | `src/platform/fact_file.zig` | `t.called = flags & 1 != 0;` -> `t.called = false;` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F2-value-flag-not-saved` | `src/platform/fact_file.zig` | `t.value = flags & 2 != 0;` -> `t.value = false;` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F3-alias-not-saved` | `src/platform/fact_file.zig` | `s.alias = try d.str();` -> `_ = try d.str();` | fact store: a saved csharp store opens again with every new link field | killed |
-| `T3-F4-using-range-not-saved` | `src/platform/fact_file.zig` | `s.end = try d.int();` -> `_ = try d.int();` | fact store: a saved csharp store opens again with every new link field | killed |
+| `T3-F4-using-range-not-saved` | `src/platform/fact_file.zig` | `s.end = try d.int();` -> `_ = try d.int();` | fact store: a saved csharp store keeps a block's own using inside its block | killed |
 | `T3-F5-scope-not-saved` | `src/platform/fact_file.zig` | `t.scope = try d.str();` -> `_ = try d.str();` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F6-at-not-saved` | `src/platform/fact_file.zig` | `t.at = try d.int();` -> `_ = try d.int();` | fact store: a saved csharp store opens again with every new link field | killed |
 | `T3-F7-returns-not-saved` | `src/platform/fact_file.zig` | `def.returns = try d.index();` -> `_ = try d.index();` | fact store: a saved csharp store opens again with every new link field | killed |
@@ -2052,12 +2051,12 @@ python tools/verification_page.py --check
 | `T3-5-installed-package-counts-as-alias` | `src/platform/file_move.zig` | `if (aliasMayNameFile(entry.spec, stem, base_url) and !try insta...` -> `if (aliasMayNameFile(entry.spec, stem, base_url)) return error....` | js without typescript: an import of an installed package with the file's name i... | killed |
 | `T3-6-self-locating-file-moves` | `src/platform/file_move.zig` | `if (locatesItself(moved.source)) return error.DynamicPathUse;` -> `` | js without typescript: a moved file that locates itself is refused | killed |
 | `T3-7-path-in-string-accepted` | `src/platform/file_move.zig` | `if (try namesPathInString(w, before, snapshot, abs, request.fro...` -> `` | js without typescript: a string naming the file's path is refused | killed |
-| `T3-8-shorthand-accepted` | `src/platform/rename_graph.zig` | `if (leaf.shorthand) {                     const sites = self.si...` -> `if (false) {                     const sites = self.sites orels...` | js without typescript: an object shorthand of a renamed function is refused | killed |
+| `T3-8-shorthand-accepted` | `src/platform/rename_graph.zig` | `if (leaf.shorthand) {                     const sites = self.si...` -> `if (false) {                     const sites = self.sites orels...` | js without typescript: an object shorthand with the name of a method is refused | killed |
 | `T3-9-commonjs-user-ignored` | `src/platform/move_batch.zig` | `if (!isUser(users.items, abs)) return error.MoveUnresolved;` -> `` | js without typescript: moving a function a commonjs file requires is refused | killed |
 | `T3-10-requires-not-collected` | `src/engine/facts_extract.zig` | `if (self.f.commonjs) \|cjs\| try self.collectRequires(cjs);` -> `` | js without typescript: destructured require follows a commonjs rename | killed |
 | `T3-11-untyped-uses-ignored` | `src/platform/rename_batch.zig` | `if (answer.value.unresolved.len != 0) {` -> `if (false) {` | real typescript: a member reached through an untyped parameter is refused and n... | killed |
 | `T3-12-host-reports-no-untyped-use` | `src/platform/tsserver_host.js` | `return { can_rename: true, locations: locations, unresolved: un...` -> `return { can_rename: true, locations: locations, unresolved: []...` | real typescript: a member reached through an untyped parameter is refused and n...; real ... | killed |
-| `T3-13-local-counts-as-member` | `src/platform/tsserver_host.js` | `if (!ts.isIdentifier(at) \|\| !reachableByName(checker, at)) re...` -> `if (!ts.isIdentifier(at)) return [];` | real typescript: a local variable with an untyped member of the same name still... | killed |
+| `T3-13-local-counts-as-member` | `src/platform/tsserver_host.js` | `if (!ts.isIdentifier(at) \|\| !reachableByName(checker, at)) re...` -> `if (!ts.isIdentifier(at)) return [];` | real typescript: a function nothing can reach by name leaves an untyped member ... | killed |
 | `T3-14-typed-use-counts-as-untyped` | `src/platform/tsserver_host.js` | `untyped = Boolean(checker.getTypeAtLocation(node.expression).fl...` -> `untyped = true;` | real typescript: a member use with a known type elsewhere does not block the re... | killed |
 | `T3-15-shorthand-loses-key` | `src/platform/tsserver_host.js` | `const text = held && keepsObjectKey(l) ? held : l;` -> `const text = l;` | real typescript: an object shorthand of a renamed function keeps its key | killed |
 | `T3-16-export-shorthand-keeps-key` | `src/platform/tsserver_host.js` | `return !/^(module\.)?exports\b/.test(owner.left.getText(source)...` -> `return true;` | real typescript: a commonjs export shorthand follows the rename | killed |
@@ -2068,7 +2067,7 @@ python tools/verification_page.py --check
 | `T3-21-module-constant-loses-its-type` | `src/engine/facts_extract.zig` | `if (written.contains(start.*) or self.f.module_names_rebindable...` -> `if (written.contains(start.*) or binder.scope.start` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
 | `T3-22-python-module-name-keeps-its-type` | `src/engine/lang/python/facts.zig` | `.module_names_rebindable = true,` -> `` | rename facts: a Python local that is rebound, written through nonlocal or held ... | killed |
 | `T3-23-destructuring-write-ignored` | `src/engine/facts_extract.zig` | `if (!oneOf(target.kind(), self.f.write_patterns)) {` -> `if (true) {` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
-| `T3-24-for-of-write-ignored` | `src/engine/lang/ecma/facts.zig` | `.{ .parent = "for_in_statement", .field = "left" },` -> `` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
+| `T3-24-for-of-write-ignored` | `src/engine/lang/ecma/facts.zig` | `.{ .parent = "for_in_statement", .field = "left" },` -> `` | facts extract: the head of a for loop over an existing name is a write to it | killed |
 | `T3-25-return-change-not-reshaped` | `src/engine/lang/ecma/facts.zig` | `.return_statement = "return_statement",` -> `` | fact store: an edit that changes what a function returns reshapes the file | killed |
 
 ## What this system does not prove
