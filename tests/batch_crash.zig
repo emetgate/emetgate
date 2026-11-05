@@ -1,22 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
 const shadow = @import("emetgate").shadow;
 
 const testing = std.testing;
 const max_files = 3;
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Repo = struct {
     tmp: testing.TmpDir,
@@ -132,8 +122,8 @@ fn crashAtEveryStep(files: usize) !void {
         var pendings: [max_files]disk.Pending = undefined;
         try repo.prepareAll(pendings[0..files]);
 
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+        var at: crash_steps.StopAt = .{ .target = stop };
+        const step = at.step();
         disk.commitBatch(pendings[0..files], null, null, &batch, &step) catch |err| {
             errdefer std.debug.print("crash after step {d} of {d}\n", .{ stop, steps });
             try testing.expectEqual(error.Crashed, err);
@@ -185,8 +175,8 @@ test "batch crash: recover never rolls forward a file whose content is not the j
     var pendings: [2]disk.Pending = undefined;
     try repo.prepareAll(&pendings);
 
-    var at: StopAt = .{ .target = 1 + 3 * 2 + 1 };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = 1 + 3 * 2 + 1 };
+    const step = at.step();
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
 
     const external = "export const a = 42;\n";

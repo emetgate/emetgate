@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const emetgate = @import("emetgate");
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
@@ -216,8 +217,8 @@ test "commit window: an entry staged after the crash on an index that was never 
     defer case.deinit();
     const env = &case.env;
 
-    var at: Cut = .{ .target = 4 };
-    const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+    var at: crash_steps.StopAt = .{ .target = 4 };
+    const step = at.step();
     var plan = request();
     defer plan.deinit(testing.allocator);
     const file = try env.abs("src/util.ts");
@@ -246,17 +247,6 @@ test "commit window: an entry staged after the crash on an index that was never 
     try testing.expectEqualStrings(made, try env.head());
 }
 
-const Cut = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *Cut = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
-
 test "commit window: what an implicit recover left as found is named in the reply of the call that ran it" {
     try skipOffWindows();
     var case: Plain = undefined;
@@ -264,8 +254,8 @@ test "commit window: what an implicit recover left as found is named in the repl
     defer case.deinit();
     const env = &case.env;
 
-    var at: Cut = .{ .target = 5 };
-    const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+    var at: crash_steps.StopAt = .{ .target = 5 };
+    const step = at.step();
     var plan = request();
     defer plan.deinit(testing.allocator);
     const file = try env.abs("src/util.ts");
@@ -289,8 +279,8 @@ test "commit window: what an implicit recover left as found is named in the repl
 }
 
 fn cutAfterIndex(case: *Plain) !void {
-    var at: Cut = .{ .target = 5 };
-    const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+    var at: crash_steps.StopAt = .{ .target = 5 };
+    const step = at.step();
     var plan = request();
     defer plan.deinit(testing.allocator);
     const file = try case.env.abs("src/util.ts");
