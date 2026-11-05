@@ -75,5 +75,5 @@ test "move file crash: the tool's move into new directories with two users cut a
 
 test "move file crash: the tool's move cut for real at every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crash_steps.expectEveryCut(MoveFile, {}, 8);
+    try crash_steps.expectCutsNoWayBack(MoveFile, {}, 8);
 }
