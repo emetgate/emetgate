@@ -29,7 +29,8 @@ const appended_files = [_][]const u8{
     shadow.workspace_dir ++ "/" ++ memory.ledger_name,
     shadow.workspace_dir ++ "/" ++ emetgate.telemetry.events_file,
 };
-const appended_dirs = [_][]const u8{".git/logs"};
+const git_dir = ".git";
+const reflog_dir = "logs";
 
 pub const StopAt = struct {
     target: usize,
@@ -290,8 +291,12 @@ fn isAppended(path: []const u8) bool {
     for (appended_files) |file| {
         if (samePath(path, file)) return true;
     }
-    for (appended_dirs) |dir| {
-        if (path.len > dir.len and samePath(path[0..dir.len], dir) and (path[dir.len] == '/' or path[dir.len] == '\\')) return true;
+    var parts = std.mem.tokenizeAny(u8, path, "/\\");
+    const first = parts.next() orelse return false;
+    if (!std.ascii.eqlIgnoreCase(first, git_dir)) return false;
+    var part = parts.next() orelse return false;
+    while (parts.next()) |next| : (part = next) {
+        if (std.ascii.eqlIgnoreCase(part, reflog_dir)) return true;
     }
     return false;
 }
@@ -378,6 +383,9 @@ test "crash steps: a path names a vanishing lock in either separator and any cas
 test "crash steps: reflogs and emetgate's own logs are copied, everything else is linked" {
     try testing.expect(isAppended(".git\\logs\\HEAD"));
     try testing.expect(isAppended(".git/logs/refs/heads/main"));
+    try testing.expect(isAppended(".git\\worktrees\\linked\\logs\\HEAD"));
+    try testing.expect(!isAppended(".git\\worktrees\\logs"));
+    try testing.expect(!isAppended("src\\logs\\x.ts"));
     try testing.expect(isAppended(".emetgate\\ledger.ndjson"));
     try testing.expect(isAppended(".emetgate\\events.ndjson"));
     try testing.expect(!isAppended(".git\\logs"));

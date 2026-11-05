@@ -5,7 +5,7 @@ const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
 const git_fixture = @import("git_fixture.zig");
 const common = @import("commit_batch.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const symbol = emetgate.symbol;
 const disk = emetgate.disk;
@@ -47,29 +47,6 @@ fn contains(haystack: []const u8, needle: []const u8) bool {
     return std.mem.indexOf(u8, haystack, needle) != null;
 }
 
-const Cut = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *Cut = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
-
-fn swapAt(runtime: *emetgate.runtime.Runtime, file: []const u8, stop: usize) !bool {
-    var at: Cut = .{ .target = stop };
-    const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
-    return swapWith(runtime, file, &step);
-}
-
-fn swapAll(runtime: *emetgate.runtime.Runtime, file: []const u8, snapshots: *Snapshots) !usize {
-    const step = snapshots.step();
-    try testing.expect(!try swapWith(runtime, file, &step));
-    return snapshots.taken();
-}
-
 fn swapWith(runtime: *emetgate.runtime.Runtime, file: []const u8, step: *const disk.Step) !bool {
     var request: commit_plan.Request = .{ .message = message };
     defer request.deinit(testing.allocator);
@@ -87,6 +64,12 @@ fn swapWith(runtime: *emetgate.runtime.Runtime, file: []const u8, step: *const d
     };
     result.deinit(testing.allocator);
     return false;
+}
+
+fn swapAt(runtime: *emetgate.runtime.Runtime, file: []const u8, stop: usize) !bool {
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
+    return swapWith(runtime, file, &step);
 }
 
 fn cutAt(case: *Plain, stop: usize) !void {
@@ -435,38 +418,66 @@ test "redteam2 commit: in a cone sparse checkout with a sparse index the gate se
     try testing.expectEqual(Verdict.verified, try verdictWith(&case, "HEAD", needs_extra));
 }
 
+const Sparse = struct {
+    case: Plain,
+    before: []const u8,
+    root: [1][]const u8,
+
+    pub const Params = void;
+
+    pub fn init(self: *Sparse, _: void) !void {
+        try self.case.init(&.{ util_file, only_workspace, extra_file });
+        errdefer self.case.deinit();
+        const env = &self.case.env;
+        _ = try env.git(&.{ "sparse-checkout", "init", "--cone", "--sparse-index" });
+        _ = try env.git(&.{ "sparse-checkout", "set", "src" });
+        self.before = try env.head();
+        self.root = .{self.case.repo.root_abs};
+    }
+
+    pub fn deinit(self: *Sparse) void {
+        self.case.deinit();
+    }
+
+    pub fn label(_: *Sparse) []const u8 {
+        return "sparse";
+    }
+
+    pub fn roots(self: *Sparse) []const []const u8 {
+        return &self.root;
+    }
+
+    pub fn write(self: *Sparse, step: *const disk.Step) !bool {
+        return swapWith(self.case.runtime, try self.case.env.abs("src/util.ts"), step);
+    }
+
+    pub fn recovered(self: *Sparse) !bool {
+        const report = try recover(&self.case);
+        try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
+        return self.settled();
+    }
+
+    pub fn settled(self: *Sparse) !bool {
+        const env = &self.case.env;
+        const written = contains(try env.read("src/util.ts"), mark);
+        const committed = contains(try env.git(&.{ "show", "HEAD:src/util.ts" }), mark);
+        try testing.expectEqual(written, committed);
+        try testing.expectEqual(committed, !std.mem.eql(u8, self.before, try env.head()));
+        try testing.expectEqualStrings("", try status(env));
+        try testing.expect(!self.case.repo.exists(".git/index.lock"));
+        try testing.expect(!self.case.repo.exists("lib"));
+        return committed;
+    }
+};
+
 test "redteam2 commit: in a sparse checkout a crash after any step recovers to no write or to the whole commit" {
     try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&.{ util_file, only_workspace, extra_file });
-    defer case.deinit();
-    const env = &case.env;
-    _ = try env.git(&.{ "sparse-checkout", "init", "--cone", "--sparse-index" });
-    _ = try env.git(&.{ "sparse-checkout", "set", "src" });
-    const before = try env.head();
-    var snapshots = try Snapshots.init(case.repo.root_abs);
-    defer snapshots.deinit();
-    const steps = try swapAll(case.runtime, try env.abs("src/util.ts"), &snapshots);
-    try testing.expect(steps >= 5);
-    try expectSparseWhole(&case, before);
-    for (1..steps + 1) |stop| {
-        errdefer std.debug.print("cut after step {d}\n", .{stop});
-        try snapshots.restore(stop);
-        const report = try recover(&case);
-        try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
-        try expectSparseWhole(&case, before);
-    }
+    try crash_steps.expectEveryStep(Sparse, {}, 5);
 }
 
-fn expectSparseWhole(case: *Plain, before: []const u8) !void {
-    const env = &case.env;
-    const written = contains(try env.read("src/util.ts"), mark);
-    const committed = contains(try env.git(&.{ "show", "HEAD:src/util.ts" }), mark);
-    try testing.expectEqual(written, committed);
-    try testing.expectEqual(committed, !std.mem.eql(u8, before, try env.head()));
-    try testing.expectEqualStrings("", try status(env));
-    try testing.expect(!case.repo.exists(".git/index.lock"));
-    try testing.expect(!case.repo.exists("lib"));
+test "redteam2 commit: in a sparse checkout a cut for real at every step recovers to no write or to the whole commit" {
+    try skipOffWindows();
+    try crash_steps.expectEveryCut(Sparse, {}, 5);
 }
 
 test "redteam2 commit: an index in version 4 with the untracked cache and a split index gets the commit and a clean tree" {
@@ -535,43 +546,74 @@ test "redteam2 commit: with autocrlf on a try_batch commit holds every file in t
     try testing.expectEqual(Verdict.verified, try verdictOf(&case, "HEAD"));
 }
 
+const Linked = struct {
+    case: Plain,
+    main_head: []const u8,
+    linked_abs: []const u8,
+    file: []const u8,
+    both: [2][]const u8,
+
+    pub const Params = void;
+
+    pub fn init(self: *Linked, _: void) !void {
+        try self.case.init(&files);
+        errdefer self.case.deinit();
+        const env = &self.case.env;
+        self.main_head = try env.head();
+        const linked = try std.fmt.allocPrint(env.arena(), "{s}\\..\\linked", .{self.case.repo.root_abs});
+        _ = try env.git(&.{ "worktree", "add", "-q", "-b", "side", linked });
+        self.linked_abs = try self.case.repo.tmp.dir.realPathFileAlloc(testing.io, "linked", env.arena());
+        self.file = try std.fmt.allocPrint(env.arena(), "{s}\\src\\util.ts", .{self.linked_abs});
+        self.both = .{ self.case.repo.root_abs, self.linked_abs };
+    }
+
+    pub fn deinit(self: *Linked) void {
+        self.case.deinit();
+    }
+
+    pub fn label(_: *Linked) []const u8 {
+        return "linked";
+    }
+
+    pub fn roots(self: *Linked) []const []const u8 {
+        return &self.both;
+    }
+
+    pub fn write(self: *Linked, step: *const disk.Step) !bool {
+        return swapWith(self.case.runtime, self.file, step);
+    }
+
+    pub fn recovered(self: *Linked) !bool {
+        const report = try disk.recover(testing.allocator, testing.io, self.linked_abs);
+        try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
+        return self.settled();
+    }
+
+    pub fn settled(self: *Linked) !bool {
+        const env = &self.case.env;
+        const text = try std.Io.Dir.cwd().readFileAlloc(testing.io, self.file, env.arena(), .unlimited);
+        const written = contains(text, mark);
+        const committed = contains(try env.git(&.{ "show", "side:src/util.ts" }), mark);
+        try testing.expectEqual(written, committed);
+        try testing.expectEqual(committed, !std.mem.eql(u8, self.main_head, try env.git(&.{ "rev-parse", "side" })));
+        try testing.expectEqualStrings("", try env.git(&.{ "-C", self.linked_abs, "status", "--porcelain", "--untracked-files=all" }));
+        const lock = try env.git(&.{ "-C", self.linked_abs, "rev-parse", "--path-format=absolute", "--git-path", "index.lock" });
+        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, lock, .{}));
+        try testing.expectEqualStrings(self.main_head, try env.head());
+        try testing.expectEqualStrings("", try status(env));
+        try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
+        return committed;
+    }
+};
+
 test "redteam2 commit: in a linked worktree a crash after any step recovers to no write or to the whole commit, and the main checkout is untouched" {
     try skipOffWindows();
-    var case: Plain = undefined;
-    try case.init(&files);
-    defer case.deinit();
-    const env = &case.env;
-    const main_head = try env.head();
-    const linked = try std.fmt.allocPrint(env.arena(), "{s}\\..\\linked", .{case.repo.root_abs});
-    _ = try env.git(&.{ "worktree", "add", "-q", "-b", "side", linked });
-    const linked_abs = try case.repo.tmp.dir.realPathFileAlloc(testing.io, "linked", env.arena());
-    const file = try std.fmt.allocPrint(env.arena(), "{s}\\src\\util.ts", .{linked_abs});
-    var snapshots = try Snapshots.initAll(&.{ case.repo.root_abs, linked_abs });
-    defer snapshots.deinit();
-    const steps = try swapAll(case.runtime, file, &snapshots);
-    try testing.expect(steps >= 5);
-    try expectLinkedWhole(env, main_head, linked_abs, file);
-    for (1..steps + 1) |stop| {
-        errdefer std.debug.print("cut after step {d}\n", .{stop});
-        try snapshots.restore(stop);
-        const report = try disk.recover(testing.allocator, testing.io, linked_abs);
-        try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
-        try expectLinkedWhole(env, main_head, linked_abs, file);
-    }
+    try crash_steps.expectEveryStep(Linked, {}, 5);
 }
 
-fn expectLinkedWhole(env: *Env, main_head: []const u8, linked_abs: []const u8, file: []const u8) !void {
-    const text = try std.Io.Dir.cwd().readFileAlloc(testing.io, file, env.arena(), .unlimited);
-    const written = contains(text, mark);
-    const committed = contains(try env.git(&.{ "show", "side:src/util.ts" }), mark);
-    try testing.expectEqual(written, committed);
-    try testing.expectEqual(committed, !std.mem.eql(u8, main_head, try env.git(&.{ "rev-parse", "side" })));
-    try testing.expectEqualStrings("", try env.git(&.{ "-C", linked_abs, "status", "--porcelain", "--untracked-files=all" }));
-    const lock = try env.git(&.{ "-C", linked_abs, "rev-parse", "--path-format=absolute", "--git-path", "index.lock" });
-    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, lock, .{}));
-    try testing.expectEqualStrings(main_head, try env.head());
-    try testing.expectEqualStrings("", try status(env));
-    try testing.expectEqualStrings(util_src, try env.read("src/util.ts"));
+test "redteam2 commit: in a linked worktree a cut for real at every step recovers to no write or to the whole commit" {
+    try skipOffWindows();
+    try crash_steps.expectEveryCut(Linked, {}, 5);
 }
 
 test "redteam2 commit: an amended commit that carries the receipt note along is not verified once its content differs" {
