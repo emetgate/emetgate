@@ -81,23 +81,18 @@ const Rename = struct {
     }
 };
 
-fn expectNoWayBack(outcomes: []const bool) !void {
-    const first_new = std.mem.indexOfScalar(bool, outcomes, true) orelse return error.NeverRecoveredToNew;
-    for (outcomes[first_new..]) |landed| try testing.expect(landed);
-}
-
 test "rename crash: a two-file rename cut after every commit step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const outcomes = try crash_steps.everyStepOutcomes(Rename, two, 2 * two.files.len);
     defer testing.allocator.free(outcomes);
-    try expectNoWayBack(outcomes);
+    try crash_steps.expectNoWayBack(outcomes);
 }
 
 test "rename crash: a three-file rename cut after every commit step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const outcomes = try crash_steps.everyStepOutcomes(Rename, three, 2 * three.files.len);
     defer testing.allocator.free(outcomes);
-    try expectNoWayBack(outcomes);
+    try crash_steps.expectNoWayBack(outcomes);
 }
 
 test "rename crash: a rename cut for real at every commit step recovers to all old or all new" {
