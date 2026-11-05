@@ -180,6 +180,19 @@ test "real typescript: a local variable with an untyped member of the same name 
     try testing.expect(outcome.result == .committed);
 }
 
+test "real typescript: a function nothing can reach by name leaves an untyped member of that name alone" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{.{ .rel = "src/use.js", .text = "function g(o) {\n  return o.g;\n}\nexport const x = g({});\n" }}, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/use.js", "g", "h", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/use.js", "function h(o) {\n  return o.g;\n}\nexport const x = h({});\n");
+}
+
 test "real typescript: an object shorthand of a renamed function keeps its key" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);

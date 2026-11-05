@@ -945,6 +945,18 @@ test "rename facts: a same-named C# property of another class is left alone besi
     try expectSource(planned, "Use.cs", "namespace App;\npublic static class Use\n{\n    public static int Make(Box b, Bag g) => b.Width + g.Size + new Bag { Size = 2 }.Size;\n}\n");
 }
 
+test "rename facts: a member read through a class that has no such member and no base is left alone" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case = try Case.init(&.{
+        .{ .rel = "Box.cs", .text = "namespace App;\npublic class Box\n{\n    public int Size { get; set; }\n}\npublic class Bag\n{\n}\n" },
+        .{ .rel = "Use.cs", .text = "namespace App;\npublic static class Use\n{\n    public static int Make(Box b) => b.Size + new Bag().Size;\n}\n" },
+    });
+    defer case.deinit();
+    const planned = try case.plan("Box.cs", "App.Box.Size", "Width", true);
+    defer planned.deinit(testing.allocator);
+    try expectSource(planned, "Use.cs", "namespace App;\npublic static class Use\n{\n    public static int Make(Box b) => b.Width + new Bag().Size;\n}\n");
+}
+
 test "rename facts: a same-named C# property of a derived class is refused" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case = try Case.init(&.{

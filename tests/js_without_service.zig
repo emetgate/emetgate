@@ -88,6 +88,10 @@ test "js without typescript: an object shorthand of a renamed function is refuse
     try refuseRename(imports ++ "export function run() {\n  const o = { discount };\n  return o.discount(3);\n}\n", "discount", "cut", error.RenameUnresolved);
 }
 
+test "js without typescript: an object shorthand with the name of a method is refused" {
+    try refuseRename("export function make(total) {\n  return { total };\n}\n", "Cart.total", "sum", error.RenameUnresolved);
+}
+
 test "js without typescript: destructured require follows a commonjs rename" {
     try expectRename(cjs, "const { discount } = require('./cart.js');\nmodule.exports = { run() { return discount(3); } };\n", "discount", "cut", "class Cart {\n  total() {\n    return 2;\n  }\n}\nfunction cut(v) {\n  return v - 1;\n}\nfunction makeCart() {\n  return new Cart();\n}\nmodule.exports = { Cart, cut, makeCart };\n", "const { cut } = require('./cart.js');\nmodule.exports = { run() { return cut(3); } };\n");
 }

@@ -15610,7 +15610,7 @@
       "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "to": "_ = written;\n            if (self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
-        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
       ]
     },
     {
@@ -15962,7 +15962,7 @@
       "from": "                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;",
       "to": "                if (linkedElsewhere(st, leaf.span.start)) continue;",
       "kills": [
-        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+        "rename facts: a member read through a class that has no such member and no base is left alone"
       ]
     },
     {
@@ -17591,7 +17591,7 @@
       "from": "if (self.f.sole_binder_types and !self.isSoleBinder(name.startByte())) return null;",
       "to": "if (false and !self.isSoleBinder(name.startByte())) return null;",
       "kills": [
-        "rename facts: a Python function its module rebinds gives no type to an importer"
+        "facts extract: a Python function gives no return type once its module rebinds it"
       ]
     },
     {
@@ -17663,7 +17663,7 @@
       "from": "        if (self.isTypeParameter(node)) {\n",
       "to": "        if (false and self.isTypeParameter(node)) {\n",
       "kills": [
-        "fact store: a csharp type parameter makes no reference to a class of the same name"
+        "fact store: a csharp new of a type parameter links to no class of the same name"
       ]
     },
     {
@@ -17699,8 +17699,7 @@
       "from": "if (!hasToken(directive, \"static\") or directive.childByField(\"name\") != null) return;",
       "to": "if (directive.childByField(\"name\") != null) return;",
       "kills": [
-        "fact store: a csharp using follows a namespace that appears or disappears on refresh",
-        "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it"
+        "fact store: a plain csharp using makes no reference to the namespace it names"
       ]
     },
     {
@@ -18209,15 +18208,6 @@
       ]
     },
     {
-      "id": "T3-I27-try-comment-refused",
-      "file": "src/engine/lang/python/inert.zig",
-      "from": "if (snapshot.profile.isComment(kind)) continue;",
-      "to": "if (false and snapshot.profile.isComment(kind)) continue;",
-      "kills": [
-        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
-      ]
-    },
-    {
       "id": "T3-I28-base-unchecked",
       "file": "src/engine/lang/python/inert.zig",
       "from": "if (symmetry.hasEffect(snapshot.profile, bases)) return false;",
@@ -18530,7 +18520,7 @@
       "from": "s.end = try d.int();",
       "to": "_ = try d.int();",
       "kills": [
-        "fact store: a saved csharp store opens again with every new link field"
+        "fact store: a saved csharp store keeps a block's own using inside its block"
       ]
     },
     {
@@ -18692,7 +18682,7 @@
       "from": "                if (leaf.shorthand) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
       "to": "                if (false) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
       "kills": [
-        "js without typescript: an object shorthand of a renamed function is refused"
+        "js without typescript: an object shorthand with the name of a method is refused"
       ]
     },
     {
@@ -18738,7 +18728,7 @@
       "from": "  if (!ts.isIdentifier(at) || !reachableByName(checker, at)) return [];",
       "to": "  if (!ts.isIdentifier(at)) return [];",
       "kills": [
-        "real typescript: a local variable with an untyped member of the same name still renames"
+        "real typescript: a function nothing can reach by name leaves an untyped member of that name alone"
       ]
     },
     {
@@ -18837,7 +18827,7 @@
       "from": "    .{ .parent = \"for_in_statement\", .field = \"left\" },\n",
       "to": "",
       "kills": [
-        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+        "facts extract: the head of a for loop over an existing name is a write to it"
       ]
     },
     {

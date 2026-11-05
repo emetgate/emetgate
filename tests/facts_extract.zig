@@ -169,6 +169,17 @@ test "facts extract: a constant at module level keeps its type and a module vari
     }
 }
 
+test "facts extract: the head of a for loop over an existing name is a write to it" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    for ([_]bool{ false, true }) |js| {
+        const source = "const o = {};\nfor (o.w of other()) go();\n";
+        var x = if (js) try extractJs(runtime, source) else try extractTs(runtime, source);
+        defer x.deinit();
+        _ = try x.ref(.write, "w", 0);
+    }
+}
+
 test "facts extract: a property of an unknown value, a computed callee, eval and a callback stay unresolved with a reason" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
@@ -258,6 +269,7 @@ test "facts extract: a C# definition is exported only when it and every type aro
         \\namespace Shop {
         \\    public class Cart {
         \\        public int Total() { int Local() { return 1; } return Local(); }
+        \\        public int Held() { public int Kept() { return 1; } return Kept(); }
         \\        public int Count { get; set; }
         \\        public int Size, Extra;
         \\        private int hidden, secret;
@@ -279,8 +291,8 @@ test "facts extract: a C# definition is exported only when it and every type aro
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const found = try facts_extract.extract(arena_state.allocator(), snapshot);
-    const yes = [_][]const u8{ "Cart", "Total", "Count", "Size", "Extra", "Line", "Qty", "IShape", "Twice", "Color", "Red" };
-    const no = [_][]const u8{ "Local", "hidden", "secret", "Sealed", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
+    const yes = [_][]const u8{ "Cart", "Total", "Held", "Count", "Size", "Extra", "Line", "Qty", "IShape", "Twice", "Color", "Red" };
+    const no = [_][]const u8{ "Local", "Kept", "hidden", "secret", "Sealed", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
     var seen: usize = 0;
     for (found.defs) |d| {
         for (yes) |name| {
@@ -301,6 +313,26 @@ test "facts extract: a C# definition is exported only when it and every type aro
         }
     }
     try testing.expectEqual(yes.len + no.len, seen);
+}
+
+fn pythonReturns(source: []const u8, name: []const u8) !bool {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ".py");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (std.mem.eql(u8, d.name, name)) return d.returns != facts.none;
+    }
+    return error.DefNotFound;
+}
+
+test "facts extract: a Python function gives no return type once its module rebinds it" {
+    try testing.expect(try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n", "make"));
+    try testing.expect(!try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n\n\nmake = print\n", "make"));
+    try testing.expect(!try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n\n\ndef patch():\n    global make\n    make = print\n", "make"));
 }
 
 fn pythonExported(source: []const u8, name: []const u8) !bool {

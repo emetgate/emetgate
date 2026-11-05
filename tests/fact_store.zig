@@ -906,6 +906,28 @@ test "fact store: a csharp type parameter makes no reference to a class of the s
     try testing.expectError(error.RefNotFound, linkedQname(repo, "Use.cs", .type, "T"));
 }
 
+test "fact store: a csharp new of a type parameter links to no class of the same name" {
+    try expectCalls(&.{
+        .{ .path = "T.cs", .data = "public class T { }\n" },
+        .{ .path = "Use.cs", .data = "public class Use<T> where T : new()\n{\n    public object Make() { return new T(); }\n}\n" },
+    }, .new, "T", "");
+}
+
+test "fact store: a plain csharp using makes no reference to the namespace it names" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Cart.cs", .data = "namespace Shop.Models\n{\n    public class Cart { }\n}\n" },
+        .{ .path = "Use.cs", .data = "using Shop.Models;\n\nnamespace App\n{\n    public class Use { public object Go() { return new Cart(); } }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("Shop.Models.Cart", try linkedQname(repo, "Use.cs", .new, "Cart"));
+    try testing.expectError(error.RefNotFound, linkedQname(repo, "Use.cs", .type, "Models"));
+}
+
 test "fact store: a csharp interface base leaves a call's return type proven" {
     try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace App\n{\n    public class Cart { public int Total() { return 1; } }\n    public interface IMake { Cart Make(int n); }\n    public class C : IMake\n    {\n        public Cart Make(int n) { return new Cart(); }\n    }\n    public class Use\n    {\n        public int Go() { var c = new C().Make(1); return c.Total(); }\n    }\n}\n" }}, .call, "Total", "App.Cart.Total");
 }
@@ -951,14 +973,55 @@ test "fact store: a saved csharp store opens again with every new link field" {
         defer repo.deinit();
         try testing.expect((try repo.refresh()).saved);
     }
+    try fixture.write(.{ .path = "Cart.cs", .data = "namespace Shop.Services\n{\n    public class Cart { public int Total() { return 1; } public int Count() { return 0; } }\n    public static class Pricing\n    {\n        public static Cart Make() { return new Cart(); }\n        public static int Apply() { return 1; }\n    }\n}\n" });
     const again = try fixture.open(runtime, fact_store.default_max_file_bytes);
     defer again.deinit();
     try testing.expectEqual(fact_store.Load.loaded, again.load);
-    try testing.expectEqual(@as(usize, 0), (try again.refresh()).extracted);
+    try testing.expectEqual(@as(usize, 1), (try again.refresh()).extracted);
     try testing.expectEqualStrings("Shop.Services.Cart", try linkedQname(again, "Use.cs", .new, "Cart"));
     try testing.expectEqualStrings("Shop.Services.Cart.Total", try linkedQname(again, "Use.cs", .call, "Total"));
     try testing.expectEqualStrings("Shop.Services.Pricing.Apply@static", try linkedQname(again, "Use.cs", .call, "Apply"));
     try testing.expectEqualStrings("", try linkedQname(again, "Use.cs", .new, "Alias"));
+    var value_types: usize = 0;
+    var called_types: usize = 0;
+    for (again.store.file(again.store.fileId("Use.cs").?).facts.types) |t| {
+        if (t.value) value_types += 1;
+        if (t.called) called_types += 1;
+    }
+    try testing.expect(value_types != 0);
+    try testing.expect(called_types != 0);
+}
+
+test "fact store: a saved csharp store keeps a block's own using inside its block" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Thing.cs", .data = "namespace Far\n{\n    public class Thing { }\n}\n" },
+        .{ .path = "Use.cs", .data = "namespace In\n{\n    using Far;\n\n    public class Use { public object Go() { return new Thing(); } }\n}\n\nnamespace In\n{\n    public class Later { public object Go() { return new Thing(); } }\n}\n\nnamespace Out\n{\n    public class Other { public object Go() { return new Thing(); } }\n}\n" },
+    });
+    defer fixture.deinit();
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        try testing.expect((try repo.refresh()).saved);
+    }
+    try fixture.write(.{ .path = "Thing.cs", .data = "namespace Far\n{\n    public class Thing { }\n    public class Spare { }\n}\n" });
+    const again = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer again.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, again.load);
+    try testing.expectEqual(@as(usize, 1), (try again.refresh()).extracted);
+    const state = again.store.file(again.store.fileId("Use.cs").?);
+    var linked: usize = 0;
+    var unlinked: usize = 0;
+    for (state.facts.refs, state.links) |r, l| {
+        if (r.kind != .new) continue;
+        switch (l) {
+            .def => linked += 1,
+            .unresolved => unlinked += 1,
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), linked);
+    try testing.expectEqual(@as(usize, 2), unlinked);
 }
 
 test "fact store: a csharp test class links its evidence through a qualified call" {

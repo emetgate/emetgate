@@ -77,7 +77,6 @@ fn inertTry(snapshot: *const Snapshot, statement: ts.Node) bool {
     var i: u32 = 0;
     while (statement.namedChild(i)) |child| : (i += 1) {
         const kind = child.kind();
-        if (snapshot.profile.isComment(kind)) continue;
         if (eql(kind, "block")) {
             if (!inertBlock(snapshot, child)) return false;
         } else if (eql(kind, "else_clause")) {
