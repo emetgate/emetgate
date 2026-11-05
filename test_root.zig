@@ -103,6 +103,7 @@ pub const search_v1 = src.search_v1;
 pub const search_text = src.search_text;
 pub const rg_search = src.rg_search;
 pub const disk = src.disk;
+pub const commit_record = src.commit_record;
 pub const durability_log = src.durability_log;
 pub const receipts = src.receipts;
 pub const verify_run = src.verify_run;
@@ -338,6 +339,7 @@ test {
     _ = @import("tests/nested_repos.zig");
     _ = @import("tests/commit_batch.zig");
     _ = @import("tests/commit_batch_crash.zig");
+    _ = @import("tests/crash_steps.zig");
     _ = @import("tests/commit_protocol.zig");
     _ = @import("tests/commit_on_write.zig");
     _ = @import("tests/commit_group.zig");
