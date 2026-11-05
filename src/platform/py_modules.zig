@@ -31,11 +31,11 @@ pub const Cx = struct {
 };
 
 const keywords = std.StaticStringMap(void).initComptime(.{
-    .{"False"},  .{"None"},   .{"True"},    .{"and"},    .{"as"},   .{"assert"}, .{"async"},
-    .{"await"},  .{"break"},  .{"class"},   .{"continue"}, .{"def"},  .{"del"},    .{"elif"},
-    .{"else"},   .{"except"}, .{"finally"}, .{"for"},    .{"from"}, .{"global"}, .{"if"},
-    .{"import"}, .{"in"},     .{"is"},      .{"lambda"}, .{"nonlocal"}, .{"not"},  .{"or"},
-    .{"pass"},   .{"raise"},  .{"return"},  .{"try"},    .{"while"}, .{"with"},  .{"yield"},
+    .{"False"},  .{"None"},   .{"True"},    .{"and"},      .{"as"},       .{"assert"}, .{"async"},
+    .{"await"},  .{"break"},  .{"class"},   .{"continue"}, .{"def"},      .{"del"},    .{"elif"},
+    .{"else"},   .{"except"}, .{"finally"}, .{"for"},      .{"from"},     .{"global"}, .{"if"},
+    .{"import"}, .{"in"},     .{"is"},      .{"lambda"},   .{"nonlocal"}, .{"not"},    .{"or"},
+    .{"pass"},   .{"raise"},  .{"return"},  .{"try"},      .{"while"},    .{"with"},   .{"yield"},
 });
 
 pub fn isIdentifier(text: []const u8) bool {
