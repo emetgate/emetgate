@@ -205,6 +205,11 @@ pub fn expectEveryCut(comptime Case: type, params: Case.Params, min_steps: usize
     try testing.expect(stop - 1 >= min_steps);
 }
 
+pub fn expectNoWayBack(outcomes: []const bool) !void {
+    const first_new = std.mem.indexOfScalar(bool, outcomes, true) orelse return error.NeverRecoveredToNew;
+    for (outcomes[first_new..]) |landed| try testing.expect(landed);
+}
+
 fn report(label: []const u8, stop: usize, landed: bool) void {
     std.debug.print("{s}: a crash after step {d} recovers to {s}\n", .{ label, stop, if (landed) "the commit" else "the old tree" });
 }
