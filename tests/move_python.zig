@@ -112,6 +112,70 @@ test "python move_file: leaving the package for the repo root turns a from-impor
     try expectFile(&case, "use.py", "import top as app\nimport top\n\nprint(app.VALUE, top.VALUE)\n");
 }
 
+const src_layout = [_]fixture.File{
+    .{ .rel = "src/shop/__init__.py", .text = "from .errors import Bad as Bad\nfrom .codec import encode as encode\n" },
+    .{ .rel = "src/shop/errors.py", .text = "class Bad(Exception):\n    pass\n" },
+    .{ .rel = "src/shop/codec.py", .text = "from .errors import Bad\n\ndef encode(x):\n    if x is None:\n        raise Bad()\n    return x\n" },
+    .{ .rel = "tests/test_codec.py", .text = "from shop.codec import encode\nfrom shop.errors import Bad\n\ndef test_encode():\n    assert encode(1) == 1\n" },
+};
+
+test "python move_file: in a src layout the tests keep the package name and the moved file gains no src prefix" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&src_layout, false);
+    defer case.deinit();
+    const outcome = try moveFile(&case, "src/shop/codec.py", "src/shop/util/codec.py", false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "src/shop/util/codec.py", "from shop.errors import Bad\n\ndef encode(x):\n    if x is None:\n        raise Bad()\n    return x\n");
+    try expectFile(&case, "src/shop/__init__.py", "from .errors import Bad as Bad\nfrom .util.codec import encode as encode\n");
+    try expectFile(&case, "tests/test_codec.py", "from shop.util.codec import encode\nfrom shop.errors import Bad\n\ndef test_encode():\n    assert encode(1) == 1\n");
+}
+
+test "python move_file: in a src layout a renamed module keeps the package name in the tests and relative imports inside" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&src_layout, false);
+    defer case.deinit();
+    const outcome = try moveFile(&case, "src/shop/errors.py", "src/shop/exc.py", false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "src/shop/__init__.py", "from .exc import Bad as Bad\nfrom .codec import encode as encode\n");
+    try expectFile(&case, "src/shop/codec.py", "from .exc import Bad\n\ndef encode(x):\n    if x is None:\n        raise Bad()\n    return x\n");
+    try expectFile(&case, "tests/test_codec.py", "from shop.codec import encode\nfrom shop.exc import Bad\n\ndef test_encode():\n    assert encode(1) == 1\n");
+}
+
+test "python move_file: a src folder that is itself a package keeps the src prefix the code spells" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/__init__.py", .text = "" },
+        .{ .rel = "src/shop/__init__.py", .text = "" },
+        .{ .rel = "src/shop/errors.py", .text = "class Bad(Exception):\n    pass\n" },
+        .{ .rel = "tests/test_errors.py", .text = "from src.shop.errors import Bad\n\ndef test_bad():\n    assert Bad\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try moveFile(&case, "src/shop/errors.py", "src/shop/exc.py", false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "tests/test_errors.py", "from src.shop.exc import Bad\n\ndef test_bad():\n    assert Bad\n");
+}
+
+test "python move_file: an import that spells the src folder keeps spelling it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/shop/__init__.py", .text = "" },
+        .{ .rel = "src/shop/errors.py", .text = "class Bad(Exception):\n    pass\n" },
+        .{ .rel = "tests/test_errors.py", .text = "from src.shop.errors import Bad\n\ndef test_bad():\n    assert Bad\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try moveFile(&case, "src/shop/errors.py", "src/shop/exc.py", false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "tests/test_errors.py", "from src.shop.exc import Bad\n\ndef test_bad():\n    assert Bad\n");
+}
+
 test "python move_file: a script's sibling import is rewritten when its script root changes" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

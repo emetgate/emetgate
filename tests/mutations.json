@@ -18839,6 +18839,33 @@
       "kills": [
         "fact store: an edit that changes what a function returns reshapes the file"
       ]
+    },
+    {
+      "id": "SRC1-spelled-root-ignored",
+      "file": "src/platform/py_modules.zig",
+      "from": "        if (!sameOptional(try resolve(cx, existing, importer, dotted), target)) continue;\n        if (prefer) |root| if (sameRoot(root, base)) return dotted;\n",
+      "to": "        if (!sameOptional(try resolve(cx, existing, importer, dotted), target)) continue;\n        if (false) if (prefer) |root| if (sameRoot(root, base)) return dotted;\n",
+      "kills": [
+        "python move_file: an import that spells the src folder keeps spelling it"
+      ]
+    },
+    {
+      "id": "SRC2-namespace-root-chosen-first",
+      "file": "src/platform/py_modules.zig",
+      "from": "        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;\n    }\n    return regular orelse first;\n}\n\npub fn absoluteOfDir",
+      "to": "        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;\n    }\n    return first orelse regular;\n}\n\npub fn absoluteOfDir",
+      "kills": [
+        "python move_file: in a src layout the tests keep the package name and the moved file gains no src prefix"
+      ]
+    },
+    {
+      "id": "SRC3-spec-root-never-found",
+      "file": "src/platform/py_modules.zig",
+      "from": "        if (try paths.resolveJoinedPython(cx.arena, existing, joined, '\\\\') != null) return base;\n",
+      "to": "        if (false and try paths.resolveJoinedPython(cx.arena, existing, joined, '\\\\') != null) return base;\n",
+      "kills": [
+        "python move_file: an import that spells the src folder keeps spelling it"
+      ]
     }
   ]
 }

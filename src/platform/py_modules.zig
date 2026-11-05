@@ -161,21 +161,51 @@ pub fn ambiguous(cx: Cx, existing: Existing, importer: []const u8, spec: []const
     return false;
 }
 
-pub fn absoluteOf(cx: Cx, existing: Existing, importer: []const u8, target: []const u8) !?[]const u8 {
+pub fn rootOfSpec(cx: Cx, existing: Existing, importer: []const u8, spec: []const u8) !?[]const u8 {
+    if (spec.len == 0 or spec[0] == '.') return null;
+    const rest = try cx.arena.dupe(u8, spec);
+    std.mem.replaceScalar(u8, rest, '.', '\\');
     for (try rootsOf(cx, existing, importer)) |base| {
-        const relative_path = underRoot(base, moduleLogical(target)) orelse continue;
-        const dotted = (try dottedOf(cx.arena, relative_path)) orelse continue;
-        if (sameOptional(try resolve(cx, existing, importer, dotted), target)) return dotted;
+        const joined = try std.fmt.allocPrint(cx.arena, "{s}\\{s}", .{ base, rest });
+        if (try paths.resolveJoinedPython(cx.arena, existing, joined, '\\') != null) return base;
     }
     return null;
 }
 
-pub fn absoluteOfDir(cx: Cx, existing: Existing, importer: []const u8, dir: []const u8) !?[]const u8 {
+fn regularTop(cx: Cx, existing: Existing, base: []const u8, dotted: []const u8) !bool {
+    const dot = std.mem.indexOfScalar(u8, dotted, '.') orelse return true;
+    return hasInit(existing, cx.arena, try std.fmt.allocPrint(cx.arena, "{s}\\{s}", .{ base, dotted[0..dot] }));
+}
+
+fn sameRoot(a: []const u8, b: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(std.mem.trimEnd(u8, a, "\\/"), std.mem.trimEnd(u8, b, "\\/"));
+}
+
+pub fn absoluteOf(cx: Cx, existing: Existing, importer: []const u8, target: []const u8, prefer: ?[]const u8) !?[]const u8 {
+    var first: ?[]const u8 = null;
+    var regular: ?[]const u8 = null;
+    for (try rootsOf(cx, existing, importer)) |base| {
+        const relative_path = underRoot(base, moduleLogical(target)) orelse continue;
+        const dotted = (try dottedOf(cx.arena, relative_path)) orelse continue;
+        if (!sameOptional(try resolve(cx, existing, importer, dotted), target)) continue;
+        if (prefer) |root| if (sameRoot(root, base)) return dotted;
+        if (first == null) first = dotted;
+        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;
+    }
+    return regular orelse first;
+}
+
+pub fn absoluteOfDir(cx: Cx, existing: Existing, importer: []const u8, dir: []const u8, prefer: ?[]const u8) !?[]const u8 {
+    var first: ?[]const u8 = null;
+    var regular: ?[]const u8 = null;
     for (try rootsOf(cx, existing, importer)) |base| {
         const relative_path = underRoot(base, dir) orelse continue;
-        if (try dottedOf(cx.arena, relative_path)) |dotted| return dotted;
+        const dotted = (try dottedOf(cx.arena, relative_path)) orelse continue;
+        if (prefer) |root| if (sameRoot(root, base)) return dotted;
+        if (first == null) first = dotted;
+        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;
     }
-    return null;
+    return regular orelse first;
 }
 
 pub fn packageDepth(cx: Cx, existing: Existing, importer: []const u8) !usize {
