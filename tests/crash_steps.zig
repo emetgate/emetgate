@@ -13,18 +13,12 @@ const Dir = std.Io.Dir;
 const Blake3 = std.crypto.hash.Blake3;
 const Digest = [Blake3.digest_length]u8;
 
-// These are opened with delete-on-close, so a process that dies holding one leaves no file
-// behind; a snapshot that kept them would show a state no crash can produce.
 const vanishing_files = [_][]const u8{
     shadow.workspace_dir ++ "/" ++ shadow.workspace_lock_name,
     shadow.workspace_dir ++ "/" ++ memory.lock_name,
 };
 const vanishing_dirs = [_][]const u8{change_watch.cookie_dir};
 
-// These grow in place (git appends to reflogs, emetgate to its logs), so a hard link taken at
-// one step would show what later steps appended; they are copied instead. Nothing compares
-// their stat data, so a copy loses nothing. Restore fails loudly on any other file that
-// changed in place.
 const appended_files = [_][]const u8{
     shadow.workspace_dir ++ "/" ++ memory.ledger_name,
     shadow.workspace_dir ++ "/" ++ emetgate.telemetry.events_file,
@@ -57,14 +51,6 @@ const Entry = struct {
     },
 };
 
-// A crash leaves only what is on disk, and the commit path writes the disk before every step
-// it reports, so one uninterrupted run that records the repository at each step yields the
-// states that one run cut at each step leaves, without repeating the gate before the commit.
-// Files are kept as hard links, not copies: a copy gets new times and a new file id, so the
-// stat data in .git/index would no longer match and git would rehash what a real crash leaves
-// trusted. Directory times are put back too. The journal records absolute paths, so a state is
-// checked by putting it back at the root it was taken from. A commit that also writes outside
-// the repository root (a linked worktree) is recorded over all of its roots at once.
 pub const Snapshots = struct {
     roots: []const []const u8,
     store: testing.TmpDir,
@@ -193,20 +179,18 @@ pub const Snapshots = struct {
     }
 };
 
-// A crash scenario is a type with:
-//   init(*Case, Params) !void, deinit(*Case) void, label(*Case) []const u8,
-//   roots(*Case) []const []const u8, the folders the write may change;
-//   write(*Case, *const disk.Step) !bool, true when the write stopped at the step;
-//   recovered(*Case) !bool, recover and check, true when the commit landed;
-//   settled(*Case) !bool, check the state an uninterrupted write leaves.
-// Only one runtime may be open at a time, so every case is closed before the next opens.
 
 pub fn expectEveryStep(comptime Case: type, params: Case.Params, min_steps: usize) !void {
+    testing.allocator.free(try everyStepOutcomes(Case, params, min_steps));
+}
+
+pub fn everyStepOutcomes(comptime Case: type, params: Case.Params, min_steps: usize) ![]bool {
     const outcomes = try outcomesBySnapshots(Case, params);
-    defer testing.allocator.free(outcomes);
+    errdefer testing.allocator.free(outcomes);
     try testing.expect(outcomes.len >= min_steps);
     const steps = outcomes.len;
     for ([_]usize{ 1, (steps + 1) / 2, steps }) |stop| try testing.expectEqual(outcomes[stop - 1], try outcomeOfCut(Case, params, stop));
+    return outcomes;
 }
 
 pub fn expectEveryCut(comptime Case: type, params: Case.Params, min_steps: usize) !void {
