@@ -9,7 +9,7 @@ const fixture = @import("ts_fixture.zig");
 const rename_case = @import("rename_tool.zig");
 const move_file_case = @import("move_file_tool.zig");
 const common = @import("commit_batch.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
 const Env = common.Env;
@@ -116,24 +116,25 @@ fn expectInvariants(env: *Env, before: []const u8, report: ?disk.RecoverReport) 
     return moved;
 }
 
-fn crashAtEverySnapshot(kind: Kind) !void {
+fn crashAtEveryStep(kind: Kind) !void {
     var world: World = .{ .kind = kind };
     try world.init(kind);
     defer world.deinit();
     const env = &world.env;
     const before = try env.head();
-    var snapshots = try Snapshots.init(env.repo.root_abs);
+    var snapshots = crash_steps.Snapshots.init(env.repo.root_abs);
     defer snapshots.deinit();
     const step = snapshots.step();
     var request: commit_plan.Request = .{ .message = common.message };
     defer request.deinit(testing.allocator);
     try testing.expect(!try world.run(&step, &request));
-    const steps = try snapshots.taken();
+    if (snapshots.failure) |err| return err;
     try testing.expect(try expectInvariants(env, before, null));
     try testing.expectEqualStrings(request.oid.?, try env.head());
+    try testing.expect(snapshots.taken != 0);
     world.settle();
     var broken: usize = 0;
-    for (1..steps + 1) |stop| {
+    for (1..snapshots.taken + 1) |stop| {
         try snapshots.restore(stop);
         const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
         const moved = expectInvariants(env, before, report) catch |err| {
@@ -148,10 +149,10 @@ fn crashAtEverySnapshot(kind: Kind) !void {
 
 test "commit batch crash: a crash after any step of a committing try_batch recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEverySnapshot(.batch);
+    try crashAtEveryStep(.batch);
 }
 
 test "commit batch crash: a crash after any step of a committing file move recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEverySnapshot(.move_file);
+    try crashAtEveryStep(.move_file);
 }
