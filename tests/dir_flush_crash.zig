@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const disk = @import("emetgate").disk;
 const durability_log = @import("emetgate").durability_log;
 const symbol = @import("emetgate").symbol;
@@ -15,17 +16,6 @@ const b_new = "export const b = 2;\n";
 const c_new = "export const c = 3;\n";
 
 const Shape = enum { modify_two, create_and_modify };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Setup = struct {
     repo: fixture.TsRepo,
@@ -168,8 +158,8 @@ test "dir flush fin: a power loss after a finished batch does not bring a delete
 fn flushCount(shape: Shape, stop: ?usize, in_recovery: bool) !usize {
     const dry = try Setup.init(shape);
     defer dry.deinit();
-    var at: StopAt = .{ .target = stop orelse std.math.maxInt(usize) };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = stop orelse std.math.maxInt(usize) };
+    const step = at.step();
     if (stop == null) try dry.run(null) else try testing.expectError(error.Crashed, dry.run(&step));
     if (!in_recovery) return dry.log.flushes;
     dry.log.flushes = 0;
@@ -197,8 +187,8 @@ test "dir flush dropJ: recovery that loses a journal deletion after removing the
     const last = try flushCount(.create_and_modify, after_commit_record, true);
     const setup = try Setup.init(.create_and_modify);
     defer setup.deinit();
-    var at: StopAt = .{ .target = after_commit_record };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = after_commit_record };
+    const step = at.step();
     try testing.expectError(error.Crashed, setup.run(&step));
     setup.log.flushes = 0;
     setup.log.crash_at_flush = last;
@@ -216,8 +206,8 @@ test "dir flush rec: a restore made by recovery is durable before the journal th
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const setup = try Setup.init(.modify_two);
     defer setup.deinit();
-    var at: StopAt = .{ .target = after_first_swap };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = after_first_swap };
+    const step = at.step();
     try testing.expectError(error.Crashed, setup.run(&step));
     try testing.expect(try setup.has("src/a.ts", a_new));
     try setup.recover();
