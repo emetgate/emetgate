@@ -14,7 +14,8 @@ const Runtime = emetgate.runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
 const git_fixture = @import("git_fixture.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
+const test_util = emetgate.test_util;
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -471,49 +472,41 @@ test "redteam commit: a branch switch made while the tests run puts the commit o
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
 }
 
-test "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover" {
-    try skipOffWindows();
-    var case: Case = undefined;
-    try case.initDefault();
-    defer case.deinit();
-    case.deinit();
-    for ([_]bool{ false, true }) |creates| {
-        try case.initDefault();
-        const rel: []const u8 = if (creates) "src/fresh.ts" else "src/util.ts";
-        const mark: []const u8 = if (creates) "fresh" else model_mark;
-        const before = try case.git(&.{ "rev-parse", "HEAD" });
-        var snapshots = try Snapshots.init(case.repo.root_abs);
-        defer snapshots.deinit();
-        const step = snapshots.step();
-        var request: emetgate.commit_plan.Request = .{ .message = "fix: swap" };
-        defer request.deinit(testing.allocator);
-        const result = try emetgate.runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
-            .file_abs = try case.repo.abs(case.arena(), rel),
-            .ref_text = if (creates) "fresh" else "add",
-            .expected_hash = if (creates) .absent else .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, try case.repo.abs(case.arena(), rel), "add") },
-            .new_body = if (creates) "export function fresh(): number {\n  return 1;\n}\n" else new_body,
-            .test_command = green,
-            .commit = &request,
-            .commit_step = &step,
-        });
-        result.deinit(testing.allocator);
-        const steps = try snapshots.taken();
-        try testing.expect(steps >= 6);
-        try expectLandedWhole(&case, rel, mark, before);
-        for (1..steps + 1) |stop| {
-            errdefer std.debug.print("creates {}, cut after step {d}\n", .{ creates, stop });
-            try snapshots.restore(stop);
-            const report = try emetgate.disk.recover(testing.allocator, testing.io, case.repo.root_abs);
-            try testing.expectEqual(@as(usize, 0), report.failed);
-            try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
-            try expectLandedWhole(&case, rel, mark, before);
-        }
-        case.deinit();
-    }
-    try case.initDefault();
+fn diesRel(creates: bool) []const u8 {
+    return if (creates) "src/fresh.ts" else "src/util.ts";
 }
 
-fn expectLandedWhole(case: *Case, rel: []const u8, mark: []const u8, before: []const u8) !void {
+fn diesWrite(case: *Case, creates: bool, step: *const emetgate.disk.Step) !bool {
+    const rel = diesRel(creates);
+    var request: emetgate.commit_plan.Request = .{ .message = "fix: swap" };
+    defer request.deinit(testing.allocator);
+    const outcome = emetgate.runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
+        .file_abs = try case.repo.abs(case.arena(), rel),
+        .ref_text = if (creates) "fresh" else "add",
+        .expected_hash = if (creates) .absent else .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, try case.repo.abs(case.arena(), rel), "add") },
+        .new_body = if (creates) "export function fresh(): number {\n  return 1;\n}\n" else new_body,
+        .test_command = green,
+        .commit = &request,
+        .commit_step = step,
+    });
+    if (outcome) |result| {
+        result.deinit(testing.allocator);
+        return false;
+    } else |err| switch (err) {
+        error.Crashed => return true,
+        else => |e| return e,
+    }
+}
+
+fn diesRecover(case: *Case) !void {
+    const report = try emetgate.disk.recover(testing.allocator, testing.io, case.repo.root_abs);
+    try testing.expectEqual(@as(usize, 0), report.failed);
+    try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
+}
+
+fn diesSettled(case: *Case, creates: bool, before: []const u8, stop: ?usize) !bool {
+    const rel = diesRel(creates);
+    const mark: []const u8 = if (creates) "fresh" else model_mark;
     const written = case.repo.exists(rel) and contains(try case.disk(rel), mark);
     const head = try case.git(&.{ "rev-parse", "HEAD" });
     const moved = !std.mem.eql(u8, head, before);
@@ -524,6 +517,70 @@ fn expectLandedWhole(case: *Case, rel: []const u8, mark: []const u8, before: []c
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
     try testing.expect(!case.repo.exists(".git/index.lock"));
     try testing.expect(!case.repo.exists(".emetgate/intents"));
+    if (stop) |s| std.debug.print("creates {}: a cut after step {d} recovers to {s}\n", .{ creates, s, if (moved) "the commit" else "the old tree" });
+    return moved;
+}
+
+fn diesCutAt(creates: bool, stop: usize) !bool {
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
+    if (!try diesWrite(&case, creates, &step)) return error.StepDidNotStop;
+    errdefer std.debug.print("creates {}, cut after step {d}\n", .{ creates, stop });
+    try diesRecover(&case);
+    return diesSettled(&case, creates, before, stop);
+}
+
+fn diesBySnapshots(creates: bool) ![]bool {
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    var snapshots = try crash_steps.Snapshots.init(case.repo.root_abs);
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    const stopped = try diesWrite(&case, creates, &step);
+    if (snapshots.failure) |err| return err;
+    try testing.expect(!stopped);
+    try testing.expect(try diesSettled(&case, creates, before, null));
+    const outcomes = try testing.allocator.alloc(bool, snapshots.taken());
+    errdefer testing.allocator.free(outcomes);
+    for (outcomes, 1..) |*outcome, stop| {
+        errdefer std.debug.print("creates {}, snapshot after step {d}\n", .{ creates, stop });
+        try snapshots.restore(stop);
+        try diesRecover(&case);
+        outcome.* = try diesSettled(&case, creates, before, stop);
+    }
+    return outcomes;
+}
+
+test "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover" {
+    try skipOffWindows();
+    for ([_]bool{ false, true }) |creates| {
+        const outcomes = try diesBySnapshots(creates);
+        defer testing.allocator.free(outcomes);
+        try testing.expect(outcomes.len >= 6);
+        const steps = outcomes.len;
+        for ([_]usize{ 1, (steps + 1) / 2, steps }) |stop| try testing.expectEqual(outcomes[stop - 1], try diesCutAt(creates, stop));
+    }
+}
+
+test "redteam commit: a process cut for real at every step between the write and the branch move is rolled back or completed by recover" {
+    try skipOffWindows();
+    try test_util.slow();
+    for ([_]bool{ false, true }) |creates| {
+        var stop: usize = 1;
+        while (true) : (stop += 1) {
+            _ = diesCutAt(creates, stop) catch |err| switch (err) {
+                error.StepDidNotStop => break,
+                else => |e| return e,
+            };
+        }
+        try testing.expect(stop > 6);
+    }
 }
 
 test "redteam commit: a stale index lock does not leave the index behind the new commit" {
