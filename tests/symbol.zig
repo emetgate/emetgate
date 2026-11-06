@@ -330,6 +330,33 @@ test "sources with syntax errors never produce a symbol table" {
     try testing.expectError(error.SourceHasErrors, Table.build(testing.allocator, test_util.language, doc.tree));
 }
 
+test "a generic call signature on a new line ends the member before it" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const sources = [_][]const u8{
+        "type A = {\n  (): void\n  <U>(x: U): U\n}\n",
+        "interface A {\n  (): void\n  <U>(x: U): U\n}\n",
+        "type A = {\n  a: string\n  <U>(x: U): U\n}\n",
+        "interface A {\n  m(): void\n  <U>(x: U): U\n}\n",
+        "type A = {\n  <T>(x: T): T\n  <U>(x: U): U\n} & B\n",
+    };
+    for (sources) |source| {
+        const tree = try test_util.TestTree.init(source);
+        defer tree.deinit();
+        try testing.expect(!tree.tree.root().hasError());
+    }
+}
+
+test "a less-than on a new line still continues an expression" {
+    try alloc_bridge.install(testing.allocator);
+    defer alloc_bridge.uninstall();
+    const tree = try test_util.TestTree.init("const x = a\n  < b\n");
+    defer tree.deinit();
+    const root = tree.tree.root();
+    try testing.expect(!root.hasError());
+    try testing.expectEqual(@as(u32, 1), root.namedChildCount());
+}
+
 test "refs round-trip through the canonical text form and malformed refs are rejected" {
     const valid = [_]struct { input: []const u8, canonical: []const u8 }{
         .{ .input = "add", .canonical = "add" },

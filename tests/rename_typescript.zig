@@ -117,3 +117,111 @@ test "real typescript: getEditsForFileRename and the kernel agree on every rewri
     try testing.expectEqual(@import("emetgate").file_move.Resolver.language_service, outcome.plan.resolver);
     try mf.expectNew(&case);
 }
+
+fn realCase(case: *Case, files: []const @import("ts_fixture.zig").File, arena: std.mem.Allocator) !void {
+    const target = (try typescriptDir(arena)) orelse return error.SkipZigTest;
+    try case.init(files, false);
+    errdefer case.deinit();
+    try linkTypeScript(case, target);
+}
+
+const js_cart = "export class Cart {\n  total() {\n    return 2;\n  }\n}\nexport function discount(v) {\n  return v - 1;\n}\n";
+
+test "real typescript: a member reached through an untyped parameter is refused and names the site" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const use = "import { Cart } from './cart.js';\nfunction f(c) {\n  return c.total();\n}\nexport function run() {\n  return f(new Cart());\n}\n";
+    var case: Case = undefined;
+    try realCase(&case, &.{ .{ .rel = "src/cart.js", .text = js_cart }, .{ .rel = "src/use.js", .text = use } }, arena_state.allocator());
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.rename("src/cart.js", "Cart.total", "grand", true, null));
+    try case.expectFile("src/cart.js", js_cart);
+    try case.expectFile("src/use.js", use);
+}
+
+test "real typescript: a destructured parameter with no type is refused" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const use = "export function f({ total }) {\n  return total;\n}\n";
+    var case: Case = undefined;
+    try realCase(&case, &.{ .{ .rel = "src/cart.js", .text = js_cart }, .{ .rel = "src/use.js", .text = use } }, arena_state.allocator());
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.rename("src/cart.js", "Cart.total", "grand", true, null));
+    try case.expectFile("src/use.js", use);
+}
+
+test "real typescript: a member use with a known type elsewhere does not block the rename" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{
+        .{ .rel = "src/cart.ts", .text = "export class Cart {\n  total(): number {\n    return 2;\n  }\n}\n" },
+        .{ .rel = "src/use.ts", .text = "import { Cart } from './cart';\nconst o = { total: () => 5 };\nexport const y = new Cart().total() + o.total();\n" },
+    }, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.ts", "Cart.total", "grand", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/use.ts", "import { Cart } from './cart';\nconst o = { total: () => 5 };\nexport const y = new Cart().grand() + o.total();\n");
+}
+
+test "real typescript: a local variable with an untyped member of the same name still renames" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{.{ .rel = "src/use.js", .text = "function g(o) {\n  const total = 1;\n  return total + o.total;\n}\nexport { g };\n" }}, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/use.js", "g", "h", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+}
+
+test "real typescript: a function nothing can reach by name leaves an untyped member of that name alone" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{.{ .rel = "src/use.js", .text = "function g(o) {\n  return o.g;\n}\nexport const x = g({});\n" }}, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/use.js", "g", "h", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/use.js", "function h(o) {\n  return o.g;\n}\nexport const x = h({});\n");
+}
+
+test "real typescript: an object shorthand of a renamed function keeps its key" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{
+        .{ .rel = "src/cart.js", .text = js_cart },
+        .{ .rel = "src/use.js", .text = "import { discount } from './cart.js';\nexport function run() {\n  const o = { discount };\n  return o.discount(3);\n}\n" },
+    }, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.js", "discount", "cut", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/use.js", "import { cut } from './cart.js';\nexport function run() {\n  const o = { discount: cut };\n  return o.discount(3);\n}\n");
+}
+
+test "real typescript: a commonjs export shorthand follows the rename" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    var case: Case = undefined;
+    try realCase(&case, &.{
+        .{ .rel = "src/cart.js", .text = "function discount(v) {\n  return v - 1;\n}\nmodule.exports = { discount };\n" },
+        .{ .rel = "src/use.js", .text = "const m = require('./cart.js');\nmodule.exports = { run() { return m.discount(3); } };\n" },
+    }, arena_state.allocator());
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.js", "discount", "cut", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/cart.js", "function cut(v) {\n  return v - 1;\n}\nmodule.exports = { cut };\n");
+    try case.expectFile("src/use.js", "const m = require('./cart.js');\nmodule.exports = { run() { return m.cut(3); } };\n");
+}

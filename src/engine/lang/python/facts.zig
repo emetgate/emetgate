@@ -1,4 +1,5 @@
 const profile_mod = @import("../profile.zig");
+const map = @import("map.zig");
 
 const Facts = profile_mod.Facts;
 const FieldSite = profile_mod.FieldSite;
@@ -22,7 +23,6 @@ const test_definitions = [_]TestDefinition{
     .{ .node = "class_definition", .prefix = "Test" },
     .{ .node = "function_definition", .prefix = "test" },
 };
-const test_file_infixes = [_][]const u8{ "test_", "_test" };
 const test_dirs = [_][]const u8{ "tests", "test" };
 const doc_directives = [_][]const u8{ "type:", "noqa", "pragma:", "pylint:", "mypy:", "pyright:", "fmt:" };
 
@@ -35,8 +35,7 @@ const typed_binders = [_]TypedBinder{
 pub const python: Facts = .{
     .branch_statements = &branch_statements,
     .test_definitions = &test_definitions,
-    .test_files = &.{"conftest.py"},
-    .test_file_infixes = &test_file_infixes,
+    .test_name = map.isTestName,
     .test_dirs = &test_dirs,
     .doc_directives = &doc_directives,
     .docstrings = true,
@@ -69,4 +68,9 @@ pub const python: Facts = .{
     .constructions = &.{.{ .node = "assignment", .name_field = "left", .value_field = "right" }},
     .calls_construct = true,
     .sole_binder_types = true,
+    .module_names_rebindable = true,
+    .return_sites = &.{.{ .parent = "function_definition", .field = "return_type" }},
+    .return_statement = "return_statement",
+    .generator_kinds = &.{"yield"},
+    .plain_decorators = &.{ "staticmethod", "classmethod" },
 };

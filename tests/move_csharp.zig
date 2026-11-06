@@ -459,12 +459,71 @@ test "csharp move: a member using another member of its type is refused" {
     }, "src/A.cs", "A.One", "src/B.cs", .{}, error.MoveMemberDependency);
 }
 
-test "csharp move: a member reached through using static is refused" {
+test "csharp move: a member reached through using static brings the new using static along" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" },
+        .{ .rel = "src/B.cs", .text = "namespace Shop;\n\npublic static class B\n{\n}\n" },
+        .{ .rel = "src/C.cs", .text = "using static Shop.A;\n\nnamespace Shop;\n\npublic class C\n{\n    public int Go() => One();\n}\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try move(&case, "src/A.cs", "A.One", "src/B.cs", .{});
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "src/C.cs", "using static Shop.A;\nusing static Shop.B;\n\nnamespace Shop;\n\npublic class C\n{\n    public int Go() => One();\n}\n");
+}
+
+test "csharp move: a using static already naming the receiving type is not added twice" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const user = "using static Shop.A;\nusing static Shop.B;\n\nnamespace Shop;\n\npublic class C\n{\n    public int Go() => One();\n}\n";
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" },
+        .{ .rel = "src/B.cs", .text = "namespace Shop;\n\npublic static class B\n{\n}\n" },
+        .{ .rel = "src/C.cs", .text = user },
+    }, false);
+    defer case.deinit();
+    const outcome = try move(&case, "src/A.cs", "A.One", "src/B.cs", .{});
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "src/C.cs", user);
+}
+
+test "csharp move: a using static user that also names a member of the receiving type is refused" {
     try refuseMove(&.{
         .{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" },
-        .{ .rel = "src/B.cs", .text = "namespace Shop;\n\npublic class B\n{\n}\n" },
-        .{ .rel = "src/C.cs", .text = "using static Shop.A;\n\nnamespace Shop;\n\npublic class C\n{\n    public int Go() => One();\n}\n" },
+        .{ .rel = "src/B.cs", .text = "namespace Shop;\n\npublic static class B\n{\n    public static int Two() => 2;\n}\n" },
+        .{ .rel = "src/C.cs", .text = "using static Shop.A;\n\nnamespace Shop;\n\npublic class C\n{\n    private int Two() => 3;\n    public int Go() => One() + Two();\n}\n" },
     }, "src/A.cs", "A.One", "src/B.cs", .{}, error.MoveMemberDependency);
+}
+
+test "csharp move: a member moves into a file that does not exist yet when the type is named" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" },
+        .{ .rel = "src/C.cs", .text = "namespace Shop;\n\npublic class C\n{\n    public int Go() => A.One();\n}\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try move(&case, "src/A.cs", "A.One", "src/Rates.cs", .{ .target_type = "Rates" });
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "src/Rates.cs", "namespace Shop;\n\npublic static class Rates\n{\n    public static int One() => 1;\n}\n");
+    try expectFile(&case, "src/C.cs", "namespace Shop;\n\npublic class C\n{\n    public int Go() => Rates.One();\n}\n");
+}
+
+test "csharp move: a new target file without a valid type name is refused" {
+    const files = [_]fixture.File{.{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" }};
+    try refuseMove(&files, "src/A.cs", "A.One", "src/Rates.cs", .{}, error.MoveNeedsTargetType);
+    try refuseMove(&files, "src/A.cs", "A.One", "src/Rates.cs", .{ .target_type = "not valid" }, error.MoveNeedsTargetType);
+}
+
+test "csharp move: a new target type the namespace already has is refused" {
+    try refuseMove(&.{
+        .{ .rel = "src/A.cs", .text = "namespace Shop;\n\npublic static class A\n{\n    public static int One() => 1;\n}\n" },
+        .{ .rel = "src/Other.cs", .text = "namespace Shop;\n\npublic static class Rates\n{\n}\n" },
+    }, "src/A.cs", "A.One", "src/Rates.cs", .{ .target_type = "Rates" }, error.TargetNameTaken);
 }
 
 test "csharp move: a name the receiving type has is refused" {

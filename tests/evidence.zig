@@ -425,6 +425,19 @@ test "evidence: the tests that reference a target are listed by test name with h
     try testing.expectEqual(@as(usize, 0), testsOf(off).len);
 }
 
+test "evidence: a Python file with test content counts as a test file, whatever its name" {
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    _ = try f.repo.put("checks.py", "import pytest\ndef decide(x):\n    return x > 1\ndef test_stops():\n    assert decide(2)\n");
+    _ = try f.repo.put("plain.py", "def judge(x):\n    return x > 1\ndef test_named_only():\n    return judge(2)\n");
+    try f.repo.linkAll();
+    const marked = f.ask(.{ .targets = &.{.{ .path = "checks.py", .qname = "decide" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(@as(usize, 1), testsOf(marked).len);
+    const plain = f.ask(.{ .targets = &.{.{ .path = "plain.py", .qname = "judge" }}, .intent = .explain }, evidence.default_budget);
+    try testing.expectEqual(@as(usize, 0), testsOf(plain).len);
+}
+
 test "evidence: an explain answer brings callers, callees and tests unless the include field turns them off" {
     var f: Fixture = undefined;
     try f.init();

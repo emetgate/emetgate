@@ -92,7 +92,7 @@ const Fixture = struct {
         policy.test_command = "cmd /c exit 0";
         const final_top = try self.arena_state.allocator().dupe(u8, self.top);
         self.served.open(gpa, testing.io, self.runtime, policy, .{ .root = final_top });
-        self.repositories = workspace.Workspace.init(gpa, testing.io, self.runtime, policy, null, &self.served, try gpa.dupe(u8, self.session));
+        self.repositories = workspace.Workspace.init(gpa, testing.io, self.runtime, policy, null, &self.served, try gpa.dupeZ(u8, self.session));
         self.open = true;
     }
 

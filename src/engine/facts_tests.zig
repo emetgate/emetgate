@@ -38,9 +38,17 @@ pub fn mentionsCall(source: []const u8, names: []const []const u8) bool {
 
 pub fn isTestPath(table: *const Facts, path: []const u8) bool {
     const name = std.fs.path.basenamePosix(path);
-    if (oneOf(name, table.test_files)) return true;
     for (table.test_file_infixes) |infix| {
         if (std.mem.indexOf(u8, name, infix) != null) return true;
+    }
+    if (table.test_name) |named| {
+        if (named(name)) return true;
+    }
+    if (table.test_segment) |marked| {
+        var segments = std.mem.splitScalar(u8, path[0 .. path.len - name.len], '/');
+        while (segments.next()) |segment| {
+            if (marked(segment)) return true;
+        }
     }
     for (table.test_dirs) |dir| {
         if (std.mem.startsWith(u8, path, dir) and path.len > dir.len and path[dir.len] == '/') return true;
@@ -141,10 +149,24 @@ fn testDefinitionName(table: *const Facts, node: ts.Node, source: []const u8) ?t
     for (table.test_definitions) |definition| {
         if (!std.mem.eql(u8, node.kind(), definition.node)) continue;
         const name = node.childByField(definition.name_field) orelse return null;
+        if (definition.attribute) |marks| return if (hasAttribute(node, source, marks)) name else null;
         if (!std.mem.startsWith(u8, source[name.startByte()..name.endByte()], definition.prefix)) return null;
         return name;
     }
     return null;
+}
+
+fn hasAttribute(node: ts.Node, source: []const u8, marks: *const fn (name: []const u8) bool) bool {
+    var i: u32 = 0;
+    while (node.namedChild(i)) |list| : (i += 1) {
+        if (!std.mem.eql(u8, list.kind(), "attribute_list")) continue;
+        var j: u32 = 0;
+        while (list.namedChild(j)) |attribute| : (j += 1) {
+            const name = attribute.childByField("name") orelse continue;
+            if (marks(source[name.startByte()..name.endByte()])) return true;
+        }
+    }
+    return false;
 }
 
 pub fn innermost(blocks: []const TestBlock, offset: u32) ?u32 {

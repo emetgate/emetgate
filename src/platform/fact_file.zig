@@ -10,7 +10,7 @@ const Store = facts_store.Store;
 const none = facts.none;
 
 pub const magic = "EMGFACTS";
-pub const version: u32 = 8;
+pub const version: u32 = 9;
 pub const checksum_len = 16;
 pub const max_store_bytes: usize = std.math.maxInt(u32);
 
@@ -151,6 +151,7 @@ const Decoder = struct {
             .member_of_binding => .{ .member_of_binding = try self.int() },
             .member_of_super => .{ .member_of_super = try self.int() },
             .member_of_type => .{ .member_of_type = try self.int() },
+            .global_type => .{ .global_type = try self.int() },
             .unresolved => .{ .unresolved = try self.enumOf(facts.Reason) },
         };
     }
@@ -171,6 +172,7 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.raw(&d.alpha);
         try e.byte(@as(u8, @intFromBool(d.exported)) | (@as(u8, @intFromBool(d.is_static)) << 1));
         try e.varint(if (d.body_start == none) 0 else @as(u64, d.body_start - d.span.start) + 1);
+        try e.index(d.returns);
         try e.str(d.signature);
         try e.str(d.doc);
     }
@@ -191,6 +193,9 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
         try e.byte(@intFromEnum(s.kind));
         try e.str(s.scope);
         try e.byte(@intFromBool(s.global));
+        try e.varint(s.start);
+        try e.varint(s.end);
+        try e.str(s.alias);
     }
     try e.varint(f.bindings.len);
     for (f.bindings) |b| {
@@ -211,6 +216,10 @@ fn encodeFacts(e: *Encoder, f: facts.FileFacts) !void {
     for (f.types) |t| {
         try e.target(t.target);
         try e.str(t.member);
+        try e.str(t.scope);
+        try e.varint(t.at);
+        try e.index(t.enclosing);
+        try e.byte(@as(u8, @intFromBool(t.called)) | (@as(u8, @intFromBool(t.value)) << 1));
     }
     try e.varint(f.classes.len);
     for (f.classes) |c| {
@@ -313,6 +322,7 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
             if (at > def.span.end) return error.Corrupt;
             def.body_start = at;
         }
+        def.returns = try d.index();
         def.signature = try d.str();
         def.doc = try d.str();
     }
@@ -334,6 +344,9 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
         s.kind = try d.enumOf(facts.SpecKind);
         s.scope = try d.str();
         s.global = try d.flag();
+        s.start = try d.int();
+        s.end = try d.int();
+        s.alias = try d.str();
     }
     const bindings = try a.alloc(facts.Binding, try d.count(5));
     for (bindings) |*b| {
@@ -363,6 +376,14 @@ fn decodeFacts(d: *Decoder, a: Allocator) DecodeError!facts.FileFacts {
     for (types) |*t| {
         t.target = try d.target();
         t.member = try d.str();
+        t.scope = try d.str();
+        t.at = try d.int();
+        t.enclosing = try d.index();
+        if (t.enclosing != none and t.enclosing >= defs.len) return error.Corrupt;
+        const flags = try d.byte();
+        if (flags > 3) return error.Corrupt;
+        t.called = flags & 1 != 0;
+        t.value = flags & 2 != 0;
     }
     const classes = try a.alloc(facts.Class, try d.count(2));
     for (classes) |*c| {
@@ -494,7 +515,7 @@ fn checkTarget(found: facts.FileFacts, target: facts.Target) DecodeError!void {
     const ok = switch (target) {
         .local, .member_of_def, .member_of_super => |v| v < found.defs.len,
         .binding, .member_of_binding => |v| v < found.bindings.len,
-        .member_of_type => |v| v < found.types.len,
+        .member_of_type, .global_type => |v| v < found.types.len,
         .unresolved => true,
     };
     if (!ok) return error.Corrupt;
@@ -503,6 +524,7 @@ fn checkTarget(found: facts.FileFacts, target: facts.Target) DecodeError!void {
 fn checkTargets(found: facts.FileFacts) DecodeError!void {
     for (found.refs) |r| try checkTarget(found, r.target);
     for (found.types) |t| try checkTarget(found, t.target);
+    for (found.defs) |d| if (d.returns != none and d.returns >= found.types.len) return error.Corrupt;
 }
 
 fn profileByName(name: []const u8) ?*const Profile {

@@ -1063,8 +1063,8 @@
     {
       "id": "B1-body-only-bounded-shortcut-restored",
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
-      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);",
+      "from": "    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);",
+      "to": "    if (class == .body_only_no_op) return .{ .mutation_class = class, .confidence = .bounded, .provenance = null, .same_file_refs = &.{} };\n    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);",
       "kills": [
         "body-only: an exported declaration is UNBOUNDED",
         "body-only: a callback escape is UNBOUNDED",
@@ -1433,7 +1433,7 @@
         "body-only: an exported declaration is UNBOUNDED"
       ],
       "file": "src/engine/boundedness.zig",
-      "from": "    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);\n",
+      "from": "    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);\n",
       "to": ""
     },
     {
@@ -4959,8 +4959,8 @@
     {
       "id": "BCR8-symmetry-ignores-effects",
       "file": "src/engine/symmetry.zig",
-      "from": "    if (isEffect(profile, node.kind())) return true;\n",
-      "to": "",
+      "from": "    if (isEffect(profile, node.kind()) or isUpdate(profile, node)) return true;\n",
+      "to": "    if (isUpdate(profile, node)) return true;\n",
       "kills": [
         "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
       ]
@@ -5451,7 +5451,7 @@
       "from": "    if (try rename.exportedName(gpa, base, old)) return error.RenameUnresolved;\n",
       "to": "",
       "kills": [
-        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+        "rename: a language service that dies leaves an exported symbol or a name another file mentions unresolved"
       ]
     },
     {
@@ -5460,7 +5460,7 @@
       "from": "        if (!tsserver.sameFile(abs, file_abs)) return error.RenameUnresolved;",
       "to": "        if (abs.len == 0) return error.RenameUnresolved;",
       "kills": [
-        "rename: without the language service an exported symbol or a name another file mentions is unresolved"
+        "rename: a language service that dies leaves an exported symbol or a name another file mentions unresolved"
       ]
     },
     {
@@ -5469,7 +5469,7 @@
       "from": "    if (try rename.binderCount(gpa, base, old) != 1) return error.RenameUnresolved;\n",
       "to": "",
       "kills": [
-        "rename: without the language service a local name with a second binder is unresolved"
+        "rename: a language service that dies leaves a local name with a second binder unresolved"
       ]
     },
     {
@@ -5908,8 +5908,8 @@
     {
       "id": "FM11-literal-require-accepted",
       "file": "src/platform/file_move.zig",
-      "from": "                if (tsserver.sameFile(target, request.from_abs)) return error.DynamicPathUse;",
-      "to": "                _ = target;",
+      "from": "                if (!service_missing and snapshot.profile.facts.?.commonjs == null) return error.DynamicPathUse;",
+      "to": "",
       "kills": [
         "move file: a require or a computed import that reaches the file is refused"
       ]
@@ -6952,7 +6952,7 @@
     {
       "id": "FCS1-typed-edge-labelled-proven",
       "file": "src/engine/facts_store.zig",
-      "from": "certainty = .typed;",
+      "from": "certainty = if (ref.static) .proven else .typed;",
       "to": "certainty = .proven;",
       "kills": [
         "facts store: an inherited method is found through the base class of another file, a typed receiver is labelled typed",
@@ -12425,8 +12425,8 @@
     {
       "id": "CSR1-facts-resolver-never-chosen",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
-      "to": "    if (false and rename_graph.supports(base.profile)) {",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
+      "to": "    if (false and rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
       "kills": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call",
         "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
@@ -12436,8 +12436,8 @@
     {
       "id": "CSR2-facts-resolver-for-service-languages",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
-      "to": "    if (rename_graph.supports(base.profile)) {",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
+      "to": "    _ = service_missing;\n    if (rename_graph.supports(base.profile)) {",
       "kills": [
         "rename kinds: a class is renamed in its declaration, an import, extends, a return type, a variable type and new"
       ]
@@ -12573,9 +12573,11 @@
       "file": "src/platform/rename_graph.zig",
       "from": "                if (found.eql(parent_at)) {\n                    try self.prove(file, ref.start);\n                } else",
       "to": "                if (found.eql(parent_at)) {} else",
-      "kills": [
+      "expect_status": "survived",
+      "filter": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call"
-      ]
+      ],
+      "note": "the fact store now links this call through its own C# name lookup before proveGlobal looks at it, so this proof no longer decides the listed test"
     },
     {
       "id": "CSR17-static-shape-not-compared",
@@ -12595,14 +12597,7 @@
       "from": "                if (i == 0 or d.kind == .constructor or !std.mem.eql(u8, d.name, name)) continue;",
       "to": "                if (i == 0 or d.kind == .constructor) continue;",
       "kills": [
-        "rename facts: a C# static method called from another file is renamed at its declaration and every call",
-        "rename facts: a C# method call through a using directive is renamed",
-        "rename facts: a C# class is renamed at its declaration, constructor, new, parameter type, return type and static call in another file",
-        "rename facts: a C# class in the global namespace is renamed in another file",
-        "rename facts: a C# instance method called through a typed parameter in another file is renamed",
-        "rename facts: a C# property reached bare, through var, target-typed new, a field or a parameter is renamed",
-        "rename facts: a C# property set in an object initializer or a with expression is renamed, and a same-named local on the right is kept",
-        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12641,7 +12636,7 @@
       "from": "        if (prefix.len == 0) return at;",
       "to": "        if (prefix.len == 0) return null;",
       "kills": [
-        "rename facts: a C# class in the global namespace is renamed in another file"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12650,7 +12645,7 @@
       "from": "        if (try self.enclosedBy(file, node, namespace)) return at;\n",
       "to": "",
       "kills": [
-        "rename facts: a C# static method called from another file is renamed at its declaration and every call"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12659,7 +12654,7 @@
       "from": "        if (self.imports(file, node, namespace)) return at;\n",
       "to": "",
       "kills": [
-        "rename facts: a C# method call through a using directive is renamed"
+        "rename facts: a C# class named only as a parameter type in another file is renamed"
       ]
     },
     {
@@ -12704,8 +12699,8 @@
     {
       "id": "CSR29-unaccounted-occurrence-accepted",
       "file": "src/platform/rename_graph.zig",
-      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n",
-      "to": "                const sites = self.sites orelse continue;\n",
+      "from": "                    if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;\n                }\n                const sites = self.sites orelse return error.RenameUnresolved;\n",
+      "to": "                    if (use.binder) |b| if (!resolution.binders[b].import and !self.isProven(file, resolution.binders[b].span.start)) continue;\n                }\n                const sites = self.sites orelse continue;\n",
       "kills": [
         "rename facts: a C# member call on a receiver of unknown type refuses the rename",
         "rename facts: a Python method called on a receiver of unknown type is refused"
@@ -12749,7 +12744,7 @@
     {
       "id": "CSR33-global-type-call-never-static",
       "file": "src/engine/facts_extract.zig",
-      "from": "            .member_of_type => is_static = std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null,",
+      "from": "            .member_of_type => is_static = (std.mem.eql(u8, object_kind, self.profile.identifier) and self.binderOfUse(object.startByte()) == null) or (try self.dottedGlobal(object)) != null,",
       "to": "            .member_of_type => is_static = false,",
       "kills": [
         "rename facts: a C# static method called from another file is renamed at its declaration and every call"
@@ -13424,24 +13419,6 @@
       "id": "PY-FT1-no-test-definitions",
       "file": "src/engine/lang/python/facts.zig",
       "from": "    .test_definitions = &test_definitions,\n",
-      "to": "",
-      "kills": [
-        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
-      ]
-    },
-    {
-      "id": "PY-FT2-conftest-not-a-test-file",
-      "file": "src/engine/lang/python/facts.zig",
-      "from": "    .test_files = &.{\"conftest.py\"},\n",
-      "to": "",
-      "kills": [
-        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
-      ]
-    },
-    {
-      "id": "PY-FT3-test-file-name-ignored",
-      "file": "src/engine/facts_tests.zig",
-      "from": "    if (oneOf(name, table.test_files)) return true;\n",
       "to": "",
       "kills": [
         "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
@@ -15567,8 +15544,8 @@
     {
       "id": "L4E-unresolved-stops-at-first-site",
       "file": "src/platform/rename_graph.zig",
-      "from": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);",
-      "to": "                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;",
+      "from": "                const sites = self.sites orelse return error.RenameUnresolved;\n                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n            }\n",
+      "to": "                const sites = self.sites orelse return error.RenameUnresolved;\n                sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);\n                return error.RenameUnresolved;\n            }\n",
       "kills": [
         "rename facts: an unproven reference refuses the rename and names every site it could not prove"
       ]
@@ -15630,16 +15607,16 @@
     {
       "id": "L4L-written-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
-      "to": "_ = written;\n            if (binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "to": "_ = written;\n            if (self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
-        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
       ]
     },
     {
       "id": "L4M-module-binders-keep-type",
       "file": "src/engine/facts_extract.zig",
-      "from": "if (written.contains(start.*) or binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start == root.startByte() and std.mem.eql(u8, binder.scope.kind, root.kind()) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "to": "_ = .{ binder, root };\n            if (written.contains(start.*) or !self.soleBinder(i)) try doomed.append(self.arena, start.*);",
       "kills": [
         "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
@@ -15985,7 +15962,7 @@
       "from": "                if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;",
       "to": "                if (linkedElsewhere(st, leaf.span.start)) continue;",
       "kills": [
-        "rename facts: a same-named C# property of another class is left alone beside the renamed one"
+        "rename facts: a member read through a class that has no such member and no base is left alone"
       ]
     },
     {
@@ -17288,6 +17265,1301 @@
       ]
     },
     {
+      "id": "PY-FT2-test-name-hook-removed",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .test_name = map.isTestName,\n",
+      "to": "",
+      "kills": [
+        "test blocks: a Python name is a test file only by its prefix or suffix, never by a word inside it",
+        "python facts: test functions and test classes are test blocks, and conftest.py is a test file"
+      ]
+    },
+    {
+      "id": "PY-FT3-test-name-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (named(name)) return true;\n",
+      "to": "        _ = named;\n",
+      "kills": [
+        "test blocks: a Python name is a test file only by its prefix or suffix, never by a word inside it",
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TP1-test-segment-ignored",
+      "file": "src/engine/facts_tests.zig",
+      "from": "            if (marked(segment)) return true;\n",
+      "to": "            if (marked(segment) and false) return true;\n",
+      "kills": [
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TP2-csharp-test-dirs-empty",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .test_dirs = map.table.test_segments,\n",
+      "to": "",
+      "kills": [
+        "test blocks: a C# file is a test file by its name, its folder or its project folder"
+      ]
+    },
+    {
+      "id": "T3-TA1-attribute-not-read",
+      "file": "src/engine/facts_tests.zig",
+      "from": "        if (definition.attribute) |marks| return if (hasAttribute(node, source, marks)) name else null;\n",
+      "to": "        if (definition.attribute) |marks| { _ = marks; return name; }\n",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-TA2-csharp-no-test-definitions",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .test_definitions = &test_definitions,\n",
+      "to": "",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-TA3-test-class-not-a-block",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .{ .node = \"class_declaration\", .attribute = map.isTestAttribute },\n",
+      "to": "",
+      "kills": [
+        "test blocks: C# test attributes make test blocks, nested under a test class"
+      ]
+    },
+    {
+      "id": "T3-EX1-owner-visibility-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (parent != 0 and (!owner.kind.isType() or !owner.exported)) return false;\n",
+      "to": "        if (parent != 0 and !owner.kind.isType()) return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX2-local-def-exported",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (parent != 0 and (!owner.kind.isType() or !owner.exported)) return false;\n",
+      "to": "        if (parent != 0 and !owner.exported) return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX3-public-word-ignored",
+      "file": "src/engine/lang/csharp/facts.zig",
+      "from": "    .public_modifier = \"public\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX5-implicit-enum-member-lost",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        return !hidden and (owner.kind == .interface or owner.kind == .enumeration);\n",
+      "to": "        return false;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-AL1-private-prefix-off",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "        .private_prefix = \"_\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-AL2-dunder-private",
+      "file": "src/engine/lang/python/rename.zig",
+      "from": "        .public_wrapper = \"__\",\n",
+      "to": "",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-AL3-dynamic-list-trusted",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!try staticList(snapshot, list, entry.node, &names, gpa)) open = true;\n",
+      "to": "        if (!try staticList(snapshot, list, entry.node, &names, gpa)) open = false;\n",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-AL4-second-mention-trusted",
+      "file": "src/engine/name_list.zig",
+      "from": ".open = open or uses > 1,",
+      "to": ".open = open,",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name"
+      ]
+    },
+    {
+      "id": "T3-AL5-list-ignored",
+      "file": "src/engine/name_list.zig",
+      "from": "        if (!self.listed) return !self.isPrivate(name);\n",
+      "to": "        if (true) return !self.isPrivate(name);\n",
+      "kills": [
+        "facts extract: a Python definition is exported by __all__ when the list is static, else by its name",
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-BD1-nested-not-local",
+      "file": "src/engine/boundedness.zig",
+      "from": "        if (profile.functionKind(p.kind()) != null) return false;\n",
+      "to": "",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD2-private-owner-public",
+      "file": "src/engine/boundedness.zig",
+      "from": "        if (owner) |inner| if (seen.isPrivate(inner)) return false;\n",
+      "to": "",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD3-unlisted-class-public",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (owner) |top| return seen.covers(top) and !seen.isPrivate(name);\n",
+      "to": "    if (owner) |_| return !seen.isPrivate(name);\n",
+      "kills": [
+        "python boundedness: a method follows its class, a nested function is local"
+      ]
+    },
+    {
+      "id": "T3-BD4-rule-off",
+      "file": "src/engine/boundedness.zig",
+      "from": "    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| return isExposedByName(snapshot, seen, sym, name);\n",
+      "to": "    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| if (false) return isExposedByName(snapshot, seen, sym, name);\n",
+      "kills": [
+        "python boundedness: a public function can be imported, a private or unlisted one stays local"
+      ]
+    },
+    {
+      "id": "T3-SY1-python-kinds-gone",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": "    .effect_kinds = &.{ \"await\", \"named_expression\", \"augmented_assignment\", \"yield\" },\n",
+      "to": "",
+      "kills": [
+        "symmetry: Python effect kinds are Python's own"
+      ]
+    },
+    {
+      "id": "T3-SY2-csharp-kinds-gone",
+      "file": "src/engine/lang/csharp/profile.zig",
+      "from": "    .effect_kinds = &.{ \"object_creation_expression\", \"implicit_object_creation_expression\", \"await_expression\", \"assignment_expression\" },\n",
+      "to": "",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY3-update-any-unary",
+      "file": "src/engine/symmetry.zig",
+      "from": "        if (!std.mem.eql(u8, node.kind(), update)) continue;\n        var i: u32 = 0;\n",
+      "to": "        if (std.mem.eql(u8, node.kind(), update)) return true;\n        var i: u32 = 0;\n",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY4-update-off",
+      "file": "src/engine/symmetry.zig",
+      "from": "isEffect(profile, node.kind()) or isUpdate(profile, node)",
+      "to": "isEffect(profile, node.kind())",
+      "kills": [
+        "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect"
+      ]
+    },
+    {
+      "id": "T3-SY5-typescript-kinds-gone",
+      "file": "src/engine/lang/typescript/profile.zig",
+      "from": "    .effect_kinds = &ecma.effect_kinds,\n",
+      "to": "",
+      "kills": [
+        "symmetry: a call, a new or an assignment in a top-level initializer is an effect"
+      ]
+    },
+    {
+      "id": "T3-NS1-child-files-kept",
+      "file": "src/engine/facts_store.zig",
+      "from": "                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "to": "                if (declared.name.len == 0) continue;\n",
+      "kills": [
+        "facts store: a namespace's type files are the files with types directly in it, never a child namespace's"
+      ]
+    },
+    {
+      "id": "T3-NS2-empty-block-counts",
+      "file": "src/engine/facts_store.zig",
+      "from": "                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "to": "                if (!std.mem.eql(u8, declared.namespace, namespace)) continue;\n",
+      "kills": [
+        "facts store: a namespace's type files are the files with types directly in it, never a child namespace's"
+      ]
+    },
+    {
+      "id": "T3-EV1-test-content-ignored",
+      "file": "src/engine/evidence.zig",
+      "from": " and !state.facts.map.test_content) return;",
+      "to": ") return;",
+      "kills": [
+        "evidence: a Python file with test content counts as a test file, whatever its name"
+      ]
+    },
+    {
+      "id": "T3-EX7-hidden-word-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (oneOf(self.raw(child), self.f.hidden_modifiers)) hidden = true;\n",
+      "to": "            if (false) hidden = true;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX4-field-modifier-not-read",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        while (current) |at| : (current = at.parent()) {\n            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "        while (current) |at| : (current = null) {\n            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX6-owner-modifier-read",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "",
+      "kills": [
+        "facts extract: a C# definition is exported only when it and every type around it are public"
+      ]
+    },
+    {
+      "id": "T3-EX8-first-type-stops-early",
+      "file": "src/engine/facts_extract.zig",
+      "from": "            if (parent != 0 and at.startByte() == owner.span.start) break;\n",
+      "to": "            if (at.startByte() == owner.span.start) break;\n",
+      "kills": [
+        "facts extract: a C# type at the very start of a file reads its own visibility"
+      ]
+    },
+    {
+      "id": "T3-R1-rebound-name-kept-typed",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.rebound_names.contains(names[index])) return false;",
+      "to": "if (false and self.rebound_names.contains(names[index])) return false;",
+      "kills": [
+        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R2-built-from-rebound-kept",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.typed_at.contains(entry.value_ptr.*)) continue;",
+      "to": "if (true or self.typed_at.contains(entry.value_ptr.*)) continue;",
+      "kills": [
+        "rename facts: a Python local built through a rebound local stays unproven"
+      ]
+    },
+    {
+      "id": "T3-R3-called-name-not-sole",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.f.sole_binder_types and !self.isSoleBinder(binder)) return null;",
+      "to": "if (false and !self.isSoleBinder(binder)) return null;",
+      "kills": [
+        "rename facts: a Python call of a name its own file rebinds gives no type"
+      ]
+    },
+    {
+      "id": "T3-R4-returning-def-not-sole",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.f.sole_binder_types and !self.isSoleBinder(name.startByte())) return null;",
+      "to": "if (false and !self.isSoleBinder(name.startByte())) return null;",
+      "kills": [
+        "facts extract: a Python function gives no return type once its module rebinds it"
+      ]
+    },
+    {
+      "id": "T3-R5-async-def-returns-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (hasToken(node, \"async\") or !self.plainlyDecorated(node)) return null;",
+      "to": "if (!self.plainlyDecorated(node)) return null;",
+      "kills": [
+        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R6-decorated-def-returns-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (hasToken(node, \"async\") or !self.plainlyDecorated(node)) return null;",
+      "to": "if (hasToken(node, \"async\")) return null;",
+      "kills": [
+        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R7-generator-returns-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (oneOf(kind, self.f.generator_kinds)) return null;",
+      "to": "if (false and oneOf(kind, self.f.generator_kinds)) return null;",
+      "kills": [
+        "rename facts: a Python generator that also returns a constructor gives no type"
+      ]
+    },
+    {
+      "id": "T3-R8-mixed-returns-accepted",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (!self.sameType(first, found)) return null;",
+      "to": "if (false and !self.sameType(first, found)) return null;",
+      "kills": [
+        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R9-overload-returns-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (names.get(overloadKey(self.defs.items[d])) != 1) continue;",
+      "to": "if (false and names.get(overloadKey(self.defs.items[d])) != 1) continue;",
+      "kills": [
+        "rename facts: a C# method through var whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R10-nullable-not-unwrapped",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.f.nullable_type) |nullable| if (std.mem.eql(u8, kind, nullable)) {",
+      "to": "if (self.f.nullable_type) |nullable| if (false and std.mem.eql(u8, kind, nullable)) {",
+      "kills": [
+        "rename facts: a C# method through var from a call with a declared return type is renamed"
+      ]
+    },
+    {
+      "id": "T3-R11-generic-leaf-not-taken",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (!self.f.global_types or !self.isGeneric(node.kind())) return node;",
+      "to": "if (true or !self.isGeneric(node.kind())) return node;",
+      "kills": [
+        "fact store: a csharp generic new links to the generic class, bare or qualified"
+      ]
+    },
+    {
+      "id": "T3-R14-parameter-as-name",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (self.isTypeParameter(node)) {\n",
+      "to": "        if (false and self.isTypeParameter(node)) {\n",
+      "kills": [
+        "fact store: a csharp new of a type parameter links to no class of the same name"
+      ]
+    },
+    {
+      "id": "T3-R15-parameter-as-global",
+      "file": "src/engine/facts_extract.zig",
+      "from": " or self.isTypeParameter(current)) return null;",
+      "to": ") return null;",
+      "kills": [
+        "rename facts: a C# type parameter is never the class of the same name"
+      ]
+    },
+    {
+      "id": "T3-R16-csharp-type-bound-in-file",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (!self.f.global_types) return false;\n        const def = self.def_at_name.get",
+      "to": "if (true) return false;\n        const def = self.def_at_name.get",
+      "kills": [
+        "fact store: a csharp type declared twice in one file is unproven and the nearest namespace wins inside a file"
+      ]
+    },
+    {
+      "id": "T3-R17-method-return-inferred",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.defs.items[def].parent != 0) return null;",
+      "to": "if (false and self.defs.items[def].parent != 0) return null;",
+      "kills": [
+        "rename facts: a Python method through a local whose type cannot be proven refuses and names every site"
+      ]
+    },
+    {
+      "id": "T3-R18-every-using-is-static",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (!hasToken(directive, \"static\") or directive.childByField(\"name\") != null) return;",
+      "to": "if (directive.childByField(\"name\") != null) return;",
+      "kills": [
+        "fact store: a plain csharp using makes no reference to the namespace it names"
+      ]
+    },
+    {
+      "id": "T3-R19-generic-hides-the-role",
+      "file": "src/engine/facts_extract.zig",
+      "from": "or (self.f.global_types and self.isGeneric(self.path.items[at - 1].node.kind())))) {",
+      "to": "or (false and self.isGeneric(self.path.items[at - 1].node.kind())))) {",
+      "kills": [
+        "fact store: a csharp generic new links to the generic class, bare or qualified"
+      ]
+    },
+    {
+      "id": "T3-R20-qualified-name-not-a-ref",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (self.f.qualified_type) |qualified| if (std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node, depth, entry.field);",
+      "to": "if (self.f.qualified_type) |qualified| if (false and std.mem.eql(u8, kind, qualified)) try self.qualifiedType(node, depth, entry.field);",
+      "kills": [
+        "fact store: a csharp generic new links to the generic class, bare or qualified"
+      ]
+    },
+    {
+      "id": "T3-R21-global-path-not-static",
+      "file": "src/engine/facts_extract.zig",
+      "from": "self.binderOfUse(object.startByte()) == null) or (try self.dottedGlobal(object)) != null",
+      "to": "self.binderOfUse(object.startByte()) == null) or false",
+      "kills": [
+        "fact store: a csharp namespace-qualified static call links through its full path"
+      ]
+    },
+    {
+      "id": "T3-R22-called-names-not-followed",
+      "file": "src/platform/rename_graph.zig",
+      "from": "    try graph.addCalled(io, runtime, root);\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python method through a local built by a factory in a file that never names the method is renamed",
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
+      "id": "T3-R23-called-binding-by-local-name",
+      "file": "src/platform/rename_graph.zig",
+      "from": "if (found.bindings[b].imported.len != 0) found.bindings[b].imported else found.bindings[b].local,",
+      "to": "found.bindings[b].local,",
+      "kills": [
+        "rename facts: a Python method through a local built by a factory in a file that never names the method is renamed"
+      ]
+    },
+    {
+      "id": "T3-R24-called-path-not-cut-to-its-last-name",
+      "file": "src/platform/rename_graph.zig",
+      "from": "const dot = std.mem.lastIndexOfScalar(u8, path, '.') orelse return path;\n    return path[dot + 1 ..];",
+      "to": "return path;",
+      "kills": [
+        "rename facts: a qualified C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
+      "id": "T3-G1-class-call-not-the-class",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (def.kind == .class) return .{ .def = owner };",
+      "to": "if (false and def.kind == .class) return .{ .def = owner };",
+      "kills": [
+        "rename facts: a Python method through a local built by a function with one provable return type is renamed"
+      ]
+    },
+    {
+      "id": "T3-G2-partial-return-trusted",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (def.parent != 0 and self.declaredIn(state.facts.defs[def.parent].qname, .type) == .many) return .{ .unresolved = .property_needs_type };",
+      "to": "if (false and def.parent != 0 and self.declaredIn(state.facts.defs[def.parent].qname, .type) == .many) return .{ .unresolved = .property_needs_type };",
+      "kills": [
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
+      "id": "T3-G3-base-overload-ignored",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (try self.baseMayOverload(owner.file, def, visit)) return .{ .unresolved = .property_needs_type };",
+      "to": "if (false and try self.baseMayOverload(owner.file, def, visit)) return .{ .unresolved = .property_needs_type };",
+      "kills": [
+        "fact store: a csharp call's return type is unproven when a base class may hold another overload"
+      ]
+    },
+    {
+      "id": "T3-G4-outside-base-trusted",
+      "file": "src/engine/facts_store.zig",
+      "from": "                .def => |b| b,\n                else => return true,",
+      "to": "                .def => |b| b,\n                else => return false,",
+      "kills": [
+        "fact store: a csharp call's return type is unproven when a base class may hold another overload"
+      ]
+    },
+    {
+      "id": "T3-G5-interface-treated-as-base",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (base_state.facts.defs[base_index].kind == .interface) return false;",
+      "to": "if (false and base_state.facts.defs[base_index].kind == .interface) return false;",
+      "kills": [
+        "fact store: a csharp interface base leaves a call's return type proven"
+      ]
+    },
+    {
+      "id": "T3-G6-base-member-ignored",
+      "file": "src/engine/facts_store.zig",
+      "from": ".unresolved => |reason| if (reason != .member_not_found) return true,\n                    else => return true,",
+      "to": ".unresolved => |reason| if (reason != .member_not_found) return true,\n                    else => {},",
+      "kills": [
+        "fact store: a csharp call's return type is unproven when a base class may hold another overload"
+      ]
+    },
+    {
+      "id": "T3-G7-twin-type-in-a-file-first-wins",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (found != null) return .{ .unresolved = .global };\n            found = i;",
+      "to": "if (false and found != null) return .{ .unresolved = .global };\n            found = i;",
+      "kills": [
+        "fact store: a csharp type declared twice in one file is unproven and the nearest namespace wins inside a file"
+      ]
+    },
+    {
+      "id": "T3-G8-type-in-two-files-first-wins",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (other != key.file) return .many;",
+      "to": "if (false and other != key.file) return .many;",
+      "kills": [
+        "rename facts: a C# call in a partial class whose other part may overload it gives no type"
+      ]
+    },
+    {
+      "id": "T3-G9-path-through-a-type-continues",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (in_type) return .{ .unresolved = .member_not_found };",
+      "to": "if (false and in_type) return .{ .unresolved = .member_not_found };",
+      "kills": [
+        "fact store: a csharp path through a type never continues into a namespace of the same name"
+      ]
+    },
+    {
+      "id": "T3-G10-using-any-block",
+      "file": "src/engine/facts_store.zig",
+      "from": "return !spec.global and std.mem.eql(u8, spec.scope, level) and spec.start <= t.at and t.at < spec.end;",
+      "to": "return !spec.global and (true or std.mem.eql(u8, spec.scope, level)) and spec.start <= t.at and t.at < spec.end;",
+      "kills": [
+        "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it"
+      ]
+    },
+    {
+      "id": "T3-G11-using-whole-file",
+      "file": "src/engine/facts_store.zig",
+      "from": "return !spec.global and std.mem.eql(u8, spec.scope, level) and spec.start <= t.at and t.at < spec.end;",
+      "to": "return !spec.global and std.mem.eql(u8, spec.scope, level) and (true or (spec.start <= t.at and t.at < spec.end));",
+      "kills": [
+        "fact store: a csharp using static stays unproven when another import, block or base could supply the name"
+      ]
+    },
+    {
+      "id": "T3-G12-outside-using-ignored-for-a-path",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (try self.pathIn(level, path, visit)) |found| return if (external) .{ .unresolved = .global } else found;",
+      "to": "if (try self.pathIn(level, path, visit)) |found| return found;",
+      "kills": [
+        "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it"
+      ]
+    },
+    {
+      "id": "T3-G13-two-usings-first-wins",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (!std.meta.eql(earlier, through)) return .{ .unresolved = .global };",
+      "to": "if (false and !std.meta.eql(earlier, through)) return .{ .unresolved = .global };",
+      "kills": [
+        "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it"
+      ]
+    },
+    {
+      "id": "T3-G14-alias-ignored",
+      "file": "src/engine/facts_store.zig",
+      "from": ".using_alias => return if (std.mem.eql(u8, spec.alias, first)) .{ .unresolved = .global } else null,",
+      "to": ".using_alias => return if (false and std.mem.eql(u8, spec.alias, first)) .{ .unresolved = .global } else null,",
+      "kills": [
+        "fact store: a csharp namespace-qualified static call links through its full path"
+      ]
+    },
+    {
+      "id": "T3-G15-constructor-found-for-own-name",
+      "file": "src/engine/facts_store.zig",
+      "from": "orelse return .{ .unresolved = .global }).kind != .constructor) return .{ .def = member },",
+      "to": "orelse return .{ .unresolved = .global }).kind != .constructor or true) return .{ .def = member },",
+      "kills": [
+        "fact store: a csharp class with a constructor and a nested type links its own names"
+      ]
+    },
+    {
+      "id": "T3-G16-nested-type-refused",
+      "file": "src/engine/facts_store.zig",
+      "from": ".def => |member| if (first.len == path.len and (self.defOf(member)",
+      "to": ".def => |member| if (false and first.len == path.len and (self.defOf(member)",
+      "kills": [
+        "fact store: a csharp class with a constructor and a nested type links its own names"
+      ]
+    },
+    {
+      "id": "T3-G17-outside-static-ignored",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (found) |member| return if (external) .{ .unresolved = .global } else member;",
+      "to": "if (found) |member| return member;",
+      "kills": [
+        "fact store: a csharp using static stays unproven when another import, block or base could supply the name"
+      ]
+    },
+    {
+      "id": "T3-G18-two-static-usings-first-wins",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (!std.meta.eql(earlier, member)) return .{ .unresolved = .global };",
+      "to": "if (false and !std.meta.eql(earlier, member)) return .{ .unresolved = .global };",
+      "kills": [
+        "fact store: a csharp using static stays unproven when another import, block or base could supply the name"
+      ]
+    },
+    {
+      "id": "T3-G19-global-usings-not-collected",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (spec.global) try self.global_usings.append(self.gpa, spec);",
+      "to": "if (false and spec.global) try self.global_usings.append(self.gpa, spec);",
+      "kills": [
+        "fact store: a csharp using static links a bare call to the imported type's static method"
+      ]
+    },
+    {
+      "id": "T3-G20-new-type-reaches-importers-only",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (state.status == .indexed and state.profile == profile) try todo.put(self.gpa, @intCast(other), {});",
+      "to": "if (false and state.status == .indexed and state.profile == profile) try todo.put(self.gpa, @intCast(other), {});",
+      "kills": [
+        "fact store: a new csharp type reaches files with no using"
+      ]
+    },
+    {
+      "id": "T3-G21-return-not-hashed",
+      "file": "src/engine/facts_store.zig",
+      "from": "std.mem.writeInt(u32, parent[4..8], d.returns, .little);",
+      "to": "std.mem.writeInt(u32, parent[4..8], 0, .little);",
+      "kills": [
+        "fact store: a csharp return type moved between two methods reaches the caller"
+      ]
+    },
+    {
+      "id": "T3-G22-global-name-unresolved",
+      "file": "src/engine/facts_store.zig",
+      "from": ".unresolved => |reason| if (reason == .global and t.member.len != 0) self.resolveGlobal(id, t, visit) else .{ .unresolved = reason },",
+      "to": ".unresolved => |reason| if (false and t.member.len != 0) self.resolveGlobal(id, t, visit) else .{ .unresolved = reason },",
+      "kills": [
+        "fact store: a csharp namespace-qualified static call links through its full path"
+      ]
+    },
+    {
+      "id": "T3-G23-namespace-member-unresolved",
+      "file": "src/engine/facts_store.zig",
+      "from": ".namespace => if (named.target == .unresolved) try self.globalMember(id, named, ref.name, visit) else .{ .unresolved = .property_needs_type },",
+      "to": ".namespace => if (false and named.target == .unresolved) try self.globalMember(id, named, ref.name, visit) else .{ .unresolved = .property_needs_type },",
+      "kills": [
+        "fact store: a csharp namespace-qualified static call links through its full path"
+      ]
+    },
+    {
+      "id": "T3-G24-static-call-only-typed",
+      "file": "src/engine/facts_store.zig",
+      "from": "certainty = if (ref.static) .proven else .typed;",
+      "to": "certainty = if (false and ref.static) .proven else .typed;",
+      "kills": [
+        "fact store: a csharp call through a type name is proven and one through a local is typed"
+      ]
+    },
+    {
+      "id": "T3-G25-called-flag-ignored",
+      "file": "src/engine/facts_store.zig",
+      "from": "if (!self.files.items[id].facts.types[type_index].called) return found;",
+      "to": "if (true or !self.files.items[id].facts.types[type_index].called) return found;",
+      "kills": [
+        "rename facts: a C# method through var from a call with a declared return type is renamed"
+      ]
+    },
+    {
+      "id": "T3-I1-if-always-loud",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"if_statement\")) return inertIf(snapshot, statement);",
+      "to": "if (false and eql(kind, \"if_statement\")) return inertIf(snapshot, statement);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I2-try-always-loud",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"try_statement\")) return inertTry(snapshot, statement);",
+      "to": "if (false and eql(kind, \"try_statement\")) return inertTry(snapshot, statement);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I3-class-always-loud",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"class_definition\")) return inertClass(snapshot, statement);",
+      "to": "if (false and eql(kind, \"class_definition\")) return inertClass(snapshot, statement);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I4-decorated-function-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(definition.kind(), \"class_definition\")) return false;",
+      "to": "if (false and !eql(definition.kind(), \"class_definition\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I5-class-decorator-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return allDecorators(snapshot, statement, isDataclass) and inertClass(snapshot, definition);",
+      "to": "return inertClass(snapshot, definition);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I6-dataclass-body-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return allDecorators(snapshot, statement, isDataclass) and inertClass(snapshot, definition);",
+      "to": "return allDecorators(snapshot, statement, isDataclass);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I7-main-guard-else-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return statement.childByField(\"alternative\") == null;",
+      "to": "return true;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I8-condition-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!isProvenCondition(snapshot, condition)) return false;",
+      "to": "if (false and !isProvenCondition(snapshot, condition)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I9-consequence-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!inertBlock(snapshot, statement.childByField(\"consequence\"))) return false;",
+      "to": "if (false and !inertBlock(snapshot, statement.childByField(\"consequence\"))) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I10-elif-condition-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!isProvenCondition(snapshot, clause)) return false;",
+      "to": "if (false and !isProvenCondition(snapshot, clause)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I11-elif-block-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!inertBlock(snapshot, child.childByField(\"consequence\"))) return false;",
+      "to": "if (false and !inertBlock(snapshot, child.childByField(\"consequence\"))) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I12-else-block-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "} else if (!inertBlock(snapshot, child.childByField(\"body\"))) return false;\n    }\n    return true;\n}\n\nfn isMainGuard",
+      "to": "} else if (false and !inertBlock(snapshot, child.childByField(\"body\"))) return false;\n    }\n    return true;\n}\n\nfn isMainGuard",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I13-guard-any-operator",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(op.kind(), \"==\")) return false;",
+      "to": "if (false and !eql(op.kind(), \"==\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I14-guard-any-name",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(left.kind(), \"identifier\") or !eql(textOf(snapshot, left), \"__name__\")) return false;",
+      "to": "if (false and !eql(textOf(snapshot, left), \"__name__\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I15-guard-any-value",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(value, \"\\\"__main__\\\"\") and !eql(value, \"'__main__'\")) return false;",
+      "to": "if (false and !eql(value, \"\\\"__main__\\\"\") and !eql(value, \"'__main__'\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I16-guard-rebound-name",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return isUnbound(snapshot, \"__name__\");",
+      "to": "return true;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I17-type-checking-any-source",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": " and isFromImport(snapshot, \"TYPE_CHECKING\", \"typing\");",
+      "to": ";",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I18-any-version-value",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return isVersion(right);",
+      "to": "return true or isVersion(right);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I19-any-platform-value",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return eql(right.kind(), \"string\") and !symmetry.hasEffect(snapshot.profile, right) and !hasKind(right, \"interpolation\");",
+      "to": "return true or !symmetry.hasEffect(snapshot.profile, right) or !hasKind(right, \"interpolation\");",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I20-platform-interpolation",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": " and !hasKind(right, \"interpolation\");",
+      "to": ";",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I21-version-any-item",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(item.kind(), \"integer\")) return false;",
+      "to": "if (false and !eql(item.kind(), \"integer\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I22-try-body-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"block\")) {\n            if (!inertBlock(snapshot, child)) return false;\n        } else if (eql(kind, \"else_clause\"))",
+      "to": "if (eql(kind, \"block\")) {\n            if (false and !inertBlock(snapshot, child)) return false;\n        } else if (eql(kind, \"else_clause\"))",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I23-try-else-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (!inertClause(snapshot, child)) return false;",
+      "to": "if (false and !inertBlock(snapshot, child.childByField(\"body\"))) return false;\n        } else if (!inertClause(snapshot, child)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I24-except-value-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "} else if (symmetry.hasEffect(snapshot.profile, child)) return false;",
+      "to": "} else if (false and symmetry.hasEffect(snapshot.profile, child)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I25-except-block-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(child.kind(), \"block\")) {\n            if (!inertBlock(snapshot, child)) return false;",
+      "to": "if (eql(child.kind(), \"block\")) {\n            if (false and !inertBlock(snapshot, child)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I28-base-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (symmetry.hasEffect(snapshot.profile, bases)) return false;",
+      "to": "if (false and symmetry.hasEffect(snapshot.profile, bases)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I29-method-signature-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (symmetry.statementHasEffect(snapshot.profile, definition.?)) return false;",
+      "to": "if (false and symmetry.statementHasEffect(snapshot.profile, definition.?)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I30-method-decorator-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!allDecorators(snapshot, member, isMethodDecorator)) return false;",
+      "to": "if (false and !allDecorators(snapshot, member, isMethodDecorator)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I31-class-member-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "} else if (!isInert(snapshot, member)) return false;",
+      "to": "} else if (false and !isInert(snapshot, member)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I32-decorator-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!accepted(snapshot, decorated, expression)) return false;",
+      "to": "if (false and !accepted(snapshot, decorated, expression)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I33-dataclass-arguments-unchecked",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (symmetry.hasEffect(snapshot.profile, arguments)) return false;",
+      "to": "if (false and symmetry.hasEffect(snapshot.profile, arguments)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I34-dataclass-call-form-refused",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(expression.kind(), \"call\")) {",
+      "to": "if (false and eql(expression.kind(), \"call\")) {",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I35-dataclass-any-source",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": " and isFromImport(snapshot, \"dataclass\", \"dataclasses\");",
+      "to": ";",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I36-any-attribute-decorator",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return isModuleAttribute(snapshot, callee, \"dataclasses\", \"dataclass\");",
+      "to": "return true or isModuleAttribute(snapshot, callee, \"dataclasses\", \"dataclass\");",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I37-any-builtin-decorator",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(name, \"property\") and !eql(name, \"staticmethod\") and !eql(name, \"classmethod\")) return false;",
+      "to": "if (false and !eql(name, \"property\") and !eql(name, \"staticmethod\") and !eql(name, \"classmethod\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I38-shadowed-builtin-decorator",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return isUnbound(snapshot, name);",
+      "to": "return true;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I39-any-accessor",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(accessor, \"setter\") and !eql(accessor, \"getter\") and !eql(accessor, \"deleter\")) return false;",
+      "to": "if (false and !eql(accessor, \"setter\") and !eql(accessor, \"getter\") and !eql(accessor, \"deleter\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I40-setter-with-no-property",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return followsProperty(snapshot, decorated, textOf(snapshot, object));",
+      "to": "return true or followsProperty(snapshot, decorated, textOf(snapshot, object));",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I41-setter-of-another-property",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(textOf(snapshot, own), name)) continue;",
+      "to": "if (false and !eql(textOf(snapshot, own), name)) continue;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I42-module-attribute-any-name",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(textOf(snapshot, attribute), name)) return false;",
+      "to": "if (false and !eql(textOf(snapshot, attribute), name)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I43-module-attribute-any-object",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(object.kind(), \"identifier\") or !eql(textOf(snapshot, object), module)) return false;",
+      "to": "if (false and !eql(textOf(snapshot, object), module)) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I44-aliased-module-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(dotted.kind(), \"dotted_name\") or dotted.namedChildCount() != 1) return false;",
+      "to": "if (false and dotted.namedChildCount() != 1) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I45-from-import-as-module",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return eql(statement.kind(), \"import_statement\");",
+      "to": "return true or eql(statement.kind(), \"import_statement\");",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I46-aliased-from-import-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "    if (!eql(dotted.kind(), \"dotted_name\")) return false;\n    const statement = dotted.parent() orelse return false;\n    const from",
+      "to": "    if (false and !eql(dotted.kind(), \"dotted_name\")) return false;\n    const statement = dotted.parent() orelse return false;\n    const from",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I47-from-any-module",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return eql(textOf(snapshot, from), module);",
+      "to": "return true or eql(textOf(snapshot, from), module);",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I48-star-import-beside-the-binder",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (hasKind(root, \"wildcard_import\")) return null;",
+      "to": "if (false and hasKind(root, \"wildcard_import\")) return null;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I49-second-binder-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (resolution.binders.len != 1) return null;",
+      "to": "if (resolution.binders.len == 0) return null;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I50-star-import-beside-the-builtin",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (hasKind(snapshot.tree.root(), \"wildcard_import\")) return false;",
+      "to": "if (false and hasKind(snapshot.tree.root(), \"wildcard_import\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I51-bound-name-counted-unbound",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "return resolution.binders.len == 0;",
+      "to": "return true or resolution.binders.len == 0;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I52-quiet-statement-refused",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!symmetry.statementHasEffect(snapshot.profile, statement)) return true;",
+      "to": "if (false and !symmetry.statementHasEffect(snapshot.profile, statement)) return true;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I53-chained-condition-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(kind, \"comparison_operator\") or condition.namedChildCount() != 2) return false;",
+      "to": "if (!eql(kind, \"comparison_operator\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I54-chained-guard-accepted",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (!eql(condition.kind(), \"comparison_operator\") or condition.namedChildCount() != 2) return false;",
+      "to": "if (!eql(condition.kind(), \"comparison_operator\")) return false;",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I55-not-refused",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"not_operator\")) {",
+      "to": "if (false and eql(kind, \"not_operator\")) {",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I56-module-form-refused",
+      "file": "src/engine/lang/python/inert.zig",
+      "from": "if (eql(kind, \"attribute\")) return isModuleAttribute(snapshot, condition, \"typing\", \"TYPE_CHECKING\");",
+      "to": "if (false and eql(kind, \"attribute\")) return isModuleAttribute(snapshot, condition, \"typing\", \"TYPE_CHECKING\");",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-I57-hook-not-set",
+      "file": "src/engine/lang/python/profile.zig",
+      "from": ".inert_rules = .python,",
+      "to": ".inert_rules = .none,",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one",
+        "python move: a dataclass, a property and guarded blocks are no module effect"
+      ]
+    },
+    {
+      "id": "T3-I58-hook-trusted-blindly",
+      "file": "src/engine/modules.zig",
+      "from": ".python => if (!python_inert.isInert(snapshot, statement)) return true,",
+      "to": ".python => if (false and !python_inert.isInert(snapshot, statement)) return true,",
+      "kills": [
+        "modules: a python statement that can run no user code at import is no module effect, and anything it cannot prove stays one"
+      ]
+    },
+    {
+      "id": "T3-F1-called-flag-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.called = flags & 1 != 0;",
+      "to": "t.called = false;",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F2-value-flag-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.value = flags & 2 != 0;",
+      "to": "t.value = false;",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F3-alias-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "s.alias = try d.str();",
+      "to": "_ = try d.str();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F4-using-range-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "s.end = try d.int();",
+      "to": "_ = try d.int();",
+      "kills": [
+        "fact store: a saved csharp store keeps a block's own using inside its block"
+      ]
+    },
+    {
+      "id": "T3-F5-scope-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.scope = try d.str();",
+      "to": "_ = try d.str();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F6-at-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.at = try d.int();",
+      "to": "_ = try d.int();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F7-returns-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "def.returns = try d.index();",
+      "to": "_ = try d.index();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
+      "id": "T3-F8-enclosing-not-saved",
+      "file": "src/platform/fact_file.zig",
+      "from": "t.enclosing = try d.index();",
+      "to": "_ = try d.index();",
+      "kills": [
+        "fact store: a saved csharp store opens again with every new link field"
+      ]
+    },
+    {
       "id": "RA1-run-audit-skips-commits",
       "file": "src/platform/run_audit.zig",
       "from": "        try self.judgeCommits(item);\n",
@@ -17339,6 +18611,270 @@
       "to": "",
       "kills": [
         "commit guard: a message rule refuses the commit and names the rule"
+      ]
+    },
+    {
+      "id": "T3-1-missing-service-keeps-refusing",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (rename_graph.supports(base.profile) and (!base.profile.language_service or service_missing)) {",
+      "to": "    _ = service_missing;\n    if (!base.profile.language_service and rename_graph.supports(base.profile)) {",
+      "kills": [
+        "js without typescript: a method called on a new object is renamed by the facts resolver"
+      ]
+    },
+    {
+      "id": "T3-2-service-missing-ignored",
+      "file": "src/platform/tsserver.zig",
+      "from": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return true;",
+      "to": "        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return false;",
+      "kills": [
+        "js without typescript: moving a file rewrites import, require and literal import()"
+      ]
+    },
+    {
+      "id": "T3-3-text-move-with-users-refused",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (resolver == .text and users != 0 and !service_missing) return error.FileMoveUnresolved;",
+      "to": "    if (resolver == .text and users != 0) return error.FileMoveUnresolved;",
+      "kills": [
+        "js without typescript: moving a file rewrites import, require and literal import()"
+      ]
+    },
+    {
+      "id": "T3-4-alias-import-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
+      "to": "                if (false and aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
+      "kills": [
+        "js without typescript: an alias import ending in the file's name is refused"
+      ]
+    },
+    {
+      "id": "T3-5-installed-package-counts-as-alias",
+      "file": "src/platform/file_move.zig",
+      "from": "                if (aliasMayNameFile(entry.spec, stem, base_url) and !try installedPackage(w, entry.spec)) return error.FileMoveUnresolved;",
+      "to": "                if (aliasMayNameFile(entry.spec, stem, base_url)) return error.FileMoveUnresolved;",
+      "kills": [
+        "js without typescript: an import of an installed package with the file's name is not an alias"
+      ]
+    },
+    {
+      "id": "T3-6-self-locating-file-moves",
+      "file": "src/platform/file_move.zig",
+      "from": "    if (locatesItself(moved.source)) return error.DynamicPathUse;",
+      "to": "",
+      "kills": [
+        "js without typescript: a moved file that locates itself is refused"
+      ]
+    },
+    {
+      "id": "T3-7-path-in-string-accepted",
+      "file": "src/platform/file_move.zig",
+      "from": "        if (try namesPathInString(w, before, snapshot, abs, request.from_abs, edits.rewrites.items)) return error.DynamicPathUse;",
+      "to": "",
+      "kills": [
+        "js without typescript: a string naming the file's path is refused"
+      ]
+    },
+    {
+      "id": "T3-8-shorthand-accepted",
+      "file": "src/platform/rename_graph.zig",
+      "from": "                if (leaf.shorthand) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
+      "to": "                if (false) {\n                    const sites = self.sites orelse return error.RenameUnresolved;",
+      "kills": [
+        "js without typescript: an object shorthand with the name of a method is refused"
+      ]
+    },
+    {
+      "id": "T3-9-commonjs-user-ignored",
+      "file": "src/platform/move_batch.zig",
+      "from": "            if (!isUser(users.items, abs)) return error.MoveUnresolved;",
+      "to": "",
+      "kills": [
+        "js without typescript: moving a function a commonjs file requires is refused"
+      ]
+    },
+    {
+      "id": "T3-10-requires-not-collected",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (self.f.commonjs) |cjs| try self.collectRequires(cjs);",
+      "to": "",
+      "kills": [
+        "js without typescript: destructured require follows a commonjs rename"
+      ]
+    },
+    {
+      "id": "T3-11-untyped-uses-ignored",
+      "file": "src/platform/rename_batch.zig",
+      "from": "    if (answer.value.unresolved.len != 0) {",
+      "to": "    if (false) {",
+      "kills": [
+        "real typescript: a member reached through an untyped parameter is refused and names the site"
+      ]
+    },
+    {
+      "id": "T3-12-host-reports-no-untyped-use",
+      "file": "src/platform/tsserver_host.js",
+      "from": "    return { can_rename: true, locations: locations, unresolved: untypedUses(request.file, position, found) };",
+      "to": "    return { can_rename: true, locations: locations, unresolved: [] };",
+      "kills": [
+        "real typescript: a member reached through an untyped parameter is refused and names the site",
+        "real typescript: a destructured parameter with no type is refused"
+      ]
+    },
+    {
+      "id": "T3-13-local-counts-as-member",
+      "file": "src/platform/tsserver_host.js",
+      "from": "  if (!ts.isIdentifier(at) || !reachableByName(checker, at)) return [];",
+      "to": "  if (!ts.isIdentifier(at)) return [];",
+      "kills": [
+        "real typescript: a function nothing can reach by name leaves an untyped member of that name alone"
+      ]
+    },
+    {
+      "id": "T3-14-typed-use-counts-as-untyped",
+      "file": "src/platform/tsserver_host.js",
+      "from": "        untyped = Boolean(checker.getTypeAtLocation(node.expression).flags & ts.TypeFlags.Any);",
+      "to": "        untyped = true;",
+      "kills": [
+        "real typescript: a member use with a known type elsewhere does not block the rename"
+      ]
+    },
+    {
+      "id": "T3-15-shorthand-loses-key",
+      "file": "src/platform/tsserver_host.js",
+      "from": "      const text = held && keepsObjectKey(l) ? held : l;",
+      "to": "      const text = l;",
+      "kills": [
+        "real typescript: an object shorthand of a renamed function keeps its key"
+      ]
+    },
+    {
+      "id": "T3-16-export-shorthand-keeps-key",
+      "file": "src/platform/tsserver_host.js",
+      "from": "  return !/^(module\\.)?exports\\b/.test(owner.left.getText(source));",
+      "to": "  return true;",
+      "kills": [
+        "real typescript: a commonjs export shorthand follows the rename"
+      ]
+    },
+    {
+      "id": "T3-17-using-static-user-left-behind",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "                try cs.insertUsing(arena, unit, using_static_line, &refs.edits);\n                usings_added += 1;",
+      "to": "                _ = .{ using_static_line, unit };",
+      "kills": [
+        "csharp move: a member reached through using static brings the new using static along"
+      ]
+    },
+    {
+      "id": "T3-18-using-static-added-twice",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            if (!try hasUsingStatic(arena, unit, full_target)) {",
+      "to": "            if (true) {",
+      "kills": [
+        "csharp move: a using static already naming the receiving type is not added twice"
+      ]
+    },
+    {
+      "id": "T3-19-using-static-capture-accepted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "            if ((try cs.mentions(arena, unit, target_members)).len != 0) return error.MoveMemberDependency;",
+      "to": "",
+      "kills": [
+        "csharp move: a using static user that also names a member of the receiving type is refused"
+      ]
+    },
+    {
+      "id": "T3-20-new-type-clash-accepted",
+      "file": "src/platform/cs_symbol_move.zig",
+      "from": "        if (std.mem.eql(u8, clash.namespace, target_owner.namespace)) return error.TargetNameTaken;",
+      "to": "        _ = clash;",
+      "kills": [
+        "csharp move: a new target type the namespace already has is refused"
+      ]
+    },
+    {
+      "id": "T3-21-module-constant-loses-its-type",
+      "file": "src/engine/facts_extract.zig",
+      "from": "if (written.contains(start.*) or self.f.module_names_rebindable and binder.scope.start",
+      "to": "if (written.contains(start.*) or binder.scope.start",
+      "kills": [
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+      ]
+    },
+    {
+      "id": "T3-22-python-module-name-keeps-its-type",
+      "file": "src/engine/lang/python/facts.zig",
+      "from": "    .module_names_rebindable = true,\n",
+      "to": "",
+      "kills": [
+        "rename facts: a Python local that is rebound, written through nonlocal or held at module level keeps no inferred type"
+      ]
+    },
+    {
+      "id": "T3-23-destructuring-write-ignored",
+      "file": "src/engine/facts_extract.zig",
+      "from": "        if (!oneOf(target.kind(), self.f.write_patterns)) {\n",
+      "to": "        if (true) {\n",
+      "kills": [
+        "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it"
+      ]
+    },
+    {
+      "id": "T3-24-for-of-write-ignored",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "    .{ .parent = \"for_in_statement\", .field = \"left\" },\n",
+      "to": "",
+      "kills": [
+        "facts extract: the head of a for loop over an existing name is a write to it"
+      ]
+    },
+    {
+      "id": "T3-25-return-change-not-reshaped",
+      "file": "src/engine/lang/ecma/facts.zig",
+      "from": "    .return_statement = \"return_statement\",\n",
+      "to": "",
+      "all": true,
+      "kills": [
+        "fact store: an edit that changes what a function returns reshapes the file"
+      ]
+    },
+    {
+      "id": "SRC1-spelled-root-ignored",
+      "file": "src/platform/py_modules.zig",
+      "from": "        if (prefer) |root| if (tsserver.sameFile(root, base)) return dotted;\n",
+      "to": "        if (false) if (prefer) |root| if (tsserver.sameFile(root, base)) return dotted;\n",
+      "kills": [
+        "python move_file: an import that spells the src folder keeps spelling it"
+      ]
+    },
+    {
+      "id": "SRC2-bare-src-chosen-first",
+      "file": "src/platform/py_modules.zig",
+      "from": "    return first orelse bare_src;\n",
+      "to": "    return bare_src orelse first;\n",
+      "kills": [
+        "python move_file: in a src layout the tests keep the package name and the moved file gains no src prefix",
+        "python move_file: in a src layout of namespace packages the tests keep the package name"
+      ]
+    },
+    {
+      "id": "SRC3-spec-root-never-found",
+      "file": "src/platform/py_modules.zig",
+      "from": "    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;\n    return found.base;\n",
+      "to": "    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;\n    return if (false) found.base else null;\n",
+      "kills": [
+        "python move_file: an import that spells the src folder keeps spelling it"
+      ]
+    },
+    {
+      "id": "SRC4-shadowed-dir-chosen",
+      "file": "src/platform/py_modules.zig",
+      "from": "        } else if (found) |f| if (!tsserver.sameFile(f.base, base)) continue;\n",
+      "to": "        } else if (found) |f| if (false and !tsserver.sameFile(f.base, base)) continue;\n",
+      "kills": [
+        "python move: a package at the repo root that shadows the src one keeps the src prefix"
       ]
     }
   ]

@@ -267,6 +267,8 @@ pub const NameList = struct {
     containers: []const []const u8,
     holders: []const NameListHolder,
     statement: []const u8,
+    private_prefix: ?[]const u8 = null,
+    public_wrapper: ?[]const u8 = null,
 };
 
 pub const TypedBinder = struct {
@@ -328,11 +330,25 @@ pub const Facts = struct {
     member_wrappers: []const []const u8 = &.{},
     constructions: []const Construction = &.{},
     initializers: []const Initializer = &.{},
+    commonjs: ?CommonJs = null,
     calls_construct: bool = false,
+    inherited_overloads: bool = false,
     sole_binder_types: bool = false,
+    module_names_rebindable: bool = false,
+    write_patterns: []const []const u8 = &.{},
+    write_pattern_names: []const []const u8 = &.{},
+    nullable_type: ?[]const u8 = null,
+    return_sites: []const FieldSite = &.{},
+    return_statement: ?[]const u8 = null,
+    generator_kinds: []const []const u8 = &.{},
+    plain_decorators: []const []const u8 = &.{},
+    type_parameter_list: ?[]const u8 = null,
     class_body_field: []const u8 = "body",
-    test_files: []const []const u8 = &.{},
     test_definitions: []const TestDefinition = &.{},
+    test_name: ?*const fn (base: []const u8) bool = null,
+    test_segment: ?*const fn (segment: []const u8) bool = null,
+    public_modifier: ?[]const u8 = null,
+    hidden_modifiers: []const []const u8 = &.{},
     docstrings: bool = false,
     xml_docs: bool = false,
 };
@@ -340,7 +356,8 @@ pub const Facts = struct {
 pub const TestDefinition = struct {
     node: []const u8,
     name_field: []const u8 = "name",
-    prefix: []const u8,
+    prefix: []const u8 = "",
+    attribute: ?*const fn (name: []const u8) bool = null,
 };
 
 pub const MapEntryKind = enum { route, command, event, api };
@@ -397,6 +414,24 @@ fn isWordByte(c: u8) bool {
     return std.ascii.isAlphanumeric(c) or c == '_' or c >= 0x80;
 }
 
+pub const InertRules = enum { none, python };
+
+pub const CommonJs = struct {
+    module_exports: []const u8,
+    exports_prefix: []const u8,
+    module_exports_prefix: []const u8,
+    expression_statement: []const u8,
+    assignment: []const u8,
+    variable_kinds: []const []const u8,
+    object_pattern: []const u8,
+    shorthand_pattern: []const u8,
+    pair_pattern: []const u8,
+    object: []const u8,
+    shorthand: []const u8,
+    pair: []const u8,
+    loader: []const u8,
+};
+
 pub const Profile = struct {
     name: []const u8,
     extensions: []const []const u8,
@@ -430,6 +465,7 @@ pub const Profile = struct {
     empty_body: []const u8,
     expression_statement: []const u8,
     loud_statement: ?*const fn (statement: ts.Node) bool = null,
+    inert_rules: InertRules = .none,
     eager_parameters: bool = false,
     prose_strings: []const []const u8,
     directives: []const []const u8,
@@ -456,6 +492,9 @@ pub const Profile = struct {
     import_forms: ImportForms = .{},
     docstrings: bool = false,
     definition_wrappers: []const []const u8 = &.{},
+    effect_kinds: []const []const u8 = &.{},
+    effect_updates: []const []const u8 = &.{},
+    effect_update_tokens: []const []const u8 = &.{},
     commented_definitions: []const []const u8 = &.{},
     uncommented_definitions: []const []const u8 = &.{},
 

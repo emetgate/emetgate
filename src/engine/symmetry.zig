@@ -24,15 +24,6 @@ pub const Local = struct {
     exported: bool,
 };
 
-const effect_kinds = [_][]const u8{
-    "new_expression",
-    "await_expression",
-    "assignment_expression",
-    "augmented_assignment_expression",
-    "update_expression",
-    "yield_expression",
-};
-
 pub fn inspect(snapshot: *const Snapshot, slot: Span) Local {
     const root = snapshot.tree.root();
     const statement = statementAt(snapshot.profile, root, slot) orelse return .{ .parses = !root.hasError(), .no_top_level_effect = false, .exported = false };
@@ -59,12 +50,25 @@ fn isExportWrapper(profile: *const Profile, kind: []const u8) bool {
     return false;
 }
 
+fn isUpdate(profile: *const Profile, node: ts.Node) bool {
+    for (profile.effect_updates) |update| {
+        if (!std.mem.eql(u8, node.kind(), update)) continue;
+        var i: u32 = 0;
+        while (node.child(i)) |child| : (i += 1) {
+            for (profile.effect_update_tokens) |token| {
+                if (std.mem.eql(u8, child.kind(), token)) return true;
+            }
+        }
+    }
+    return false;
+}
+
 fn isEffect(profile: *const Profile, kind: []const u8) bool {
     if (std.mem.eql(u8, kind, profile.call.node) or std.mem.eql(u8, kind, profile.decorator)) return true;
     for (profile.dynamic_constructors) |constructor| {
         if (std.mem.eql(u8, kind, constructor.node)) return true;
     }
-    for (effect_kinds) |effect| {
+    for (profile.effect_kinds) |effect| {
         if (std.mem.eql(u8, kind, effect)) return true;
     }
     return false;
@@ -86,8 +90,8 @@ fn signatureHasEffect(profile: *const Profile, function: ts.Node) bool {
     return false;
 }
 
-fn hasEffect(profile: *const Profile, node: ts.Node) bool {
-    if (isEffect(profile, node.kind())) return true;
+pub fn hasEffect(profile: *const Profile, node: ts.Node) bool {
+    if (isEffect(profile, node.kind()) or isUpdate(profile, node)) return true;
     var i: u32 = 0;
     while (node.child(i)) |child| : (i += 1) {
         if (deferred(profile, child.kind())) {
@@ -132,6 +136,29 @@ fn inspectSource(source: []const u8, slot_start: u32) !Local {
     const snapshot = try test_util.snapshotOf(runtime, source);
     defer snapshot.destroy();
     return inspect(snapshot, .{ .start = slot_start, .end = @intCast(source.len) });
+}
+
+fn inspectIn(source: []const u8, ext: []const u8) !Local {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ext);
+    defer snapshot.destroy();
+    return inspect(snapshot, .{ .start = 0, .end = @intCast(source.len) });
+}
+
+test "symmetry: Python effect kinds are Python's own" {
+    try testing.expect(!(try inspectIn("def f(x=(y := 1)):\n    return x\n", ".py")).no_top_level_effect);
+    try testing.expect((try inspectIn("def f(x=1):\n    return (y := x)\n", ".py")).no_top_level_effect);
+}
+
+test "symmetry: C# effect kinds are C#'s own, a sign or a null check is no effect" {
+    try testing.expect(!(try inspectIn("class C { static M x = new M(); }\n", ".cs")).no_top_level_effect);
+    try testing.expect(!(try inspectIn("class C { static M x = new(); }\n", ".cs")).no_top_level_effect);
+    try testing.expect(!(try inspectIn("class C { static int x = (k = 3); }\n", ".cs")).no_top_level_effect);
+    try testing.expect(!(try inspectIn("class C { static int x = k++; }\n", ".cs")).no_top_level_effect);
+    try testing.expect(!(try inspectIn("class C { static int x = --k; }\n", ".cs")).no_top_level_effect);
+    try testing.expect((try inspectIn("class C { static int x = -1; static string s = null!; static bool b = !a; }\n", ".cs")).no_top_level_effect);
+    try testing.expect((try inspectIn("class C { void M() { var x = new M(); k++; } }\n", ".cs")).no_top_level_effect);
 }
 
 test "symmetry: a plain function declaration has no top-level effect" {

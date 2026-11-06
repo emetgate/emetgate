@@ -131,6 +131,8 @@ const Resolved = union(enum) {
 
 const max_chain = 64;
 
+const Declaring = union(enum) { none, one: FileId, many };
+
 const Visit = struct {
     files: std.ArrayList(FileId) = .empty,
     path: std.ArrayList(FileId) = .empty,
@@ -162,6 +164,7 @@ pub const Store = struct {
     loose_by_name: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
     token_files: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
     namespace_names: std.StringHashMapUnmanaged(std.ArrayList(LooseKey)) = .empty,
+    global_usings: std.ArrayList(facts.Spec) = .empty,
     rdeps: std.AutoHashMapUnmanaged(FileId, std.ArrayList(FileId)) = .empty,
     importers: std.AutoHashMapUnmanaged(FileId, std.ArrayList(FileId)) = .empty,
     root: facts.Hash = std.mem.zeroes(facts.Hash),
@@ -182,6 +185,7 @@ pub const Store = struct {
         deinitLists(LooseKey, self.gpa, &self.loose_by_name);
         deinitLists(LooseKey, self.gpa, &self.token_files);
         deinitLists(LooseKey, self.gpa, &self.namespace_names);
+        self.global_usings.deinit(self.gpa);
         deinitIdLists(self.gpa, &self.rdeps);
         deinitIdLists(self.gpa, &self.importers);
         self.paths.deinit();
@@ -352,6 +356,22 @@ pub const Store = struct {
         const ids = try gpa.dupe(FileId, out.keys());
         std.mem.sort(FileId, ids, self, pathLess);
         return ids;
+    }
+
+    pub fn namespaceTypeFiles(self: *const Store, gpa: Allocator, namespace: []const u8) ![]FileId {
+        const ids = try self.declaring(gpa, namespace, .namespace);
+        var kept: usize = 0;
+        for (ids) |id| {
+            for (self.files.items[id].facts.namespaces) |declared| {
+                if (declared.name.len == 0 or !std.mem.eql(u8, declared.namespace, namespace)) continue;
+                ids[kept] = id;
+                kept += 1;
+                break;
+            }
+        }
+        if (gpa.resize(ids, kept)) return ids[0..kept];
+        defer gpa.free(ids);
+        return gpa.dupe(FileId, ids[0..kept]);
     }
 
     pub fn markUnindexed(self: *Store, id: FileId, status: Status, note: []const u8, tokens: []const []const u8) !bool {
@@ -616,9 +636,318 @@ pub const Store = struct {
                 .unresolved => |reason| .{ .unresolved = reason },
             },
             .member_of_def => |d| self.findMember(.{ .file = id, .slot = state.slots[d] }, t.member, true, visit),
-            .member_of_super, .member_of_type => .{ .unresolved = .property_needs_type },
+            .member_of_type => |inner| switch (try self.resolveValueType(id, inner, visit)) {
+                .def => |owner| self.findMember(owner, t.member, false, visit),
+                .namespace => .{ .unresolved = .property_needs_type },
+                .unresolved => |reason| .{ .unresolved = reason },
+            },
+            .member_of_super, .global_type => .{ .unresolved = .property_needs_type },
+            .unresolved => |reason| if (reason == .global and t.member.len != 0) self.resolveGlobal(id, t, visit) else .{ .unresolved = reason },
+        };
+    }
+
+    fn resolveValueType(self: *Store, id: FileId, type_index: u32, visit: *Visit) LinkError!Resolved {
+        const found = try self.resolveType(id, type_index, visit);
+        if (!self.files.items[id].facts.types[type_index].called) return found;
+        return switch (found) {
+            .def => |owner| self.returnedType(owner, visit),
+            else => found,
+        };
+    }
+
+    fn returnedType(self: *Store, owner: DefId, visit: *Visit) LinkError!Resolved {
+        const state = &self.files.items[owner.file];
+        const index = state.defIndex(owner.slot) orelse return .{ .unresolved = .member_not_found };
+        const def = state.facts.defs[index];
+        if (def.kind == .class) return .{ .def = owner };
+        if (!def.kind.callable() or def.returns == none) return .{ .unresolved = .property_needs_type };
+        if (def.parent != 0 and self.declaredIn(state.facts.defs[def.parent].qname, .type) == .many) return .{ .unresolved = .property_needs_type };
+        if (visit.path.items.len >= max_chain) return .{ .unresolved = .reexport_cycle };
+        try visit.files.append(self.gpa, owner.file);
+        try visit.path.append(self.gpa, owner.file);
+        defer _ = visit.path.pop();
+        if (try self.baseMayOverload(owner.file, def, visit)) return .{ .unresolved = .property_needs_type };
+        return self.resolveValueType(owner.file, def.returns, visit);
+    }
+
+    fn baseMayOverload(self: *Store, id: FileId, def: facts.Def, visit: *Visit) LinkError!bool {
+        const state = &self.files.items[id];
+        const f = (state.profile orelse return false).facts orelse return false;
+        if (!f.inherited_overloads or def.parent == 0) return false;
+        for (state.facts.classes) |c| {
+            if (c.def != def.parent) continue;
+            if (c.base == none) return false;
+            const base = switch (try self.resolveType(id, c.base, visit)) {
+                .def => |b| b,
+                else => return true,
+            };
+            const base_state = &self.files.items[base.file];
+            const base_index = base_state.defIndex(base.slot) orelse return true;
+            if (base_state.facts.defs[base_index].kind == .interface) return false;
+            for ([_]bool{ false, true }) |is_static| {
+                switch (try self.findMember(base, def.name, is_static, visit)) {
+                    .unresolved => |reason| if (reason != .member_not_found) return true,
+                    else => return true,
+                }
+            }
+            return false;
+        }
+        return false;
+    }
+
+    fn declaredIn(self: *const Store, name: []const u8, kind: DeclaredKind) Declaring {
+        const list = self.namespace_names.get(name) orelse return .none;
+        var found: ?FileId = null;
+        for (list.items) |key| {
+            if (key.count != @intFromEnum(kind)) continue;
+            const state = &self.files.items[key.file];
+            if (state.status != .indexed or state.facts_gen != key.gen) continue;
+            if (found) |other| {
+                if (other != key.file) return .many;
+            } else {
+                found = key.file;
+            }
+        }
+        return if (found) |only| .{ .one = only } else .none;
+    }
+
+    fn typeDef(self: *const Store, id: FileId, qname: []const u8) Resolved {
+        const state = &self.files.items[id];
+        var found: ?usize = null;
+        for (state.facts.defs, 0..) |d, i| {
+            if (!d.kind.isType() or !std.mem.eql(u8, d.qname, qname)) continue;
+            if (found != null) return .{ .unresolved = .global };
+            found = i;
+        }
+        const i = found orelse return .{ .unresolved = .global };
+        return .{ .def = .{ .file = id, .slot = state.slots[i] } };
+    }
+
+    fn joinedName(self: *Store, level: []const u8, name: []const u8) ![]u8 {
+        if (level.len == 0) return self.gpa.dupe(u8, name);
+        return std.fmt.allocPrint(self.gpa, "{s}.{s}", .{ level, name });
+    }
+
+    fn pathIn(self: *Store, level: []const u8, path: []const u8, visit: *Visit) LinkError!?Resolved {
+        const full = try self.joinedName(level, path);
+        defer self.gpa.free(full);
+        const first = if (level.len == 0) 0 else level.len + 1;
+        var at = first;
+        var in_type = false;
+        while (true) {
+            const dot = std.mem.indexOfScalarPos(u8, full, at, '.');
+            const name = full[0 .. dot orelse full.len];
+            switch (self.declaredIn(name, .type)) {
+                .many => return .{ .unresolved = .global },
+                .one => |id| {
+                    try visit.files.append(self.gpa, id);
+                    in_type = true;
+                    if (dot == null) return self.typeDef(id, name);
+                },
+                .none => {
+                    if (in_type) return .{ .unresolved = .member_not_found };
+                    if (self.declaredIn(name, .namespace) == .none) return if (at == first) null else .{ .unresolved = .global };
+                    if (dot == null) return .{ .namespace = 0 };
+                },
+            }
+            at = dot.? + 1;
+        }
+    }
+
+    fn outward(level: []const u8) []const u8 {
+        return level[0 .. std.mem.lastIndexOfScalar(u8, level, '.') orelse 0];
+    }
+
+    fn usingNamespace(self: *Store, spec: facts.Spec) !?[]u8 {
+        var level = spec.scope;
+        while (true) {
+            const joined = try self.joinedName(level, spec.text);
+            if (self.declaredIn(joined, .namespace) != .none) return joined;
+            self.gpa.free(joined);
+            if (level.len == 0) return null;
+            level = outward(level);
+        }
+    }
+
+    fn usingStaticType(self: *Store, spec: facts.Spec, visit: *Visit) LinkError!?DefId {
+        var level = spec.scope;
+        while (true) {
+            if (try self.pathIn(level, spec.text, visit)) |found| return switch (found) {
+                .def => |owner| owner,
+                else => null,
+            };
+            if (level.len == 0) return null;
+            level = outward(level);
+        }
+    }
+
+    fn appliesAt(spec: facts.Spec, t: facts.TypeRef, level: []const u8) bool {
+        return !spec.global and std.mem.eql(u8, spec.scope, level) and spec.start <= t.at and t.at < spec.end;
+    }
+
+    fn throughUsing(self: *Store, spec: facts.Spec, path: []const u8, visit: *Visit, external: *bool) LinkError!?Resolved {
+        const first = path[0 .. std.mem.indexOfScalar(u8, path, '.') orelse path.len];
+        switch (spec.kind) {
+            .using => {
+                const namespace = (try self.usingNamespace(spec)) orelse {
+                    external.* = true;
+                    return null;
+                };
+                defer self.gpa.free(namespace);
+                const name = try self.joinedName(namespace, first);
+                defer self.gpa.free(name);
+                if (self.declaredIn(name, .type) == .none) return null;
+                return self.pathIn(namespace, path, visit);
+            },
+            .using_static => {
+                const owner = (try self.usingStaticType(spec, visit)) orelse {
+                    external.* = true;
+                    return null;
+                };
+                const state = &self.files.items[owner.file];
+                const index = state.defIndex(owner.slot) orelse return null;
+                const name = try self.joinedName(state.facts.defs[index].qname, first);
+                defer self.gpa.free(name);
+                if (self.declaredIn(name, .type) == .none) return null;
+                return self.pathIn(state.facts.defs[index].qname, path, visit);
+            },
+            .using_alias => return if (std.mem.eql(u8, spec.alias, first)) .{ .unresolved = .global } else null,
+            else => return null,
+        }
+    }
+
+    fn usingsAt(self: *Store, id: FileId, t: facts.TypeRef, level: []const u8, path: []const u8, visit: *Visit, external: *bool) LinkError!?Resolved {
+        var found: ?Resolved = null;
+        const own = self.files.items[id].facts.specs;
+        const global: []const facts.Spec = if (level.len == 0) self.global_usings.items else &.{};
+        for ([_][]const facts.Spec{ own, global }, 0..) |specs, list| {
+            for (specs) |spec| {
+                if (list == 0 and !appliesAt(spec, t, level)) continue;
+                const through = (try self.throughUsing(spec, path, visit, external)) orelse continue;
+                if (found) |earlier| {
+                    if (!std.meta.eql(earlier, through)) return .{ .unresolved = .global };
+                } else {
+                    found = through;
+                }
+            }
+        }
+        return found;
+    }
+
+    fn inherited(self: *Store, id: FileId, t: facts.TypeRef, name: []const u8, visit: *Visit) LinkError!?Resolved {
+        const state = &self.files.items[id];
+        var at = t.enclosing;
+        while (at != none and at != 0) : (at = state.facts.defs[at].parent) {
+            const def = state.facts.defs[at];
+            if (!def.kind.isType()) continue;
+            if (self.declaredIn(def.qname, .type) == .many) {
+                if (t.value) return .{ .unresolved = .global };
+                continue;
+            }
+            for ([_]bool{ false, true }) |is_static| {
+                switch (try self.findMember(.{ .file = id, .slot = state.slots[at] }, name, is_static, visit)) {
+                    .def => |member| if ((self.defOf(member) orelse return .{ .unresolved = .global }).kind != .constructor) return .{ .def = member },
+                    .namespace => {},
+                    .unresolved => |reason| switch (reason) {
+                        .member_not_found, .interface_member => {},
+                        else => if (t.value) return .{ .unresolved = reason },
+                    },
+                }
+            }
+        }
+        return null;
+    }
+
+    fn globalPath(self: *Store, id: FileId, t: facts.TypeRef, path: []const u8, visit: *Visit) LinkError!Resolved {
+        const first = path[0 .. std.mem.indexOfScalar(u8, path, '.') orelse path.len];
+        if (try self.inherited(id, t, first, visit)) |shadow| return switch (shadow) {
+            .def => |member| if (first.len == path.len and (self.defOf(member) orelse return .{ .unresolved = .global }).kind.isType()) shadow else .{ .unresolved = .property_needs_type },
+            .unresolved => shadow,
+            else => .{ .unresolved = .property_needs_type },
+        };
+        var level = t.scope;
+        var external = false;
+        while (true) {
+            if (try self.pathIn(level, path, visit)) |found| return if (external) .{ .unresolved = .global } else found;
+            var here = false;
+            if (try self.usingsAt(id, t, level, path, visit, &here)) |found| return if (external) .{ .unresolved = .global } else found;
+            external = external or here;
+            if (level.len == 0) return .{ .unresolved = .global };
+            level = outward(level);
+        }
+    }
+
+    fn staticMember(self: *Store, owner: DefId, name: []const u8, visit: *Visit) LinkError!Resolved {
+        const found = try self.findMember(owner, name, true, visit);
+        return switch (found) {
+            .unresolved => |reason| if (reason == .member_not_found) self.findMember(owner, name, false, visit) else found,
+            else => found,
+        };
+    }
+
+    fn freeCall(self: *Store, id: FileId, t: facts.TypeRef, visit: *Visit) LinkError!Resolved {
+        if (try self.inherited(id, t, t.member, visit)) |found| return found;
+        var level = t.scope;
+        var external = false;
+        while (true) {
+            var found: ?Resolved = null;
+            const own = self.files.items[id].facts.specs;
+            const global: []const facts.Spec = if (level.len == 0) self.global_usings.items else &.{};
+            for ([_][]const facts.Spec{ own, global }, 0..) |specs, list| {
+                for (specs) |spec| {
+                    if (spec.kind != .using_static or (list == 0 and !appliesAt(spec, t, level))) continue;
+                    const owner = (try self.usingStaticType(spec, visit)) orelse {
+                        external = true;
+                        continue;
+                    };
+                    const member = try self.findMember(owner, t.member, true, visit);
+                    switch (member) {
+                        .def => {
+                            if (found) |earlier| {
+                                if (!std.meta.eql(earlier, member)) return .{ .unresolved = .global };
+                            } else {
+                                found = member;
+                            }
+                        },
+                        .namespace => {},
+                        .unresolved => |reason| if (reason != .member_not_found) {
+                            external = true;
+                        },
+                    }
+                }
+            }
+            if (found) |member| return if (external) .{ .unresolved = .global } else member;
+            if (level.len == 0) return .{ .unresolved = .global };
+            level = outward(level);
+        }
+    }
+
+    fn resolveGlobal(self: *Store, id: FileId, t: facts.TypeRef, visit: *Visit) LinkError!Resolved {
+        if (!t.called) return self.globalPath(id, t, t.member, visit);
+        const dot = std.mem.lastIndexOfScalar(u8, t.member, '.') orelse return self.freeCall(id, t, visit);
+        return switch (try self.globalPath(id, t, t.member[0..dot], visit)) {
+            .def => |owner| self.staticMember(owner, t.member[dot + 1 ..], visit),
+            .namespace => .{ .unresolved = .member_not_found },
             .unresolved => |reason| .{ .unresolved = reason },
         };
+    }
+
+    fn globalMember(self: *Store, id: FileId, t: facts.TypeRef, name: []const u8, visit: *Visit) LinkError!Resolved {
+        const full = try self.joinedName(t.member, name);
+        defer self.gpa.free(full);
+        var inner = t;
+        inner.called = false;
+        return self.globalPath(id, inner, full, visit);
+    }
+
+    fn refreshGlobalUsings(self: *Store) !void {
+        self.global_usings.clearRetainingCapacity();
+        for (self.files.items) |*state| {
+            if (state.status != .indexed) continue;
+            for (state.facts.specs) |spec| {
+                if (spec.global) try self.global_usings.append(self.gpa, spec);
+            }
+        }
     }
 
     fn moduleDef(self: *const Store, target: FileId) Resolved {
@@ -655,12 +984,17 @@ pub const Store = struct {
                 break :blk .{ .unresolved = .member_not_found };
             },
             .member_of_type => |t| blk: {
-                certainty = .typed;
-                break :blk switch (try self.resolveType(id, t, visit)) {
-                    .def => |owner| try self.findMember(owner, ref.name, false, visit),
-                    .namespace => .{ .unresolved = .property_needs_type },
+                certainty = if (ref.static) .proven else .typed;
+                const named = state.facts.types[t];
+                break :blk switch (try self.resolveValueType(id, t, visit)) {
+                    .def => |owner| if (ref.static) try self.staticMember(owner, ref.name, visit) else try self.findMember(owner, ref.name, false, visit),
+                    .namespace => if (named.target == .unresolved) try self.globalMember(id, named, ref.name, visit) else .{ .unresolved = .property_needs_type },
                     .unresolved => |reason| .{ .unresolved = reason },
                 };
+            },
+            .global_type => |t| switch (try self.resolveType(id, t, visit)) {
+                .namespace => .{ .unresolved = .global },
+                else => |r| r,
             },
             .unresolved => |reason| .{ .unresolved = reason },
         };
@@ -694,6 +1028,7 @@ pub const Store = struct {
     }
 
     pub fn link(self: *Store, id: FileId, resolver: Resolver) !void {
+        try self.refreshGlobalUsings();
         try self.resolveSpecs(id, resolver);
         try self.linkRefs(id);
     }
@@ -763,12 +1098,14 @@ pub const Store = struct {
     }
 
     pub fn linkAll(self: *Store, resolver: Resolver) !void {
+        try self.refreshGlobalUsings();
         for (0..self.files.items.len) |i| try self.resolveSpecs(@intCast(i), resolver);
         for (0..self.files.items.len) |i| try self.linkRefs(@intCast(i));
         try self.computeRoot();
     }
 
     pub fn relink(self: *Store, changed: []const FileId, reshaped: []const FileId, resolver: Resolver) !usize {
+        try self.refreshGlobalUsings();
         var todo: std.AutoArrayHashMapUnmanaged(FileId, void) = .empty;
         defer todo.deinit(self.gpa);
         for (changed) |id| try todo.put(self.gpa, id, {});
@@ -780,7 +1117,7 @@ pub const Store = struct {
             const f = profile.facts orelse continue;
             if (f.using_directive == null) continue;
             for (self.files.items, 0..) |*state, other| {
-                if (state.status == .indexed and state.profile == profile and state.facts.specs.len != 0) try todo.put(self.gpa, @intCast(other), {});
+                if (state.status == .indexed and state.profile == profile) try todo.put(self.gpa, @intCast(other), {});
             }
         }
         for (todo.keys()) |id| try self.resolveSpecs(id, resolver);
@@ -870,8 +1207,9 @@ fn signatureOf(found: facts.FileFacts) facts.Hash {
         hasher.update(&.{ @intFromEnum(d.kind), @intFromBool(d.exported), @intFromBool(d.is_static) });
         hasher.update(d.qname);
         hasher.update(&.{0});
-        var parent: [4]u8 = undefined;
-        std.mem.writeInt(u32, &parent, d.parent, .little);
+        var parent: [8]u8 = undefined;
+        std.mem.writeInt(u32, parent[0..4], d.parent, .little);
+        std.mem.writeInt(u32, parent[4..8], d.returns, .little);
         hasher.update(&parent);
     }
     hasher.update("\x01exports");
@@ -918,7 +1256,11 @@ fn signatureOf(found: facts.FileFacts) facts.Hash {
         std.mem.writeInt(u32, &index, value, .little);
         hasher.update(&index);
         hasher.update(t.member);
+        hasher.update(&.{ 0, @intFromBool(t.called), @intFromBool(t.value) });
+        hasher.update(t.scope);
         hasher.update(&.{0});
+        std.mem.writeInt(u32, &index, t.enclosing, .little);
+        hasher.update(&index);
     }
     hasher.update("\x01classes");
     for (found.classes) |c| {

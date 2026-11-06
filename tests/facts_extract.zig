@@ -146,6 +146,40 @@ test "facts extract: declared parameter types, constructed constants and paramet
     try testing.expectEqualStrings("dep", x.facts.member_types[0].name);
 }
 
+test "facts extract: a constant at module level keeps its type and a module variable written anywhere loses it" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const cases = [_]struct { source: []const u8, typed: bool }{
+        .{ .source = "class Foo { go() { return 1; } }\nconst w = new Foo();\nw.go();\n", .typed = true },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nw.go();\n", .typed = true },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nw = other();\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nfunction r() { w = other(); }\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n[w] = other();\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n({ w } = other());\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\n({ k: w } = other());\nw.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nlet w = new Foo();\nfor (w of other()) w.go();\n", .typed = false },
+        .{ .source = "class Foo { go() { return 1; } }\nfunction r() {\n  let w = new Foo();\n  [w] = other();\n  return w.go();\n}\n", .typed = false },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |js| {
+            var x = if (js) try extractJs(runtime, case.source) else try extractTs(runtime, case.source);
+            defer x.deinit();
+            try testing.expectEqual(case.typed, (try x.ref(.call, "go", 0)).target == .member_of_type);
+        }
+    }
+}
+
+test "facts extract: the head of a for loop over an existing name is a write to it" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    for ([_]bool{ false, true }) |js| {
+        const source = "const o = {};\nfor (o.w of other()) go();\n";
+        var x = if (js) try extractJs(runtime, source) else try extractTs(runtime, source);
+        defer x.deinit();
+        _ = try x.ref(.write, "w", 0);
+    }
+}
+
 test "facts extract: a property of an unknown value, a computed callee, eval and a callback stay unresolved with a reason" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
@@ -226,4 +260,121 @@ test "facts extract: a qualified type through a namespace import is a type refer
     try testing.expectEqual(facts.Target{ .member_of_binding = 0 }, (try x.ref(.type, "Local", 0)).target);
     try testing.expectEqual(facts.Target{ .local = try x.def("Local") }, (try x.ref(.type, "Local", 1)).target);
     try testing.expectEqual(@as(usize, 2), x.count(.type, "Local"));
+}
+
+test "facts extract: a C# definition is exported only when it and every type around it are public" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime,
+        \\namespace Shop {
+        \\    public class Cart {
+        \\        public int Total() { int Local() { return 1; } return Local(); }
+        \\        public int Held() { public int Kept() { return 1; } return Kept(); }
+        \\        public int Count { get; set; }
+        \\        public int Size, Extra;
+        \\        private int hidden, secret;
+        \\        internal int Inner() { return 1; }
+        \\        protected int Guarded() { return 1; }
+        \\        int Bare() { return 1; }
+        \\        public class Line { public int Qty() { return 1; } }
+        \\        private class Secret { public int Reveal() { return 1; } }
+        \\    }
+        \\    class Quiet { public int Open() { return 1; } }
+        \\    internal class Helper { public int Help() { return 1; } }
+        \\    public interface IShape { int Area(); int Twice() { return 2; } private int Sealed() { return 1; } }
+        \\    interface IHidden { int Gone(); }
+        \\    public enum Color { Red }
+        \\}
+        \\
+    , ".cs");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    const yes = [_][]const u8{ "Cart", "Total", "Held", "Count", "Size", "Extra", "Line", "Qty", "IShape", "Twice", "Color", "Red" };
+    const no = [_][]const u8{ "Local", "Kept", "hidden", "secret", "Sealed", "Inner", "Guarded", "Bare", "Secret", "Reveal", "Quiet", "Open", "Helper", "Help", "IHidden" };
+    var seen: usize = 0;
+    for (found.defs) |d| {
+        for (yes) |name| {
+            if (!std.mem.eql(u8, d.name, name)) continue;
+            seen += 1;
+            testing.expect(d.exported) catch |e| {
+                std.debug.print("not exported: {s}\n", .{name});
+                return e;
+            };
+        }
+        for (no) |name| {
+            if (!std.mem.eql(u8, d.name, name)) continue;
+            seen += 1;
+            testing.expect(!d.exported) catch |e| {
+                std.debug.print("exported: {s}\n", .{name});
+                return e;
+            };
+        }
+    }
+    try testing.expectEqual(yes.len + no.len, seen);
+}
+
+fn pythonReturns(source: []const u8, name: []const u8) !bool {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ".py");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (std.mem.eql(u8, d.name, name)) return d.returns != facts.none;
+    }
+    return error.DefNotFound;
+}
+
+test "facts extract: a Python function gives no return type once its module rebinds it" {
+    try testing.expect(try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n", "make"));
+    try testing.expect(!try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n\n\nmake = print\n", "make"));
+    try testing.expect(!try pythonReturns("class Cart:\n    pass\n\n\ndef make():\n    return Cart()\n\n\ndef patch():\n    global make\n    make = print\n", "make"));
+}
+
+fn pythonExported(source: []const u8, name: []const u8) !bool {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ".py");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (std.mem.eql(u8, d.name, name)) return d.exported;
+    }
+    return error.NoDef;
+}
+
+test "facts extract: a C# type at the very start of a file reads its own visibility" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, "public class First { public int Size, Extra; int Bare; }\n", ".cs");
+    defer snapshot.destroy();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const found = try facts_extract.extract(arena_state.allocator(), snapshot);
+    for (found.defs) |d| {
+        if (d.name.len == 0) continue;
+        try testing.expectEqual(!std.mem.eql(u8, d.name, "Bare"), d.exported);
+    }
+}
+
+test "facts extract: a Python definition is exported by __all__ when the list is static, else by its name" {
+    try testing.expect(try pythonExported("def area():\n    return 1\n", "area"));
+    try testing.expect(!try pythonExported("def _area():\n    return 1\n", "_area"));
+    try testing.expect(!try pythonExported("def __area():\n    return 1\n", "__area"));
+    try testing.expect(try pythonExported("def __area__():\n    return 1\n", "__area__"));
+    try testing.expect(try pythonExported("__all__ = [\"area\"]\ndef area():\n    return 1\n", "area"));
+    try testing.expect(!try pythonExported("__all__ = [\"area\"]\ndef other():\n    return 1\n", "other"));
+    try testing.expect(try pythonExported("__all__ = (\"_area\",)\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(!try pythonExported("__all__ = []\ndef area():\n    return 1\n", "area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__ += more\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = names()\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\", *more]\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__.extend(more)\ndef _area():\n    return 1\n", "_area"));
+    try testing.expect(try pythonExported("__all__ = [\"a\"]\n__all__ = [\"b\"]\ndef _area():\n    return 1\n", "_area"));
 }

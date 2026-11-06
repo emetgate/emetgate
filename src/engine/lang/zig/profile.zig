@@ -46,6 +46,7 @@ pub const profile: Profile = .{
     .declaration_statements = &.{},
     .declarator = "",
     .export_wrappers = &.{},
+    .effect_kinds = &.{ "await_expression", "assignment_expression" },
     .decorator = "",
     .comments = &.{"comment"},
     .block = "block",

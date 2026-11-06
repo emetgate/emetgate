@@ -343,6 +343,13 @@ fn findUsers(w: Work, source_abs: []const u8, target_abs: []const u8, name: []co
     }
 }
 
+fn isUser(users: []const User, abs: []const u8) bool {
+    for (users) |u| {
+        if (tsserver.sameFile(u.abs, abs)) return true;
+    }
+    return false;
+}
+
 const ServiceCheck = union(enum) { ok, unavailable: anyerror };
 
 fn crossCheck(w: Work, session: *tsserver.Session, source_abs: []const u8, target_abs: []const u8, offset: u32, users: []const User) !ServiceCheck {
@@ -462,7 +469,9 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
 
     var resolver: Resolver = .text;
     var fallback: ?anyerror = error.NoLanguageService;
-    if (session) |s| {
+    const service_missing = if (session) |s| s.missing() else false;
+    if (service_missing) fallback = error.TypeScriptNotInstalled;
+    if (session) |s| if (!service_missing) {
         switch (try crossCheck(w, s, request.file_abs, request.target_abs, moved.offset, users.items)) {
             .ok => {
                 resolver = .language_service;
@@ -473,14 +482,18 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
                 fallback = err;
             },
         }
-    }
+    };
     if (resolver == .text) {
-        if (moved.exported) return error.MoveUnresolved;
+        if (moved.exported and !service_missing) return error.MoveUnresolved;
         const listing = try repo.filesMentioning(arena, io, root, name);
         var files = std.mem.tokenizeScalar(u8, listing, 0);
         while (files.next()) |rel| {
             const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root, rel });
-            if (!tsserver.sameFile(abs, request.file_abs)) return error.MoveUnresolved;
+            std.mem.replaceScalar(u8, abs, '/', '\\');
+            if (tsserver.sameFile(abs, request.file_abs)) continue;
+            if (!service_missing) return error.MoveUnresolved;
+            if (tsserver.sameFile(abs, request.target_abs) or registry.forPath(rel) == null) continue;
+            if (!isUser(users.items, abs)) return error.MoveUnresolved;
         }
     }
 

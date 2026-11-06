@@ -11,7 +11,7 @@ named in `license`.
 | Directory | Upstream repository | Version | Upstream commit | License | Vendored in emetgate at |
 |---|---|---|---|---|---|
 | `tree-sitter` | https://github.com/tree-sitter/tree-sitter | v0.27.0 | not recorded | MIT | `61721f2` (2026-09-11) |
-| `tree-sitter-typescript` | https://github.com/tree-sitter/tree-sitter-typescript | v0.23.2 | not recorded | MIT | `61721f2` (2026-09-11), tsx added `42ccaa3` (2026-09-24) |
+| `tree-sitter-typescript` | https://github.com/tree-sitter/tree-sitter-typescript | v0.23.2 | not recorded | MIT | `61721f2` (2026-09-11), tsx added `42ccaa3` (2026-09-24), `common/scanner.h` patched to end a type member before `<` on a new line |
 | `tree-sitter-javascript` | https://github.com/tree-sitter/tree-sitter-javascript | not recorded | not recorded | MIT | `ce006aa` (2026-09-15) |
 | `tree-sitter-json` | https://github.com/tree-sitter/tree-sitter-json | 0.24.8 | not recorded | MIT | `9ef9828` (2026-09-25) |
 | `tree-sitter-markdown` | https://github.com/tree-sitter-grammars/tree-sitter-markdown | not recorded | not recorded | MIT | `b5bb2ba` (2026-09-25) |

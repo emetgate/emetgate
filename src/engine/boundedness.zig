@@ -44,6 +44,7 @@ pub fn analyze(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_sp
 }
 
 const isOneOf = @import("functions.zig").isOneOf;
+const name_list = @import("name_list.zig");
 const profile_mod = @import("lang/profile.zig");
 const Profile = profile_mod.Profile;
 
@@ -55,7 +56,7 @@ fn analyzeInner(gpa: Allocator, snapshot: *Snapshot, ref: symbol.Ref, mutation_s
 
     const class: MutationClass = if (isBodyOnly(sym.*, mutation_span)) .body_only_no_op else .signature_change;
 
-    if (isExported(profile, snapshot.tree, sym.*)) return unbounded(class, .exported_escape);
+    if (try isExported(gpa, snapshot, sym.*, ref.name)) return unbounded(class, .exported_escape);
     if (hasReexportOf(profile, snapshot, ref.name)) return unbounded(class, .reexport_ambiguous);
     if (hasDynamicConstruct(profile, snapshot)) return unbounded(class, .dynamic_construct);
     if (hasStringKey(profile, snapshot, ref.name)) return unbounded(class, .string_key_escape);
@@ -128,7 +129,34 @@ fn isWithin(node: ts.Node, span: symbol.Span) bool {
     return node.startByte() >= span.start and node.endByte() <= span.end;
 }
 
-fn isExported(profile: *const Profile, tree: ts.Tree, sym: symbol.Symbol) bool {
+fn isContainer(profile: *const Profile, kind: []const u8) bool {
+    for (profile.containers) |container| {
+        if (std.mem.eql(u8, container.node, kind)) return true;
+    }
+    return false;
+}
+
+fn isExposedByName(snapshot: *const Snapshot, seen: name_list.Exposed, sym: symbol.Symbol, name: []const u8) bool {
+    const profile = snapshot.profile;
+    var owner: ?[]const u8 = null;
+    var current = sym.node.parent();
+    while (current) |p| : (current = p.parent()) {
+        if (profile.functionKind(p.kind()) != null) return false;
+        if (!isContainer(profile, p.kind())) continue;
+        const holder = p.childByField("name") orelse return true;
+        if (owner) |inner| if (seen.isPrivate(inner)) return false;
+        owner = snapshot.source[holder.startByte()..holder.endByte()];
+    }
+    if (owner) |top| return seen.covers(top) and !seen.isPrivate(name);
+    return seen.covers(name);
+}
+
+fn isExported(gpa: Allocator, snapshot: *const Snapshot, sym: symbol.Symbol, name: []const u8) !bool {
+    const profile = snapshot.profile;
+    const tree = snapshot.tree;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    if (try name_list.exposed(arena_state.allocator(), snapshot)) |seen| return isExposedByName(snapshot, seen, sym, name);
     if (profile.hasVisibilityKeyword(tree, sym.node)) return true;
     var current = sym.node.parent();
     var hops: u8 = 0;
@@ -482,4 +510,45 @@ test "positive control: a module-private, escape-free, in-file-called symbol is 
     try testing.expectEqual(MutationClass.signature_change, report.mutation_class);
     try testing.expectEqual(Confidence.bounded, report.confidence);
     try testing.expectEqual(@as(usize, 2), report.same_file_refs.len);
+}
+
+fn pythonBoundedness(source: []const u8, ref_text: []const u8) !FrameReport {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    const snapshot = try test_util.snapshotIn(runtime, source, ".py");
+    defer snapshot.destroy();
+    const table = try snapshot.symbols();
+    const ref = try symbol.Ref.parse(testing.allocator, ref_text);
+    defer ref.deinit(testing.allocator);
+    const sym = try table.resolve(ref);
+    return analyze(testing.allocator, snapshot, ref, sym.declaration);
+}
+
+fn expectPythonEscape(source: []const u8, ref_text: []const u8, escapes: bool) !void {
+    const report = try pythonBoundedness(source, ref_text);
+    defer report.deinit();
+    errdefer std.debug.print("{s} got confidence={t} provenance={?}\n", .{ ref_text, report.confidence, report.provenance });
+    try testing.expectEqual(escapes, report.provenance == Provenance.exported_escape);
+}
+
+test "python boundedness: a public function can be imported, a private or unlisted one stays local" {
+    try expectPythonEscape("def area(x):\n    return x\n", "area", true);
+    try expectPythonEscape("def _area(x):\n    return x\n", "_area", false);
+    try expectPythonEscape("__all__ = [\"area\"]\ndef area(x):\n    return x\n", "area", true);
+    try expectPythonEscape("__all__ = [\"area\"]\ndef other(x):\n    return x\n", "other", false);
+    try expectPythonEscape("__all__ = [\"_area\"]\ndef _area(x):\n    return x\n", "_area", true);
+    try expectPythonEscape("__all__ = names()\ndef _area(x):\n    return x\n", "_area", true);
+    try expectPythonEscape("@wrap\ndef area(x):\n    return x\n", "area", true);
+}
+
+test "python boundedness: a method follows its class, a nested function is local" {
+    try expectPythonEscape("class Cart:\n    def total(self):\n        return 1\n", "Cart.total", true);
+    try expectPythonEscape("class Cart:\n    def _total(self):\n        return 1\n", "Cart._total", false);
+    try expectPythonEscape("class Cart:\n    def __eq__(self, o):\n        return True\n", "Cart.__eq__", true);
+    try expectPythonEscape("class _Cart:\n    def total(self):\n        return 1\n", "_Cart.total", false);
+    try expectPythonEscape("__all__ = []\nclass Cart:\n    def total(self):\n        return 1\n", "Cart.total", false);
+    try expectPythonEscape("__all__ = [\"_Cart\"]\nclass _Cart:\n    def total(self):\n        return 1\n", "_Cart.total", true);
+    try expectPythonEscape("class Cart:\n    class _Line:\n        def total(self):\n            return 1\n", "Cart._Line.total", false);
+    try expectPythonEscape("class Cart:\n    class Line:\n        def total(self):\n            return 1\n", "Cart.Line.total", true);
+    try expectPythonEscape("def outer():\n    def inner():\n        return 1\n    return inner\n", "inner", false);
 }

@@ -51,6 +51,8 @@ const sys = {
 module.exports = {
   version: '0.0.0-stub',
   sys: sys,
+  forEachChild: () => undefined,
+  isIdentifier: () => false,
   readConfigFile: (file, read) => ({ config: JSON.parse(read(file)) }),
   parseJsonConfigFileContent: (config) => ({ options: Object.assign({}, config.compilerOptions || {}) }),
   ScriptSnapshot: { fromString: (text) => ({ text: text }) },
@@ -60,6 +62,7 @@ module.exports = {
     return {
       getProgram() {
         return {
+          getTypeChecker: () => ({}),
           getSourceFile(file) {
             const snapshot = host.getScriptSnapshot(file);
             return snapshot && { text: snapshot.text };

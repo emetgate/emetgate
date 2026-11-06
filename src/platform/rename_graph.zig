@@ -111,6 +111,23 @@ const Graph = struct {
         }
     }
 
+    fn addCalled(self: *Graph, io: std.Io, runtime: *Runtime, root: []const u8) !void {
+        var seen: std.StringHashMapUnmanaged(void) = .empty;
+        defer seen.deinit(self.gpa);
+        var file: usize = 0;
+        while (file < self.ids.items.len) : (file += 1) {
+            const found = self.state(@intCast(file)).facts;
+            for (found.types) |t| {
+                if (!t.called) continue;
+                const name = calledName(found, t);
+                if (name.len == 0 or (try seen.getOrPut(self.gpa, name)).found_existing) continue;
+                const loaded = self.rels.items.len;
+                try self.addMentioning(io, root, name);
+                try self.load(io, runtime, root, loaded);
+            }
+        }
+    }
+
     fn addPackageInits(self: *Graph, fs: io_seam.Fs, root: []const u8) !void {
         const modules = self.profile.modules orelse return;
         if (modules.package_init.len == 0) return;
@@ -400,6 +417,11 @@ const Locator = struct {
                 if (self.isProven(file, leaf.span.start)) continue;
                 if (declares(st.facts.defs, leaf.span.start)) continue;
                 if (linkedElsewhere(st, leaf.span.start) or self.isElsewhere(file, leaf.span.start)) continue;
+                if (leaf.shorthand) {
+                    const sites = self.sites orelse return error.RenameUnresolved;
+                    sites.add(graph.rels.items[file], snapshot.source, leaf.span.start);
+                    continue;
+                }
                 if (resolution.binderAt(leaf.span)) |b| {
                     if (!resolution.binders[b].import) continue;
                 }
@@ -419,6 +441,16 @@ fn declares(defs: []const facts.Def, start: u32) bool {
         if (d.name_start == start) return true;
     }
     return false;
+}
+
+fn calledName(found: facts.FileFacts, t: facts.TypeRef) []const u8 {
+    const path = switch (t.target) {
+        .local => |d| found.defs[d].name,
+        .binding => |b| if (found.bindings[b].imported.len != 0) found.bindings[b].imported else found.bindings[b].local,
+        else => t.member,
+    };
+    const dot = std.mem.lastIndexOfScalar(u8, path, '.') orelse return path;
+    return path[dot + 1 ..];
 }
 
 fn linkedElsewhere(st: *const facts_store.FileState, start: u32) bool {
@@ -483,6 +515,8 @@ pub fn locate(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, f
         try graph.addMentioning(io, root, graph.def(p).name);
         try graph.load(io, runtime, root, loaded);
     };
+
+    try graph.addCalled(io, runtime, root);
 
     var real = io_seam.Real.init(gpa, io);
     defer real.deinit();

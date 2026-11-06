@@ -186,11 +186,12 @@ test "move file: a file package.json or tsconfig paths names needs interface_cha
     }
 }
 
-test "move file: without the language service only a file nothing imports moves" {
+test "move file: a language service that dies leaves only a file nothing imports movable" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
-    try initFiles(&case, &.{}, false);
+    try initFiles(&case, &.{}, true);
     defer case.deinit();
+    try case.repo.setPlan("{\"exit\":true}");
     try testing.expectError(error.FileMoveUnresolved, moveFile(&case, .{}));
     const outcome = try moveFile(&case, .{ .from = "src/app.ts", .to = "src/entry/app.ts" });
     defer outcome.deinit(testing.allocator);

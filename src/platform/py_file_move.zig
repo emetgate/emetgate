@@ -144,12 +144,13 @@ fn newSpec(m: *Move, abs: []const u8, spec: []const u8, target_after: ?[]const u
             if (tsserver.sameFile(t, m.to)) logical = py.moduleLogical(t);
         }
         if (try py.relativeOf(m.cx, m.after, importer, logical, strict)) |text| return text;
-        if (target_after) |t| if (try py.absoluteOf(m.cx, m.after, importer, t)) |text| return text;
-        if (directory) |d| if (try py.absoluteOfDir(m.cx, m.after, importer, d)) |text| return text;
+        if (target_after) |t| if (try py.absoluteOf(m.cx, m.after, importer, t, null)) |text| return text;
+        if (directory) |d| if (try py.absoluteOfDir(m.cx, m.after, importer, d, null)) |text| return text;
         return error.PyImportUnprovable;
     }
-    if (target_after) |t| if (try py.absoluteOf(m.cx, m.after, importer, t)) |text| return text;
-    if (directory) |d| if (try py.absoluteOfDir(m.cx, m.after, importer, d)) |text| return text;
+    const prefer = try py.rootOfSpec(m.cx, m.before, abs, spec);
+    if (target_after) |t| if (try py.absoluteOf(m.cx, m.after, importer, t, prefer)) |text| return text;
+    if (directory) |d| if (try py.absoluteOfDir(m.cx, m.after, importer, d, prefer)) |text| return text;
     return error.PyImportUnprovable;
 }
 
@@ -218,7 +219,7 @@ fn scanFrom(m: *Move, abs: []const u8, snapshot: *Snapshot, entry: Import, edits
         if (try py.relativeOf(m.cx, m.after, importer, to_dir, strict)) |text| parent = text;
     }
     if (parent.len == 0) {
-        const dotted = (try py.absoluteOf(m.cx, m.after, importer, m.to)) orelse return error.PyTargetNotImportable;
+        const dotted = (try py.absoluteOf(m.cx, m.after, importer, m.to, try py.rootOfSpec(m.cx, m.before, abs, entry.spec))) orelse return error.PyTargetNotImportable;
         if (std.mem.lastIndexOfScalar(u8, dotted, '.')) |dot| parent = dotted[0..dot];
     }
     if (std.mem.eql(u8, parent, keep_spec)) {
@@ -259,7 +260,7 @@ fn scanImport(m: *Move, abs: []const u8, snapshot: *Snapshot, entries: []const I
     const now = try py.resolve(m.cx, m.after, importer, entry.spec);
     if (py.sameOptional(now, target_after)) return;
     const wanted = target_after orelse return error.PyNameCapture;
-    const dotted = (try py.absoluteOf(m.cx, m.after, importer, wanted)) orelse return if (tsserver.sameFile(wanted, m.to)) error.PyTargetNotImportable else error.PyImportUnprovable;
+    const dotted = (try py.absoluteOf(m.cx, m.after, importer, wanted, try py.rootOfSpec(m.cx, m.before, abs, entry.spec))) orelse return if (tsserver.sameFile(wanted, m.to)) error.PyTargetNotImportable else error.PyImportUnprovable;
     if (py.isAliased(snapshot.source, entry)) {
         const span = py.specSpan(snapshot.source, entry.spec);
         try addEdit(edits, m.cx.arena, span.start, span.end, dotted);

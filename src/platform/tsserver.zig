@@ -48,6 +48,7 @@ pub const Answer = struct {
     can_rename: bool = false,
     reason: []const u8 = "",
     locations: []Location = &.{},
+    unresolved: []Location = &.{},
     references: []Location = &.{},
     changes: []Change = &.{},
 };
@@ -271,6 +272,14 @@ pub const Session = struct {
     pub fn deinit(self: *Session) void {
         if (self.client) |c| c.destroy();
         self.client = null;
+    }
+
+    pub fn missing(self: *Session) bool {
+        const root = self.root orelse return false;
+        const marker = std.fmt.allocPrint(self.gpa, "{s}\\node_modules\\typescript\\package.json", .{root}) catch return false;
+        defer self.gpa.free(marker);
+        std.Io.Dir.cwd().access(self.io, marker, .{}) catch return true;
+        return false;
     }
 
     pub fn get(self: *Session) !*Client {

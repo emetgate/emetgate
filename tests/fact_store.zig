@@ -320,7 +320,7 @@ test "fact store: an in-memory edit relinks the file and moves the snapshot root
     defer test_util.closeRuntime(runtime);
     var fixture = try Fixture.init(&.{
         .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
-        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { f(); return 1; }\n" },
         .{ .path = "c.ts", .data = "export const c = 3;\n" },
     });
     defer fixture.deinit();
@@ -339,6 +339,21 @@ test "fact store: an in-memory edit relinks the file and moves the snapshot root
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     try testing.expectEqual(@as(usize, 0), (try callerPaths(arena.allocator(), repo, "f")).len);
+}
+
+test "fact store: an edit that changes what a function returns reshapes the file" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "a.ts", .data = "export function f() { return 1; }\n" },
+        .{ .path = "b.ts", .data = "import { f } from \"./a\";\nexport function g() { return f(); }\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const update = try repo.updateSource("b.ts", "import { f } from \"./a\";\nexport function g() { return 2; }\n");
+    try testing.expect(update.reshaped);
 }
 
 test "fact store: evidence never shows a line of a file that changed after the snapshot as current" {
@@ -654,6 +669,32 @@ fn targetOf(repo: *fact_store.Repo, path: []const u8, spec_text: []const u8) !fa
     return error.TestExpectedEqual;
 }
 
+fn linkedQname(repo: *fact_store.Repo, path: []const u8, kind: facts.RefKind, name: []const u8) ![]const u8 {
+    const id = repo.store.fileId(path) orelse return error.FileNotFound;
+    const state = repo.store.file(id);
+    for (state.facts.refs, state.links) |r, l| {
+        if (r.kind != kind or !std.mem.eql(u8, r.name, name)) continue;
+        return switch (l) {
+            .def => |d| (repo.store.defOf(d.id) orelse return error.DefNotFound).qname,
+            .unresolved => "",
+        };
+    }
+    return error.RefNotFound;
+}
+
+fn expectCalls(data: []const File, kind: facts.RefKind, name: []const u8, qname: []const u8) !void {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(data);
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings(qname, try linkedQname(repo, "Use.cs", kind, name));
+}
+
+const pricing_cs = File{ .path = "Pricing.cs", .data = "namespace Shop.Services\n{\n    public static class Pricing\n    {\n        public static int Apply() { return 1; }\n        public const int Max = 1;\n    }\n\n    public class G<T>\n    {\n        public int Size() { return 1; }\n    }\n}\n" };
+
 test "fact store: csharp usings resolve to a namespace, a type's file or outside the repo" {
     const runtime = try test_util.openRuntime();
     defer test_util.closeRuntime(runtime);
@@ -733,4 +774,266 @@ test "fact store: a python name inside a module resolves to the module, not to a
     try testing.expect(cart == .file);
     try testing.expectEqualStrings("pkg/cart.py", repo.store.file(cart.file).path);
     try testing.expect(try targetOf(repo, "pkg/app.py", "os") == .external);
+}
+
+test "fact store: a csharp using static links a bare call to the imported type's static method" {
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "global using static Shop.Services.Pricing;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Global.cs", .data = "global using static Shop.Services.Pricing;\n" }, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace Shop\n{\n    using static Services.Pricing;\n\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+}
+
+test "fact store: a csharp using static stays unproven when another import, block or base could supply the name" {
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\nusing static System.Math;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    using static Shop.Services.Pricing;\n}\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\n\nnamespace App\n{\n    public class Use : Outside\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Other.cs", .data = "namespace Shop\n{\n    public static class Other { public static int Apply() { return 2; } }\n}\n" }, .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\nusing static Shop.Other;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+}
+
+test "fact store: a csharp bare call finds its own class before a using static" {
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\n\nnamespace App\n{\n    public class Parent\n    {\n        public int Apply() { return 2; }\n    }\n\n    public class Use : Parent\n    {\n        public int Go() { return Apply(); }\n    }\n}\n" } }, .call, "Apply", "App.Parent.Apply");
+}
+
+test "fact store: a csharp namespace-qualified static call links through its full path" {
+    const qualified = File{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Shop.Services.Pricing.Apply() + Shop.Services.Pricing.Max; }\n    }\n}\n" };
+    try expectCalls(&.{ pricing_cs, qualified }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+    try expectCalls(&.{ pricing_cs, qualified }, .read, "Max", "Shop.Services.Pricing.Max");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Shop.Services.Pricing.Max; }\n    }\n}\n" } }, .read, "Pricing", "Shop.Services.Pricing");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class Use\n    {\n        public int Go() { return Services.Pricing.Apply(); }\n    }\n}\n" } }, .call, "Apply", "Shop.Services.Pricing.Apply@static");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Other.Pricing.Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go(Thing Shop) { return Shop.Services.Pricing.Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    using Shop = Elsewhere.Things;\n\n    public class Use\n    {\n        public int Go() { return Shop.Services.Pricing.Apply(); }\n    }\n}\n" } }, .call, "Apply", "");
+}
+
+test "fact store: a csharp generic new links to the generic class, bare or qualified" {
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using Shop.Services;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return new G<int>().Size(); }\n    }\n}\n" } }, .new, "G", "Shop.Services.G");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public object Go() { return new Shop.Services.G<int>(); }\n    }\n}\n" } }, .new, "G", "Shop.Services.G");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "using Shop.Services;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { return new G<int>().Size(); }\n    }\n}\n" } }, .call, "Size", "Shop.Services.G.Size");
+    try expectCalls(&.{ pricing_cs, .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public object Go() { return new G<int>(); }\n    }\n}\n" } }, .new, "G", "");
+}
+
+test "fact store: a csharp name finds the nearest namespace first and a block's own using applies only inside it" {
+    const near = File{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class Cart { }\n}\n\nnamespace Shop.Sub\n{\n    public class Cart { }\n    public class Use\n    {\n        public object Go() { return new Cart(); }\n    }\n}\n" };
+    try expectCalls(&.{near}, .new, "Cart", "Shop.Sub.Cart");
+    const shadowed = File{ .path = "Use.cs", .data = "using Shop.Services;\n\nnamespace App\n{\n    public class Pricing { public static int Apply() { return 2; } }\n    public class Use\n    {\n        public int Go() { return Pricing.Apply(); }\n    }\n}\n" };
+    try expectCalls(&.{ pricing_cs, shadowed }, .call, "Apply", "App.Pricing.Apply@static");
+    try expectCalls(&.{ .{ .path = "Far.cs", .data = "namespace Far\n{\n    public class Cart { }\n}\n" }, .{ .path = "Use.cs", .data = "using Far;\n\nnamespace Near\n{\n    public class Cart { }\n}\n\nnamespace Near.Inner\n{\npublic class Use\n{\n    public object Go() { return new Cart(); }\n}\n}\n" } }, .new, "Cart", "Near.Cart");
+    try expectCalls(&.{ .{ .path = "Cart.cs", .data = "namespace Outer\n{\n    public class Cart { }\n}\n" }, .{ .path = "Use.cs", .data = "namespace Outer\n{\n    namespace Inner\n    {\n        using Far.Away;\n\npublic class Use\n{\n    public object Go() { return new Cart(); }\n}\n    }\n}\n" } }, .new, "Cart", "");
+    try expectCalls(&.{ .{ .path = "A.cs", .data = "namespace A\n{\n    public class Cart { }\n}\n" }, .{ .path = "B.cs", .data = "namespace B\n{\n    public class Cart { }\n}\n" }, .{ .path = "Use.cs", .data = "using A;\nusing B;\n\nnamespace App\n{\npublic class Use\n{\n    public object Go() { return new Cart(); }\n}\n}\n" } }, .new, "Cart", "");
+}
+
+test "fact store: a csharp class with a constructor and a nested type links its own names" {
+    const own = File{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class Use\n    {\n        public Use() { }\n        public Use Clone() { return new Use(); }\n        public object Make() { return new Inner(); }\n        public int Read(Use other) { return Inner.Count(); }\n        public class Inner { public static int Count() { return 1; } }\n    }\n}\n" };
+    try expectCalls(&.{own}, .new, "Use", "Shop.Use");
+    try expectCalls(&.{own}, .read, "Use", "Shop.Use");
+    try expectCalls(&.{own}, .new, "Inner", "Shop.Use.Inner");
+    try expectCalls(&.{own}, .call, "Count", "Shop.Use.Inner.Count@static");
+}
+
+test "fact store: a csharp call's return type is unproven when a base class may hold another overload" {
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace App\n{\n    public class Cart { public int Total() { return 1; } }\n    public class Other { public int Total() { return 2; } }\n    public class A { public Cart Make(int n) { return new Cart(); } }\n    public class B : A { public Other Make() { return new Other(); } }\n    public class Use\n    {\n        public int Go() { var c = new B().Make(1); return c.Total(); }\n    }\n}\n" }}, .call, "Total", "");
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace App\n{\n    public class Cart { public int Total() { return 1; } }\n    public class B : Outside { public Cart Make() { return new Cart(); } }\n    public class Use\n    {\n        public int Go() { var c = new B().Make(); return c.Total(); }\n    }\n}\n" }}, .call, "Total", "");
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace App\n{\n    public class Cart { public int Total() { return 1; } }\n    public interface IMake { Cart Make(); }\n    public class A { public int Size() { return 1; } }\n    public class B : A { public Cart Make() { return new Cart(); } }\n    public class C : IMake { public Cart Make() { return new Cart(); } }\n    public class Use\n    {\n        public int Go() { var c = new B().Make(); return c.Total(); }\n        public int Run() { var c = new C().Make(); return c.Total(); }\n    }\n}\n" }}, .call, "Total", "App.Cart.Total");
+}
+
+test "fact store: a csharp call's return type follows a change in the file that declares it" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Maker.cs", .data = "namespace Shop\n{\n    public class Cart { public int Total() { return 1; } }\n    public class Bag { public int Total() { return 2; } }\n    public static class Maker { public static Cart Make() { return null; } }\n}\n" },
+        .{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class Use\n    {\n        public int Go() { var c = Maker.Make(); return c.Total(); }\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("Shop.Cart.Total", try linkedQname(repo, "Use.cs", .call, "Total"));
+    _ = try repo.updateSource("Maker.cs", "namespace Shop\n{\n    public class Cart { public int Total() { return 1; } }\n    public class Bag { public int Total() { return 2; } }\n    public static class Maker { public static Bag Make() { return null; } }\n}\n");
+    try testing.expectEqualStrings("Shop.Bag.Total", try linkedQname(repo, "Use.cs", .call, "Total"));
+}
+
+test "fact store: a new csharp type reaches files with no using" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\nusing Alias = Shop.Services.G<int>;\n\nnamespace Shop.Services\n{\n    public class Use\n    {\n        public int Go() { var c = Make(); return c.Total() + Apply(); }\n        public object Fresh() { return new Cart(); }\n        public object Other() { return new Alias(); }\n    }\n}\n" },
+        .{ .path = "Cart.cs", .data = "namespace Shop.Services\n{\n    public class Placeholder { }\n}\n" },
+        .{ .path = "Plain.cs", .data = "namespace Shop.Services\n{\n    public class Plain\n    {\n        public object Fresh() { return new Cart(); }\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("", try linkedQname(repo, "Plain.cs", .new, "Cart"));
+    _ = try repo.updateSource("Cart.cs", "namespace Shop.Services\n{\n    public class Cart { public int Total() { return 1; } }\n    public static class Pricing\n    {\n        public static Cart Make() { return new Cart(); }\n        public static int Apply() { return 1; }\n    }\n}\n");
+    try testing.expectEqualStrings("Shop.Services.Cart", try linkedQname(repo, "Plain.cs", .new, "Cart"));
+    try testing.expectEqualStrings("Shop.Services.Cart.Total", try linkedQname(repo, "Use.cs", .call, "Total"));
+}
+
+test "fact store: a csharp call through a type name is proven and one through a local is typed" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Use.cs", .data = "using Shop.Services;\n\nnamespace App\n{\n    public class Use\n    {\n        public int Go() { var c = new Cart(); return c.Total() + Pricing.Apply(); }\n    }\n}\n" },
+        .{ .path = "Cart.cs", .data = "namespace Shop.Services\n{\n    public class Cart { public int Total() { return 1; } }\n    public static class Pricing { public static int Apply() { return 1; } }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    const state = repo.store.file(repo.store.fileId("Use.cs").?);
+    for (state.facts.refs, state.links) |r, l| {
+        const expected: facts.Certainty = if (std.mem.eql(u8, r.name, "Apply")) .proven else if (std.mem.eql(u8, r.name, "Total")) .typed else continue;
+        try testing.expectEqual(expected, l.def.certainty);
+    }
+}
+
+test "fact store: a csharp type declared twice in one file is unproven and the nearest namespace wins inside a file" {
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class G { }\n    public class G<T> { }\n    public class Use\n    {\n        public object Make() { return new G<int>(); }\n    }\n}\n" }}, .new, "G", "");
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace Far\n{\n    public class Cart { }\n}\n\nnamespace Shop\n{\n    public class Cart { }\n    public class Use\n    {\n        public object Make() { return new Cart(); }\n    }\n}\n" }}, .new, "Cart", "Shop.Cart");
+}
+
+test "fact store: a csharp type parameter makes no reference to a class of the same name" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{.{ .path = "Use.cs", .data = "public class T { }\n\npublic class Use<T>\n{\n    public T Get() { return default(T); }\n    public int Read(int x) { return x; }\n    public object Make() { return new Cart(); }\n}\n\npublic class Cart { }\n" }});
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("Cart", try linkedQname(repo, "Use.cs", .new, "Cart"));
+    try testing.expectError(error.RefNotFound, linkedQname(repo, "Use.cs", .type, "T"));
+}
+
+test "fact store: a csharp new of a type parameter links to no class of the same name" {
+    try expectCalls(&.{
+        .{ .path = "T.cs", .data = "public class T { }\n" },
+        .{ .path = "Use.cs", .data = "public class Use<T> where T : new()\n{\n    public object Make() { return new T(); }\n}\n" },
+    }, .new, "T", "");
+}
+
+test "fact store: a plain csharp using makes no reference to the namespace it names" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Cart.cs", .data = "namespace Shop.Models\n{\n    public class Cart { }\n}\n" },
+        .{ .path = "Use.cs", .data = "using Shop.Models;\n\nnamespace App\n{\n    public class Use { public object Go() { return new Cart(); } }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("Shop.Models.Cart", try linkedQname(repo, "Use.cs", .new, "Cart"));
+    try testing.expectError(error.RefNotFound, linkedQname(repo, "Use.cs", .type, "Models"));
+}
+
+test "fact store: a csharp interface base leaves a call's return type proven" {
+    try expectCalls(&.{.{ .path = "Use.cs", .data = "namespace App\n{\n    public class Cart { public int Total() { return 1; } }\n    public interface IMake { Cart Make(int n); }\n    public class C : IMake\n    {\n        public Cart Make(int n) { return new Cart(); }\n    }\n    public class Use\n    {\n        public int Go() { var c = new C().Make(1); return c.Total(); }\n    }\n}\n" }}, .call, "Total", "App.Cart.Total");
+}
+
+test "fact store: a csharp path through a type never continues into a namespace of the same name" {
+    try expectCalls(&.{
+        .{ .path = "Cart.cs", .data = "namespace Shop\n{\n    public class Cart { }\n}\n" },
+        .{ .path = "X.cs", .data = "namespace Shop.Cart.Missing\n{\n    public static class X { public static int Run() { return 1; } }\n}\n" },
+        .{ .path = "Use.cs", .data = "namespace App\n{\n    public class Use\n    {\n        public int Go() { return Shop.Cart.Missing.X.Run(); }\n    }\n}\n" },
+    }, .call, "Run", "");
+}
+
+test "fact store: a csharp return type moved between two methods reaches the caller" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Maker.cs", .data = "namespace Shop\n{\n    public class Cart { public int Total() { return 1; } }\n    public static class Maker\n    {\n        public static Cart A() { return null; }\n        public static int B() { return 1; }\n    }\n}\n" },
+        .{ .path = "Use.cs", .data = "namespace Shop\n{\n    public class Use\n    {\n        public int Go() { var c = Maker.B(); return c.Total(); }\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("", try linkedQname(repo, "Use.cs", .call, "Total"));
+    _ = try repo.updateSource("Maker.cs", "namespace Shop\n{\n    public class Cart { public int Total() { return 1; } }\n    public static class Maker\n    {\n        public static int A() { return 1; }\n        public static Cart B() { return null; }\n    }\n}\n");
+    try testing.expectEqualStrings("Shop.Cart.Total", try linkedQname(repo, "Use.cs", .call, "Total"));
+}
+
+test "fact store: a csharp call in a partial class whose other part may overload it gives no type" {
+    try expectCalls(&.{ .{ .path = "Use.cs", .data = "public class Cart\n{\n    public int Total() { return 1; }\n}\n\npublic class Box\n{\n    public int Total() { return 2; }\n}\n\npublic partial class Maker\n{\n    public Cart Make() { return new Cart(); }\n    public int Go() { var c = Make(); return c.Total(); }\n}\n" }, .{ .path = "P2.cs", .data = "public partial class Maker\n{\n    public Box Make(int x) { return new Box(); }\n}\n" } }, .call, "Total", "");
+}
+
+test "fact store: a saved csharp store opens again with every new link field" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Use.cs", .data = "using static Shop.Services.Pricing;\nusing Alias = Shop.Services.G<int>;\n\nnamespace Shop.Services\n{\n    public class Use\n    {\n        public int Go() { var c = Make(); return c.Total() + Apply(); }\n        public object Fresh() { return new Cart(); }\n        public object Other() { return new Alias(); }\n    }\n}\n" },
+        .{ .path = "Cart.cs", .data = "namespace Shop.Services\n{\n    public class Cart { public int Total() { return 1; } }\n    public static class Pricing\n    {\n        public static Cart Make() { return new Cart(); }\n        public static int Apply() { return 1; }\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        try testing.expect((try repo.refresh()).saved);
+    }
+    try fixture.write(.{ .path = "Cart.cs", .data = "namespace Shop.Services\n{\n    public class Cart { public int Total() { return 1; } public int Count() { return 0; } }\n    public static class Pricing\n    {\n        public static Cart Make() { return new Cart(); }\n        public static int Apply() { return 1; }\n    }\n}\n" });
+    const again = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer again.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, again.load);
+    try testing.expectEqual(@as(usize, 1), (try again.refresh()).extracted);
+    try testing.expectEqualStrings("Shop.Services.Cart", try linkedQname(again, "Use.cs", .new, "Cart"));
+    try testing.expectEqualStrings("Shop.Services.Cart.Total", try linkedQname(again, "Use.cs", .call, "Total"));
+    try testing.expectEqualStrings("Shop.Services.Pricing.Apply@static", try linkedQname(again, "Use.cs", .call, "Apply"));
+    try testing.expectEqualStrings("", try linkedQname(again, "Use.cs", .new, "Alias"));
+    var value_types: usize = 0;
+    var called_types: usize = 0;
+    for (again.store.file(again.store.fileId("Use.cs").?).facts.types) |t| {
+        if (t.value) value_types += 1;
+        if (t.called) called_types += 1;
+    }
+    try testing.expect(value_types != 0);
+    try testing.expect(called_types != 0);
+}
+
+test "fact store: a saved csharp store keeps a block's own using inside its block" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "Thing.cs", .data = "namespace Far\n{\n    public class Thing { }\n}\n" },
+        .{ .path = "Use.cs", .data = "namespace In\n{\n    using Far;\n\n    public class Use { public object Go() { return new Thing(); } }\n}\n\nnamespace In\n{\n    public class Later { public object Go() { return new Thing(); } }\n}\n\nnamespace Out\n{\n    public class Other { public object Go() { return new Thing(); } }\n}\n" },
+    });
+    defer fixture.deinit();
+    {
+        const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+        defer repo.deinit();
+        try testing.expect((try repo.refresh()).saved);
+    }
+    try fixture.write(.{ .path = "Thing.cs", .data = "namespace Far\n{\n    public class Thing { }\n    public class Spare { }\n}\n" });
+    const again = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer again.deinit();
+    try testing.expectEqual(fact_store.Load.loaded, again.load);
+    try testing.expectEqual(@as(usize, 1), (try again.refresh()).extracted);
+    const state = again.store.file(again.store.fileId("Use.cs").?);
+    var linked: usize = 0;
+    var unlinked: usize = 0;
+    for (state.facts.refs, state.links) |r, l| {
+        if (r.kind != .new) continue;
+        switch (l) {
+            .def => linked += 1,
+            .unresolved => unlinked += 1,
+        }
+    }
+    try testing.expectEqual(@as(usize, 1), linked);
+    try testing.expectEqual(@as(usize, 2), unlinked);
+}
+
+test "fact store: a csharp test class links its evidence through a qualified call" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var fixture = try Fixture.init(&.{
+        .{ .path = "src/Pricing.cs", .data = "namespace Shop.Services\n{\n    public static class Pricing\n    {\n        public static int Apply() { return 1; }\n    }\n}\n" },
+        .{ .path = "tests/PricingTests.cs", .data = "using Xunit;\n\nnamespace Shop.Tests\n{\n    public class PricingTests\n    {\n        [Fact]\n        public void Applies() { Assert.Equal(1, Shop.Services.Pricing.Apply()); }\n    }\n}\n" },
+    });
+    defer fixture.deinit();
+    const repo = try fixture.open(runtime, fact_store.default_max_file_bytes);
+    defer repo.deinit();
+    _ = try repo.refresh();
+    try testing.expectEqualStrings("Shop.Services.Pricing.Apply@static", try linkedQname(repo, "tests/PricingTests.cs", .call, "Apply"));
 }

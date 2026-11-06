@@ -31,11 +31,11 @@ pub const Cx = struct {
 };
 
 const keywords = std.StaticStringMap(void).initComptime(.{
-    .{"False"},  .{"None"},   .{"True"},    .{"and"},    .{"as"},   .{"assert"}, .{"async"},
-    .{"await"},  .{"break"},  .{"class"},   .{"continue"}, .{"def"},  .{"del"},    .{"elif"},
-    .{"else"},   .{"except"}, .{"finally"}, .{"for"},    .{"from"}, .{"global"}, .{"if"},
-    .{"import"}, .{"in"},     .{"is"},      .{"lambda"}, .{"nonlocal"}, .{"not"},  .{"or"},
-    .{"pass"},   .{"raise"},  .{"return"},  .{"try"},    .{"while"}, .{"with"},  .{"yield"},
+    .{"False"},  .{"None"},   .{"True"},    .{"and"},      .{"as"},       .{"assert"}, .{"async"},
+    .{"await"},  .{"break"},  .{"class"},   .{"continue"}, .{"def"},      .{"del"},    .{"elif"},
+    .{"else"},   .{"except"}, .{"finally"}, .{"for"},      .{"from"},     .{"global"}, .{"if"},
+    .{"import"}, .{"in"},     .{"is"},      .{"lambda"},   .{"nonlocal"}, .{"not"},    .{"or"},
+    .{"pass"},   .{"raise"},  .{"return"},  .{"try"},      .{"while"},    .{"with"},   .{"yield"},
 });
 
 pub fn isIdentifier(text: []const u8) bool {
@@ -115,8 +115,10 @@ pub fn scriptRoot(cx: Cx, existing: Existing, importer: []const u8) ![]const u8 
     return dir;
 }
 
+const src_folder = "src";
+
 pub fn rootsOf(cx: Cx, existing: Existing, importer: []const u8) ![3][]const u8 {
-    return .{ try scriptRoot(cx, existing, importer), cx.root, try std.fmt.allocPrint(cx.arena, "{s}\\src", .{cx.root}) };
+    return .{ try scriptRoot(cx, existing, importer), cx.root, try std.fmt.allocPrint(cx.arena, "{s}\\" ++ src_folder, .{cx.root}) };
 }
 
 pub fn logicalOf(cx: Cx, importer: []const u8, spec: []const u8) !?[]const u8 {
@@ -137,11 +139,18 @@ pub fn resolve(cx: Cx, existing: Existing, importer: []const u8, spec: []const u
         const joined = (try logicalOf(cx, importer, spec)) orelse return null;
         return paths.resolveJoinedPython(cx.arena, existing, joined, '\\');
     }
+    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;
+    return found.hit;
+}
+
+const Found = struct { hit: []const u8, base: []const u8 };
+
+fn findAbsolute(cx: Cx, existing: Existing, importer: []const u8, spec: []const u8) !?Found {
     const rest = try cx.arena.dupe(u8, spec);
     std.mem.replaceScalar(u8, rest, '.', '\\');
     for (try rootsOf(cx, existing, importer)) |base| {
         const joined = try std.fmt.allocPrint(cx.arena, "{s}\\{s}", .{ base, rest });
-        if (try paths.resolveJoinedPython(cx.arena, existing, joined, '\\')) |hit| return hit;
+        if (try paths.resolveJoinedPython(cx.arena, existing, joined, '\\')) |hit| return .{ .hit = hit, .base = base };
     }
     return null;
 }
@@ -161,21 +170,41 @@ pub fn ambiguous(cx: Cx, existing: Existing, importer: []const u8, spec: []const
     return false;
 }
 
-pub fn absoluteOf(cx: Cx, existing: Existing, importer: []const u8, target: []const u8) !?[]const u8 {
-    for (try rootsOf(cx, existing, importer)) |base| {
-        const relative_path = underRoot(base, moduleLogical(target)) orelse continue;
-        const dotted = (try dottedOf(cx.arena, relative_path)) orelse continue;
-        if (sameOptional(try resolve(cx, existing, importer, dotted), target)) return dotted;
-    }
-    return null;
+pub fn rootOfSpec(cx: Cx, existing: Existing, importer: []const u8, spec: []const u8) !?[]const u8 {
+    if (spec.len == 0 or spec[0] == '.') return null;
+    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;
+    return found.base;
 }
 
-pub fn absoluteOfDir(cx: Cx, existing: Existing, importer: []const u8, dir: []const u8) !?[]const u8 {
+fn throughBareSrc(cx: Cx, existing: Existing, base: []const u8, dotted: []const u8) !bool {
+    if (!tsserver.sameFile(base, cx.root) or !std.ascii.eqlIgnoreCase(firstSegment(dotted), src_folder)) return false;
+    return !try hasInit(existing, cx.arena, try std.fmt.allocPrint(cx.arena, "{s}\\" ++ src_folder, .{cx.root}));
+}
+
+fn chooseAbsolute(cx: Cx, existing: Existing, importer: []const u8, logical: []const u8, target: ?[]const u8, prefer: ?[]const u8) !?[]const u8 {
+    var first: ?[]const u8 = null;
+    var bare_src: ?[]const u8 = null;
     for (try rootsOf(cx, existing, importer)) |base| {
-        const relative_path = underRoot(base, dir) orelse continue;
-        if (try dottedOf(cx.arena, relative_path)) |dotted| return dotted;
+        const relative_path = underRoot(base, logical) orelse continue;
+        const dotted = (try dottedOf(cx.arena, relative_path)) orelse continue;
+        const found = try findAbsolute(cx, existing, importer, dotted);
+        if (target) |file| {
+            if (!sameOptional(if (found) |f| f.hit else null, file)) continue;
+        } else if (found) |f| if (!tsserver.sameFile(f.base, base)) continue;
+        if (prefer) |root| if (tsserver.sameFile(root, base)) return dotted;
+        if (try throughBareSrc(cx, existing, base, dotted)) {
+            if (bare_src == null) bare_src = dotted;
+        } else if (first == null) first = dotted;
     }
-    return null;
+    return first orelse bare_src;
+}
+
+pub fn absoluteOf(cx: Cx, existing: Existing, importer: []const u8, target: []const u8, prefer: ?[]const u8) !?[]const u8 {
+    return chooseAbsolute(cx, existing, importer, moduleLogical(target), target, prefer);
+}
+
+pub fn absoluteOfDir(cx: Cx, existing: Existing, importer: []const u8, dir: []const u8, prefer: ?[]const u8) !?[]const u8 {
+    return chooseAbsolute(cx, existing, importer, dir, null, prefer);
 }
 
 pub fn packageDepth(cx: Cx, existing: Existing, importer: []const u8) !usize {

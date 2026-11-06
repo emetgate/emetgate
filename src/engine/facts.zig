@@ -84,6 +84,7 @@ pub const Target = union(enum) {
     member_of_binding: u32,
     member_of_super: u32,
     member_of_type: u32,
+    global_type: u32,
     unresolved: Reason,
 };
 
@@ -100,6 +101,7 @@ pub const Def = struct {
     exported: bool = false,
     is_static: bool = false,
     body_start: u32 = none,
+    returns: u32 = none,
     signature: []const u8 = "",
     doc: []const u8 = "",
 };
@@ -122,6 +124,9 @@ pub const Spec = struct {
     kind: SpecKind,
     scope: []const u8 = "",
     global: bool = false,
+    start: u32 = 0,
+    end: u32 = 0,
+    alias: []const u8 = "",
 };
 
 pub const Declared = struct {
@@ -152,6 +157,11 @@ pub const Export = struct {
 pub const TypeRef = struct {
     target: Target,
     member: []const u8 = "",
+    scope: []const u8 = "",
+    at: u32 = none,
+    enclosing: u32 = none,
+    called: bool = false,
+    value: bool = false,
 };
 
 pub const Class = struct {
@@ -289,6 +299,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
         slot.* = s;
         slot.text = try c.str(s.text);
         slot.scope = try c.str(s.scope);
+        slot.alias = try c.str(s.alias);
     }
     const bindings = try arena.alloc(Binding, from.bindings.len);
     for (from.bindings, bindings) |b, *slot| {
@@ -305,6 +316,7 @@ pub fn clone(arena: std.mem.Allocator, from: FileFacts) !FileFacts {
     for (from.types, types) |t, *slot| {
         slot.* = t;
         slot.member = try c.str(t.member);
+        slot.scope = try c.str(t.scope);
     }
     const member_types = try arena.alloc(MemberType, from.member_types.len);
     for (from.member_types, member_types) |m, *slot| {

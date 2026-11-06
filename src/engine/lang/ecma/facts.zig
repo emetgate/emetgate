@@ -8,6 +8,7 @@ const writes = [_]FieldSite{
     .{ .parent = "assignment_expression", .field = "left" },
     .{ .parent = "augmented_assignment_expression", .field = "left" },
     .{ .parent = "update_expression", .field = "argument" },
+    .{ .parent = "for_in_statement", .field = "left" },
 };
 
 const call_like = [_]FieldSite{
@@ -29,6 +30,22 @@ const typed_binders = [_]TypedBinder{
     .{ .node = "variable_declarator", .name_field = "name", .type_field = "type" },
     .{ .node = "required_parameter", .name_field = "pattern", .type_field = "type" },
     .{ .node = "optional_parameter", .name_field = "pattern", .type_field = "type" },
+};
+
+const commonjs: profile_mod.CommonJs = .{
+    .module_exports = "module.exports",
+    .exports_prefix = "exports.",
+    .module_exports_prefix = "module.exports.",
+    .expression_statement = "expression_statement",
+    .assignment = "assignment_expression",
+    .variable_kinds = &.{ "lexical_declaration", "variable_declaration" },
+    .object_pattern = "object_pattern",
+    .shorthand_pattern = "shorthand_property_identifier_pattern",
+    .pair_pattern = "pair_pattern",
+    .object = "object",
+    .shorthand = "shorthand_property_identifier",
+    .pair = "pair",
+    .loader = "require",
 };
 
 pub const typescript: Facts = .{
@@ -61,6 +78,14 @@ pub const typescript: Facts = .{
     .error_node = "ERROR",
     .export_value_field = "value",
     .export_declaration_field = "declaration",
+    .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .value_field = "value" }},
+    .calls_construct = true,
+    .sole_binder_types = true,
+    .write_patterns = &.{ "array_pattern", "object_pattern" },
+    .write_pattern_names = &.{ "identifier", "shorthand_property_identifier_pattern" },
+    .return_sites = &.{.{ .parent = "function_declaration", .field = "return_type" }},
+    .return_statement = "return_statement",
+    .generator_kinds = &.{"yield_expression"},
 };
 
 pub const javascript: Facts = .{
@@ -93,4 +118,13 @@ pub const javascript: Facts = .{
     .error_node = "ERROR",
     .export_value_field = "value",
     .export_declaration_field = "declaration",
+    .constructions = &.{.{ .node = "variable_declarator", .name_field = "name", .value_field = "value" }},
+    .calls_construct = true,
+    .sole_binder_types = true,
+    .write_patterns = &.{ "array_pattern", "object_pattern" },
+    .write_pattern_names = &.{ "identifier", "shorthand_property_identifier_pattern" },
+    .return_sites = &.{.{ .parent = "function_declaration", .field = "return_type" }},
+    .return_statement = "return_statement",
+    .generator_kinds = &.{"yield_expression"},
+    .commonjs = commonjs,
 };

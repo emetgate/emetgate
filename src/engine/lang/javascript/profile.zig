@@ -34,6 +34,7 @@ pub const profile: Profile = .{
     .declaration_statements = &ecma.declaration_statements,
     .declarator = "variable_declarator",
     .export_wrappers = &ecma.export_wrappers,
+    .effect_kinds = &ecma.effect_kinds,
     .decorator = "decorator",
     .comments = &ecma.comments,
     .block = "statement_block",
