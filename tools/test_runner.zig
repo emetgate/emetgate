@@ -9,6 +9,7 @@ pub const panic = std.debug.FullPanic(onPanic);
 pub var emetgate_mutant: u32 = 0;
 pub var emetgate_slow: bool = false;
 pub var emetgate_release_leases: ?*const fn () void = null;
+pub var emetgate_probe: []const u8 = "";
 
 var log_err_count: usize = 0;
 var current_test: ?[]const u8 = null;
@@ -33,10 +34,11 @@ pub const Options = struct {
     tsv: ?[]const u8 = null,
     record: ?[]const u8 = null,
     claim: ?[]const u8 = null,
+    probe: ?[]const u8 = null,
     jobs: usize = 1,
 };
 
-pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--part I/N] [--manifest=PATH] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH] [--claim=DIR]\n";
+pub const usage_text = "usage: test-all [--filter NAME]... [--skip FULL_NAME]... [--jobs N | --shard I/N] [--part I/N] [--manifest=PATH] [--slow] [--mutant ID] [--list] [--verbose] [--timing[=TOP]] [--tsv=PATH] [--record=PATH] [--claim=DIR] [--probe=PATH]\n";
 
 pub fn parseShard(text: []const u8) error{InvalidShard}!Shard {
     const slash = std.mem.indexOfScalar(u8, text, '/') orelse return error.InvalidShard;
@@ -98,6 +100,9 @@ pub fn parseArgs(gpa: std.mem.Allocator, args: []const []const u8) !Options {
         } else if (std.mem.startsWith(u8, arg, "--claim=")) {
             options.claim = arg["--claim=".len..];
             if (options.claim.?.len == 0) return error.InvalidArgs;
+        } else if (std.mem.startsWith(u8, arg, "--probe=")) {
+            options.probe = arg["--probe=".len..];
+            if (options.probe.?.len == 0) return error.InvalidArgs;
         } else {
             return error.InvalidArgs;
         }
@@ -279,6 +284,7 @@ fn shardArgs(gpa: std.mem.Allocator, exe: []const u8, dir: []const u8, i: usize,
     if (options.part.count != 1) argv.appendSlice(gpa, &.{ "--part", std.fmt.allocPrint(gpa, "{d}/{d}", .{ options.part.index, options.part.count }) catch oom() }) catch oom();
     argv.append(gpa, "--verbose") catch oom();
     if (options.mutant != 0) argv.appendSlice(gpa, &.{ "--mutant", std.fmt.allocPrint(gpa, "{d}", .{options.mutant}) catch oom() }) catch oom();
+    if (options.probe) |probe| argv.append(gpa, std.fmt.allocPrint(gpa, "--probe={s}", .{probe}) catch oom()) catch oom();
     return argv.items;
 }
 
@@ -594,12 +600,18 @@ pub fn main(init: std.process.Init.Minimal) void {
         std.process.exit(2);
     };
     emetgate_mutant = options.mutant;
+    emetgate_probe = options.probe orelse probeBesideRunner(gpa);
     var own_buf: [64]u8 = undefined;
     const own = redirectAppData(&own_buf);
     const code = run(gpa, init, options);
     if (own) |dir| Io.Dir.cwd().deleteTree(rio, dir) catch {};
     removeTestDataDir();
     std.process.exit(code);
+}
+
+fn probeBesideRunner(gpa: std.mem.Allocator) []const u8 {
+    const dir = std.process.executableDirPathAlloc(rio, gpa) catch return "";
+    return std.fs.path.join(gpa, &.{ dir, "sandbox-probe" ++ comptime builtin.target.exeFileExt() }) catch oom();
 }
 
 fn removeTestDataDir() void {

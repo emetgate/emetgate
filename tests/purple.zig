@@ -2,7 +2,6 @@ const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
 const shadow = @import("emetgate").shadow;
@@ -326,7 +325,7 @@ test "purple C3: a test command that leaves a lingering process is caught, not p
     try test_util.slow();
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const report = try sandbox.run(testing.allocator, testing.io, .{
-        .argv = &.{ build_options.probe_path, "orphan" },
+        .argv = &.{ test_util.probePath(), "orphan" },
         .cwd = ".",
         .limits = .{ .timeout_ms = 20_000 },
     });
