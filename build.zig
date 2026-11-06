@@ -107,7 +107,13 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&full_run.step);
 
     const fast_step = b.step("test-fast", "Run the engine unit tests only: no git, no sandbox, no child process");
-    fast_step.dependOn(&testRun(b, test_all, probe, .{ .filters = &.{"src.engine."} }, &.{}).step);
+    const test_fast = b.addTest(.{
+        .name = "test-fast",
+        .root_module = testModule(b, common),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+        .filters = &.{"src.engine."},
+    });
+    fast_step.dependOn(&testRun(b, test_fast, probe, .{}, &.{}).step);
 
     const timing_step = b.step("test-timing", "Run every test one by one in one process and print the slowest tests and per-file totals");
     const timing = testRun(b, test_selected, probe, selection, &.{"--timing"});
