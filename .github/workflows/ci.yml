@@ -78,9 +78,11 @@ jobs:
         if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
-          path: .zig-cache
-          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
-          restore-keys: zig-cache-${{ matrix.optimize }}-
+          path: |
+            .zig-cache
+            ~\AppData\Local\zig
+          key: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-${{ github.sha }}
+          restore-keys: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-
       - name: Install TypeScript for the real language service tests
         shell: pwsh
         run: |
@@ -107,8 +109,10 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.part == 1
         uses: actions/cache/save@v4
         with:
-          path: .zig-cache
-          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
+          path: |
+            .zig-cache
+            ~\AppData\Local\zig
+          key: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-${{ github.sha }}
       - name: Verification page, README facts and forbidden words are up to date
         if: matrix.optimize == 'Debug' && matrix.part == 1
         shell: bash
