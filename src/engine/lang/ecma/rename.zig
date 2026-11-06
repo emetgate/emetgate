@@ -85,6 +85,11 @@ pub const grammar: Rename = .{
     .subscript = "subscript_expression",
     .subscript_index_field = "index",
     .literal_index_kinds = &.{ "string", "number" },
+    .key_sites = &.{
+        .{ .parent = "pair", .field = "key" },
+        .{ .parent = "property_signature", .field = "name" },
+        .{ .parent = "method_signature", .field = "name" },
+    },
     .constructed_index_kinds = &.{ "binary_expression", "template_string", "call_expression", "parenthesized_expression", "ternary_expression" },
     .eval_callees = &.{"eval"},
     .module_callees = &.{ "require", "import" },

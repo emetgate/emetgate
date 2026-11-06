@@ -78,6 +78,7 @@ pub const siteOf = sites.siteOf;
 pub const siteIn = sites.siteIn;
 pub const isProperty = sites.isProperty;
 pub const isPropertyIn = sites.isPropertyIn;
+pub const isKey = sites.isKey;
 pub const isExternal = sites.isExternal;
 pub const externalIn = sites.externalIn;
 

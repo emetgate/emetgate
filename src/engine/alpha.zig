@@ -66,7 +66,7 @@ pub fn hashDistinct(gpa: Allocator, snapshot: *const Snapshot, region: Span, dis
         if (listed or oneOf(kind, g.name_kinds)) {
             const member = oneOf(kind, g.property_kinds) or sites.isProperty(g, node) or sites.isExternal(g, node);
             const renamed = listed or (member and within(distinct, node.startByte(), node.endByte()));
-            const key: NameKey = .{ .namespace = if (renamed) 'r' else if (oneOf(kind, g.type_kinds)) 't' else if (oneOf(kind, g.property_kinds)) 'p' else 'v', .text = text };
+            const key: NameKey = .{ .namespace = if (renamed) 'r' else if (oneOf(kind, g.type_kinds)) 't' else if (member) 'p' else 'v', .text = text };
             const slot = try names.getOrPut(gpa, key);
             if (!slot.found_existing) slot.value_ptr.* = names.count() - 1;
             var index: [4]u8 = undefined;

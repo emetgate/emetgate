@@ -238,3 +238,103 @@ test "typescript files with typescript installed keep the language service resol
     try testing.expectEqual(rename_batch.Resolver.language_service, outcome.plan.resolver);
     try testing.expect(move_batch.Resolver.language_service != move_batch.Resolver.text);
 }
+
+test "js without typescript: an object key of a function's name stays" {
+    try expectRename("export function discount(v) {\n  return v - 1;\n}\n", "import { discount } from './cart.js';\nexport const o = { discount: discount(1) };\n", "discount", "off", "export function off(v) {\n  return v - 1;\n}\n", "import { off } from './cart.js';\nexport const o = { discount: off(1) };\n");
+}
+
+test "js without typescript: a key taken out of an object still blocks the rename of a function" {
+    try refuseRename("const thing = globalThis;\nconst { discount: d } = thing;\nexport const v = d(1);\n", "discount", "off", error.RenameUnresolved);
+}
+
+test "js without typescript: an object key still blocks the rename of a method" {
+    try refuseRename(imports ++ "export const o = { total: 1 };\n", "Cart.total", "grand", error.RenameUnresolved);
+}
+
+test "typescript files without typescript installed: a type member of a function's name stays" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.ts", .text = "export function discount(v: number) {\n  return v - 1;\n}\n" },
+        .{ .rel = "src/use.ts", .text = "import { discount } from './cart';\nexport type T = { discount: number };\nexport type U = { discount(): void };\nexport const v = discount(1);\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.ts", "discount", "off", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/use.ts", "import { off } from './cart';\nexport type T = { discount: number };\nexport type U = { discount(): void };\nexport const v = off(1);\n");
+}
+
+test "typescript files without typescript installed: a tsx user of a ts function follows the rename" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.ts", .text = "export function discount(v: number) {\n  return v - 1;\n}\n" },
+        .{ .rel = "src/named.tsx", .text = "import { discount } from './cart';\nexport const a = <b>{discount(1)}</b>;\n" },
+        .{ .rel = "src/whole.tsx", .text = "import * as c from './cart';\nexport const a = <b>{c.discount(1)}</b>;\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.ts", "discount", "off", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/named.tsx", "import { off } from './cart';\nexport const a = <b>{off(1)}</b>;\n");
+    try case.expectFile("src/whole.tsx", "import * as c from './cart';\nexport const a = <b>{c.off(1)}</b>;\n");
+}
+
+test "typescript files without typescript installed: a tsx receiver that cannot be proven blocks the rename of a ts function" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const view = "export function V(p: any) {\n  return <b>{p.discount(1)}</b>;\n}\n";
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.ts", .text = "export function discount(v: number) {\n  return v - 1;\n}\n" },
+        .{ .rel = "src/view.tsx", .text = view },
+    }, false);
+    defer case.deinit();
+    try testing.expectError(error.RenameUnresolved, case.rename("src/cart.ts", "discount", "off", true, null));
+    try case.expectFile("src/view.tsx", view);
+}
+
+test "js without typescript: a python file of the same name stays out of the graph" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const other = "def discount():\n    return 1\n";
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.js", .text = "export function discount(v) {\n  return v - 1;\n}\n" },
+        .{ .rel = "tool/other.py", .text = other },
+    }, false);
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.js", "discount", "off", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("tool/other.py", other);
+}
+
+test "js without typescript: a file the parser rejects that does not name the symbol stays out of the way" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const broken = "import { Cart } from './cart.js';\nfunction ( {\n";
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.js", .text = cart },
+        .{ .rel = "src/use.js", .text = imports ++ "console.log(new Cart().total());\nconsole.log(discount(1), makeCart());\n" },
+        .{ .rel = "src/broken.tsx", .text = broken },
+    }, false);
+    defer case.deinit();
+    const outcome = try case.rename("src/cart.js", "Cart.total", "sum", true, null);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try case.expectFile("src/broken.tsx", broken);
+}
+
+test "js without typescript: a file the parser rejects that names the symbol refuses and is reported" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const broken = "import { discount } from './cart.js';\n\nfunction ( {\n";
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/cart.js", .text = cart },
+        .{ .rel = "src/broken.tsx", .text = broken },
+    }, false);
+    defer case.deinit();
+    try testing.expectError(error.SourceHasErrors, case.rename("src/cart.js", "discount", "off", true, null));
+    try case.expectFile("src/cart.js", cart);
+    try case.expectFile("src/broken.tsx", broken);
+}

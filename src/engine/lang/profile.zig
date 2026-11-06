@@ -153,6 +153,7 @@ pub const Rename = struct {
     template_fragment: []const u8,
     quotes: []const u8,
     property_sites: []const FieldSite = &.{},
+    key_sites: []const FieldSite = &.{},
     inert_sites: []const BinderSite = &.{},
     class_scopes: []const []const u8 = &.{},
     scope_bodies: []const FieldSite = &.{},
