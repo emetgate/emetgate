@@ -18843,28 +18843,38 @@
     {
       "id": "SRC1-spelled-root-ignored",
       "file": "src/platform/py_modules.zig",
-      "from": "        if (!sameOptional(try resolve(cx, existing, importer, dotted), target)) continue;\n        if (prefer) |root| if (sameRoot(root, base)) return dotted;\n",
-      "to": "        if (!sameOptional(try resolve(cx, existing, importer, dotted), target)) continue;\n        if (false) if (prefer) |root| if (sameRoot(root, base)) return dotted;\n",
+      "from": "        if (prefer) |root| if (tsserver.sameFile(root, base)) return dotted;\n",
+      "to": "        if (false) if (prefer) |root| if (tsserver.sameFile(root, base)) return dotted;\n",
       "kills": [
         "python move_file: an import that spells the src folder keeps spelling it"
       ]
     },
     {
-      "id": "SRC2-namespace-root-chosen-first",
+      "id": "SRC2-bare-src-chosen-first",
       "file": "src/platform/py_modules.zig",
-      "from": "        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;\n    }\n    return regular orelse first;\n}\n\npub fn absoluteOfDir",
-      "to": "        if (regular == null and try regularTop(cx, existing, base, dotted)) regular = dotted;\n    }\n    return first orelse regular;\n}\n\npub fn absoluteOfDir",
+      "from": "    return first orelse bare_src;\n",
+      "to": "    return bare_src orelse first;\n",
       "kills": [
-        "python move_file: in a src layout the tests keep the package name and the moved file gains no src prefix"
+        "python move_file: in a src layout the tests keep the package name and the moved file gains no src prefix",
+        "python move_file: in a src layout of namespace packages the tests keep the package name"
       ]
     },
     {
       "id": "SRC3-spec-root-never-found",
       "file": "src/platform/py_modules.zig",
-      "from": "        if (try paths.resolveJoinedPython(cx.arena, existing, joined, '\\\\') != null) return base;\n",
-      "to": "        if (false and try paths.resolveJoinedPython(cx.arena, existing, joined, '\\\\') != null) return base;\n",
+      "from": "    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;\n    return found.base;\n",
+      "to": "    const found = (try findAbsolute(cx, existing, importer, spec)) orelse return null;\n    return if (false) found.base else null;\n",
       "kills": [
         "python move_file: an import that spells the src folder keeps spelling it"
+      ]
+    },
+    {
+      "id": "SRC4-shadowed-dir-chosen",
+      "file": "src/platform/py_modules.zig",
+      "from": "        } else if (found) |f| if (!tsserver.sameFile(f.base, base)) continue;\n",
+      "to": "        } else if (found) |f| if (false and !tsserver.sameFile(f.base, base)) continue;\n",
+      "kills": [
+        "python move: a package at the repo root that shadows the src one keeps the src prefix"
       ]
     }
   ]

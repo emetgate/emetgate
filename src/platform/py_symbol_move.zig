@@ -266,7 +266,7 @@ fn rewriteChains(m: *Move, abs: []const u8, snapshot: *Snapshot, entries: []cons
                 if (try py.relativeOf(m.cx, m.w.existing, abs, dir, true)) |text| parent = text;
             }
             if (parent.len == 0) {
-                const absolute = (try py.absoluteOf(m.cx, m.w.existing, abs, m.target_abs, null)) orelse return error.PyTargetNotImportable;
+                const absolute = (try py.absoluteOf(m.cx, m.w.existing, abs, m.target_abs, try py.rootOfSpec(m.cx, m.w.existing, abs, binding.entry.spec))) orelse return error.PyTargetNotImportable;
                 if (std.mem.lastIndexOfScalar(u8, absolute, '.')) |dot| parent = absolute[0..dot];
             }
             const wanted = try py.joinSpec(arena, parent, stem);
@@ -285,7 +285,7 @@ fn rewriteChains(m: *Move, abs: []const u8, snapshot: *Snapshot, entries: []cons
             try edits.append(arena, .{ .start = object.startByte(), .end = object.endByte(), .text = stem });
             continue;
         }
-        const absolute = (try py.absoluteOf(m.cx, m.w.existing, abs, m.target_abs, null)) orelse return error.PyTargetNotImportable;
+        const absolute = (try py.absoluteOf(m.cx, m.w.existing, abs, m.target_abs, try py.rootOfSpec(m.cx, m.w.existing, abs, binding.entry.spec))) orelse return error.PyTargetNotImportable;
         if (!try binderIsSoleImports(m.cx, snapshot, entries, py.firstSegment(absolute), null)) return error.PyNameCapture;
         if (!hasPlainImport(snapshot.source, entries, binding.entry, absolute)) {
             try addImportOnce(m, snapshot.source, edits, added, binding.entry, try std.fmt.allocPrint(arena, "import {s}", .{absolute}));

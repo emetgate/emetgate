@@ -176,6 +176,20 @@ test "python move_file: an import that spells the src folder keeps spelling it" 
     try expectFile(&case, "tests/test_errors.py", "from src.shop.exc import Bad\n\ndef test_bad():\n    assert Bad\n");
 }
 
+test "python move_file: in a src layout of namespace packages the tests keep the package name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&.{
+        .{ .rel = "src/shop/codec.py", .text = "def encode(x):\n    return x\n" },
+        .{ .rel = "tests/test_codec.py", .text = "from shop import codec\n\ndef test_encode():\n    assert codec.encode(1) == 1\n" },
+    }, false);
+    defer case.deinit();
+    const outcome = try moveFile(&case, "src/shop/codec.py", "src/shop/util/codec.py", false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectFile(&case, "tests/test_codec.py", "from shop.util import codec\n\ndef test_encode():\n    assert codec.encode(1) == 1\n");
+}
+
 test "python move_file: a script's sibling import is rewritten when its script root changes" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;
@@ -353,6 +367,40 @@ test "python move: importers of every form follow a function to its new module" 
     try expectHas(&case, "pkg/d.py", "pkg.shop.make()");
     try expectLacks(&case, "pkg/e.py", "c.make()");
     try expectHas(&case, "pkg/e.py", "c.keep()");
+}
+
+const src_namespace = [_]fixture.File{
+    .{ .rel = "src/shop/errors.py", .text = "class Bad(Exception):\n    pass\n" },
+    .{ .rel = "src/shop/codec.py", .text = "from . import errors\n\ndef encode(x):\n    if x is None:\n        raise errors.Bad()\n    return x\n\ndef keep():\n    return 2\n" },
+    .{ .rel = "src/tools/conv.py", .text = "def other():\n    return 3\n" },
+    .{ .rel = "tests/test_codec.py", .text = "from shop.codec import encode, keep\n\ndef test_encode():\n    assert encode(1) == keep() - 1\n" },
+};
+
+test "python move: in a src layout the moved code and its users import by package name" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init(&src_namespace, false);
+    defer case.deinit();
+    const outcome = try moveSymbol(&case, "src/shop/codec.py", "encode", "src/tools/conv.py", true, false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectHas(&case, "src/tools/conv.py", "from shop import errors\n");
+    try expectHas(&case, "tests/test_codec.py", "from tools.conv import encode");
+    try expectLacks(&case, "tests/test_codec.py", "src.");
+}
+
+test "python move: a package at the repo root that shadows the src one keeps the src prefix" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    var files: [src_namespace.len + 1]fixture.File = undefined;
+    @memcpy(files[0..src_namespace.len], &src_namespace);
+    files[src_namespace.len] = .{ .rel = "shop/__init__.py", .text = "" };
+    try case.init(&files, false);
+    defer case.deinit();
+    const outcome = try moveSymbol(&case, "src/shop/codec.py", "encode", "src/tools/conv.py", true, false);
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try expectHas(&case, "src/tools/conv.py", "from src.shop import errors\n");
 }
 
 test "python move: what the moved code uses comes along and the source imports what it still needs" {
