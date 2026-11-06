@@ -96,7 +96,13 @@ pub fn build(b: *std.Build) void {
     test_bin_step.dependOn(&b.addInstallArtifact(probe, .{}).step);
 
     const test_step = b.step("test", "Run every test from one binary in parallel shards, then the CLI end-to-end tests");
-    const full_run = testRun(b, test_all, probe, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
+    const test_selected = if (test_filters.len == 0) test_all else b.addTest(.{
+        .name = "test-selected",
+        .root_module = testModule(b, common),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+        .filters = test_filters,
+    });
+    const full_run = testRun(b, test_selected, probe, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
     if (test_manifest) |path| full_run.addArg(b.fmt("--manifest={s}", .{path}));
     test_step.dependOn(&full_run.step);
 
@@ -104,7 +110,7 @@ pub fn build(b: *std.Build) void {
     fast_step.dependOn(&testRun(b, test_all, probe, .{ .filters = &.{"src.engine."} }, &.{}).step);
 
     const timing_step = b.step("test-timing", "Run every test one by one in one process and print the slowest tests and per-file totals");
-    const timing = testRun(b, test_all, probe, selection, &.{"--timing"});
+    const timing = testRun(b, test_selected, probe, selection, &.{"--timing"});
     if (b.args) |args| timing.addArgs(args);
     timing_step.dependOn(&timing.step);
 
