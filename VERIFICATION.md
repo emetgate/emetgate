@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2843**
-- Mutations declared in `tests/mutations.json`: **1969**
-  - killed: **1919**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2846**
+- Mutations declared in `tests/mutations.json`: **1970**
+  - killed: **1920**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1303 mutation(s).
+1304 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2069,9 +2069,10 @@ python tools/verification_page.py --check
 | `T3-23-destructuring-write-ignored` | `src/engine/facts_extract.zig` | `if (!oneOf(target.kind(), self.f.write_patterns)) {` -> `if (true) {` | facts extract: a constant at module level keeps its type and a module variable ... | killed |
 | `T3-24-for-of-write-ignored` | `src/engine/lang/ecma/facts.zig` | `.{ .parent = "for_in_statement", .field = "left" },` -> `` | facts extract: the head of a for loop over an existing name is a write to it | killed |
 | `T3-25-return-change-not-reshaped` | `src/engine/lang/ecma/facts.zig` | `.return_statement = "return_statement",` -> `` | fact store: an edit that changes what a function returns reshapes the file | killed |
-| `SRC1-spelled-root-ignored` | `src/platform/py_modules.zig` | `if (!sameOptional(try resolve(cx, existing, importer, dotted), ...` -> `if (!sameOptional(try resolve(cx, existing, importer, dotted), ...` | python move_file: an import that spells the src folder keeps spelling it | killed |
-| `SRC2-namespace-root-chosen-first` | `src/platform/py_modules.zig` | `if (regular == null and try regularTop(cx, existing, base, dott...` -> `if (regular == null and try regularTop(cx, existing, base, dott...` | python move_file: in a src layout the tests keep the package name and the moved... | killed |
-| `SRC3-spec-root-never-found` | `src/platform/py_modules.zig` | `if (try paths.resolveJoinedPython(cx.arena, existing, joined, '...` -> `if (false and try paths.resolveJoinedPython(cx.arena, existing,...` | python move_file: an import that spells the src folder keeps spelling it | killed |
+| `SRC1-spelled-root-ignored` | `src/platform/py_modules.zig` | `if (prefer) \|root\| if (tsserver.sameFile(root, base)) return ...` -> `if (false) if (prefer) \|root\| if (tsserver.sameFile(root, bas...` | python move_file: an import that spells the src folder keeps spelling it | killed |
+| `SRC2-bare-src-chosen-first` | `src/platform/py_modules.zig` | `return first orelse bare_src;` -> `return bare_src orelse first;` | python move_file: in a src layout the tests keep the package name and the moved...; pytho... | killed |
+| `SRC3-spec-root-never-found` | `src/platform/py_modules.zig` | `const found = (try findAbsolute(cx, existing, importer, spec)) ...` -> `const found = (try findAbsolute(cx, existing, importer, spec)) ...` | python move_file: an import that spells the src folder keeps spelling it | killed |
+| `SRC4-shadowed-dir-chosen` | `src/platform/py_modules.zig` | `} else if (found) \|f\| if (!tsserver.sameFile(f.base, base)) c...` -> `} else if (found) \|f\| if (false and !tsserver.sameFile(f.base...` | python move: a package at the repo root that shadows the src one keeps the src ... | killed |
 
 ## What this system does not prove
 
