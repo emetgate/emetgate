@@ -4,6 +4,7 @@ const emetgate = @import("emetgate");
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
 const common = @import("commit_batch.zig");
+const crash_steps = @import("crash_steps.zig");
 
 const symbol = emetgate.symbol;
 const disk = emetgate.disk;
@@ -36,21 +37,10 @@ fn skipOffWindows() !void {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
 }
 
-const Cut = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *Cut = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
-
 fn swap(case: *Plain, stop: usize, request: *commit_plan.Request) !bool {
     const env = &case.env;
-    var at: Cut = .{ .target = stop };
-    const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
     const file = try env.abs("src/util.ts");
     const result = runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
         .file_abs = file,
@@ -133,53 +123,81 @@ test "commit protocol: the cut points the tests below use are the held lock, the
     }
 }
 
-test "commit protocol: a committing write_doc cut after any step recovers to no write or to the whole commit, with a clean tree" {
-    try skipOffWindows();
-    var stop: usize = 1;
-    var crashes: usize = 0;
-    while (true) : (stop += 1) {
-        var case: Plain = undefined;
-        try case.init(&files);
-        defer case.deinit();
-        errdefer std.debug.print("cut after step {d}\n", .{stop});
-        const env = &case.env;
-        const before = try env.head();
-        var at: Cut = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+const WriteDoc = struct {
+    case: Plain,
+    before: []const u8,
+    root: [1][]const u8,
+
+    pub const Params = void;
+
+    pub fn init(self: *WriteDoc, _: void) !void {
+        try self.case.init(&files);
+        errdefer self.case.deinit();
+        self.before = try self.case.env.head();
+        self.root = .{self.case.repo.root_abs};
+    }
+
+    pub fn deinit(self: *WriteDoc) void {
+        self.case.deinit();
+    }
+
+    pub fn label(_: *WriteDoc) []const u8 {
+        return "write_doc";
+    }
+
+    pub fn roots(self: *WriteDoc) []const []const u8 {
+        return &self.root;
+    }
+
+    pub fn write(self: *WriteDoc, step: *const disk.Step) !bool {
         var request: commit_plan.Request = .{ .message = message };
         defer request.deinit(testing.allocator);
         const outcome = doc_writer.tryWriteDoc(testing.allocator, testing.io, .{
-            .file_abs = try env.abs("notes.md"),
+            .file_abs = try self.case.env.abs("notes.md"),
             .selector = .{ .heading = "Setup" },
             .expected_hash = symbol.hashOf(setup_old),
             .new_text = setup_new,
             .test_command = common.green,
             .commit = &request,
-            .commit_step = &step,
+            .commit_step = step,
         }, null);
-        const crashed = if (outcome) |result| blk: {
+        if (outcome) |result| {
             result.deinit(testing.allocator);
-            break :blk false;
+            return false;
         } else |err| switch (err) {
-            error.Crashed => true,
+            error.Crashed => return true,
             else => |e| return e,
-        };
-        if (crashed) {
-            crashes += 1;
-            const report = try recover(&case);
-            try testing.expectEqual(@as(usize, 0), report.failed + report.commits.pending + report.commits.failed + report.commits.left);
         }
+    }
+
+    pub fn recovered(self: *WriteDoc) !bool {
+        const report = try recover(&self.case);
+        try testing.expectEqual(@as(usize, 0), report.failed + report.commits.pending + report.commits.failed + report.commits.left);
+        return self.settled();
+    }
+
+    pub fn settled(self: *WriteDoc) !bool {
+        const env = &self.case.env;
         const on_disk = std.mem.indexOf(u8, try env.read("notes.md"), "new") != null;
         const in_head = std.mem.indexOf(u8, try env.git(&.{ "show", "HEAD:notes.md" }), "new") != null;
-        const moved = !std.mem.eql(u8, before, try env.head());
+        const moved = !std.mem.eql(u8, self.before, try env.head());
         try testing.expectEqual(on_disk, in_head);
         try testing.expectEqual(moved, in_head);
         try testing.expectEqualStrings("", try status(env));
-        try testing.expect(!case.repo.exists(".git/index.lock"));
-        try testing.expect(!case.repo.exists(".emetgate/intents"));
-        if (!crashed) break;
+        try testing.expect(!self.case.repo.exists(".git/index.lock"));
+        try testing.expect(!self.case.repo.exists(".emetgate/intents"));
+        return moved;
     }
-    try testing.expect(crashes >= 6);
+};
+
+test "commit protocol: a committing write_doc cut after any step recovers to no write or to the whole commit, with a clean tree" {
+    try skipOffWindows();
+    try crash_steps.expectEveryStep(WriteDoc, {}, 6);
+}
+
+test "commit protocol: a committing write_doc cut for real at every step recovers to no write or to the whole commit" {
+    try skipOffWindows();
+    try crash_steps.expectEveryCut(WriteDoc, {}, 6);
 }
 
 test "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after" {

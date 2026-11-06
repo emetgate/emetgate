@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
 const shadow = @import("emetgate").shadow;
@@ -7,17 +8,6 @@ const batch_plan = @import("emetgate").batch_plan;
 
 const testing = std.testing;
 const gpa = testing.allocator;
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const code_old = "export const a = 1;\n";
 const code_new = "export const a = 2;\n";
@@ -131,8 +121,8 @@ test "mixed batch crash: a crash right after the journal is written recovers to 
     defer doc_planned.deinit(gpa);
 
     const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
-    var at: StopAt = .{ .target = 1 };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = 1 };
+    const step = at.step();
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
 
     const report = try repo.recover();
@@ -158,8 +148,8 @@ test "mixed batch crash: a crash after both files swap but before the commit rec
 
     const swap_steps = 1 + 3 * 2;
     const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
-    var at: StopAt = .{ .target = swap_steps };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = swap_steps };
+    const step = at.step();
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
 
     const report = try repo.recover();
@@ -193,8 +183,8 @@ test "mixed batch crash: a crash after any step recovers to all old or all new, 
         defer doc_planned.deinit(gpa);
 
         const batch = disk.Batch.init(gpa, testing.io, repo.journal_dir);
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+        var at: crash_steps.StopAt = .{ .target = stop };
+        const step = at.step();
         disk.commitBatch(&pendings, null, null, &batch, &step) catch |err| {
             errdefer std.debug.print("crash after step {d} of {d}\n", .{ stop, steps });
             try testing.expectEqual(error.Crashed, err);

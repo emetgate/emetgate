@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const diagnostics = @import("diagnostics.zig");
 const runner = @import("emetgate").runner;
 const disk = @import("emetgate").disk;
@@ -18,17 +19,6 @@ const swap_steps = 7;
 const record_step = 8;
 const finalize_steps = [_]usize{ 9, 10, 11 };
 
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
-
 fn crashThenRecover(stop: usize, expected_a: []const u8, expected_b: []const u8) !void {
     errdefer std.debug.print("crash after step {d}\n", .{stop});
     var repo = try TwoFile.init();
@@ -45,8 +35,8 @@ fn crashThenRecover(stop: usize, expected_a: []const u8, expected_b: []const u8)
         .{ .file_abs = file_b, .ref_text = "twice", .expected_hash = .{ .present = try hashOfRef(testing.allocator, testing.io, runtime, file_b, "twice") }, .new_body = "{ return x * 2; }" },
     };
 
-    var at: StopAt = .{ .target = stop };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
     const outcome = runner.tryMutateBatch(testing.allocator, testing.io, runtime, .{ .edits = &edits, .test_command = "cmd /c exit 0", .commit_step = &step });
     if (outcome) |result| {
         defer result.deinit(testing.allocator);

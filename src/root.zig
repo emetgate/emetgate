@@ -102,6 +102,7 @@ pub const search_v1 = @import("protocol/search_v1.zig");
 pub const search_text = @import("protocol/search_text.zig");
 pub const rg_search = @import("platform/rg_search.zig");
 pub const disk = @import("platform/disk.zig");
+pub const commit_record = @import("platform/commit_record.zig");
 pub const durability_log = @import("platform/durability_log.zig");
 pub const receipts = @import("platform/receipts.zig");
 pub const verify_run = @import("platform/verify_run.zig");

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const diagnostics = @import("diagnostics.zig");
 const runner = @import("emetgate").runner;
 const disk = @import("emetgate").disk;
@@ -15,17 +16,6 @@ const testing = std.testing;
 const new_a = "export function add(a: number, b: number): number { return a - b; }\n";
 const before_record = 4;
 const after_record = [_]usize{ 5, 6, 7, 8, 9 };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 fn tracked(root: []const u8, rel: []const u8) !bool {
     const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = root } });
@@ -104,8 +94,8 @@ fn crashThenRecover(stop: usize) !void {
     try f.init();
     defer f.deinit();
 
-    var at: StopAt = .{ .target = stop };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
     const edits = [_]runner.Edit{ try f.modifyA("{ return a - b; }"), f.deleteB() };
     if (f.run(&edits, &step)) |result| {
         defer result.deinit(testing.allocator);

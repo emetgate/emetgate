@@ -1,6 +1,7 @@
 const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const doc_writer = @import("emetgate").doc_writer;
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
@@ -173,17 +174,6 @@ test "doc_writer: a binary file is refused before any parse or sandbox run" {
     try testing.expect(!exists(&fx, "breach.txt"));
 }
 
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
-
 test "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
@@ -192,8 +182,8 @@ test "doc_writer: a crash right after the journal is written leaves a journal en
     const path = try fx.file("notes.txt");
     defer gpa.free(path);
 
-    var at: StopAt = .{ .target = 1 };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = 1 };
+    const step = at.step();
     const err = doc_writer.tryWriteDoc(gpa, testing.io, .{
         .file_abs = path,
         .selector = .{ .line_range = .{ .start = 2, .end = 2 } },
