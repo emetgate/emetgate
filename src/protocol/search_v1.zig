@@ -18,6 +18,7 @@ const markdown_heading = @import("../engine/lang/markdown/heading.zig");
 const postings = @import("../engine/postings.zig");
 const span_codec = @import("../engine/span_codec.zig");
 const text_query = @import("../engine/text_query.zig");
+const regex_mod = @import("../engine/regex.zig");
 const answer = @import("../engine/answer.zig");
 const trigram = @import("../engine/trigram.zig");
 const ts = @import("../engine/tree_sitter.zig");
@@ -40,6 +41,7 @@ const getBool = tool_result.getBool;
 const getStringArray = tool_result.getStringArray;
 const success = tool_result.success;
 const failure = tool_result.failure;
+const failureMessage = tool_result.failureMessage;
 
 pub const max_file_bytes = search_index.max_indexed_file_bytes;
 pub const max_matches = 200;
@@ -281,16 +283,16 @@ const Shared = struct {
 
 fn workerTask(ctx: *anyopaque) void {
     const shared: *Shared = @ptrCast(@alignCast(ctx));
-    const scratch = shared.gpa.alloc(u32, shared.query.scratchLen()) catch {
-        shared.fail(error.OutOfMemory);
+    const work = shared.query.scratch(shared.gpa) catch |err| {
+        shared.fail(err);
         return;
     };
-    defer shared.gpa.free(scratch);
+    defer work.deinit(shared.gpa);
     while (true) {
         const i = shared.next.fetchAdd(1, .monotonic);
         if (i >= shared.work.len) return;
         if (shared.failure_lock.load(.acquire)) return;
-        matchFile(shared, &shared.work[i], scratch) catch |err| {
+        matchFile(shared, &shared.work[i], &work) catch |err| {
             shared.fail(err);
             return;
         };
@@ -376,7 +378,7 @@ fn countMatchedLines(bytes: []const u8, literals: []const []const u8) u32 {
     return count;
 }
 
-fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
+fn matchFile(shared: *Shared, item: *FileWork, work: *const text_query.Scratch) !void {
     const gpa = shared.gpa;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -405,7 +407,7 @@ fn matchFile(shared: *Shared, item: *FileWork, scratch: []u32) !void {
             item.extra_matches += n;
             return;
         }
-        const found = if (shared.query.re == null and cursor.hit != null) cursor.hit.? else switch (shared.query.matchLineCounting(scratch, line.text, &item.most_steps)) {
+        const found = if (shared.query.re == null and cursor.hit != null) cursor.hit.? else switch (try shared.query.matchLineCounting(work, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
                 item.over_budget_lines += 1;
@@ -517,8 +519,8 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
         md_tree = parser.parseIn(markdown_heading.grammar(), bytes) catch null;
     }
 
-    const scratch = try gpa.alloc(u32, query.scratchLen());
-    defer gpa.free(scratch);
+    const work = try query.scratch(gpa);
+    defer work.deinit(gpa);
     var cursor: LineCursor = .{ .bytes = bytes, .query = query };
     while (cursor.next()) |line| {
         const counting = item.hits.items.len > hit_limit;
@@ -526,7 +528,7 @@ fn liveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, tree_cache: ?*tree_ca
             item.capped = true;
             break;
         }
-        const found = switch (query.matchLineCounting(scratch, line.text, &item.most_steps)) {
+        const found = switch (try query.matchLineCounting(&work, line.text, &item.most_steps)) {
             .none => continue,
             .over_budget => {
                 item.over_budget_lines += 1;
@@ -643,6 +645,12 @@ pub fn callSearchAs(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value,
     renderSearch(gpa, io, runtime, root, tree_cache, session, request, &outcome, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         if (outcome.refusal.len != 0) event.reason = outcome.refusal;
+        if (outcome.regex) |*d| {
+            var line: [512]u8 = undefined;
+            const message = regexMessage(&line, d);
+            if (format == .text) return textFailure(gpa, err, message, event);
+            return failureMessage(gpa, &buffer, err, message, event);
+        }
         if (format == .text) return textFailure(gpa, err, outcome.detail.written(), event);
         return failure(gpa, &buffer, err, event);
     };
@@ -719,7 +727,13 @@ fn parseOffset(args: ?Value) !usize {
     return @intCast(field.integer);
 }
 
+fn regexMessage(buf: []u8, d: *const regex_mod.Diagnostic) []const u8 {
+    if (d.at.len == 0) return std.fmt.bufPrint(buf, "{s} at byte {d}", .{ d.what(), d.offset }) catch d.what();
+    return std.fmt.bufPrint(buf, "{s} at byte {d}, after \"{s}\"", .{ d.what(), d.offset, d.at }) catch d.what();
+}
+
 const Outcome = struct {
+    regex: ?regex_mod.Diagnostic = null,
     index_load: ?search_index.LoadFailure = null,
     partial: bool = false,
     refusal: []const u8 = "",
@@ -901,14 +915,21 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
         .width = request.width(),
     };
 
-    var compiled: ?Query = if (request.is_regex) Query.regex(gpa, pattern, null) catch |err| switch (err) {
+    var diag: regex_mod.Diagnostic = .{};
+    var compiled: ?Query = if (request.is_regex) Query.regex(gpa, pattern, &diag) catch |err| switch (err) {
         error.OutOfMemory => return err,
         else => null,
     } else try Query.literal(gpa, pattern);
     defer if (compiled) |q| q.deinit(gpa);
     const delegated: Query = .{ .mode = .regex, .pattern = pattern, .literals = &.{}, .grams = &.{} };
     const query: *const Query = if (compiled) |*q| q else &delegated;
-    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else try delegateQuery(&corpus, pattern, &outcome.detail.writer);
+    var result = if (compiled != null) try runQuery(&corpus, query, &timer) else delegateQuery(&corpus, pattern, &outcome.detail.writer) catch |err| switch (err) {
+        error.InvalidRegex, error.RegexNeedsRipgrep => {
+            outcome.regex = diag;
+            return error.InvalidRegex;
+        },
+        else => |e| return e,
+    };
     defer result.deinit(gpa);
 
     var alternatives: ?Query = null;

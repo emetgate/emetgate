@@ -50,16 +50,25 @@ pub fn dependsOnLanguage(err: CompileError) bool {
 }
 
 pub const Diagnostic = struct {
-    what: []const u8 = "",
+    what_buffer: [256]u8 = undefined,
+    what_len: usize = 0,
     buffer: [64]u8 = undefined,
     len: usize = 0,
 
-    fn set(self: *Diagnostic, what: []const u8, at_text: []const u8) void {
-        self.what = what;
-        var len = @min(at_text.len, self.buffer.len);
-        while (len > 0 and len < at_text.len and at_text[len] & 0xC0 == 0x80) len -= 1;
-        self.len = len;
-        @memcpy(self.buffer[0..self.len], at_text[0..self.len]);
+    fn set(self: *Diagnostic, what_text: []const u8, at_text: []const u8) void {
+        self.what_len = copyPrefix(&self.what_buffer, what_text);
+        self.len = copyPrefix(&self.buffer, at_text);
+    }
+
+    fn copyPrefix(out: []u8, text: []const u8) usize {
+        var len = @min(text.len, out.len);
+        while (len > 0 and len < text.len and text[len] & 0xC0 == 0x80) len -= 1;
+        @memcpy(out[0..len], text[0..len]);
+        return len;
+    }
+
+    pub fn what(self: *const Diagnostic) []const u8 {
+        return self.what_buffer[0..self.what_len];
     }
 
     pub fn at(self: *const Diagnostic) []const u8 {
@@ -480,8 +489,8 @@ fn predicateOf(arena: Allocator, raw: *const c.TSQuery, steps: []const c.TSQuery
         },
         .match, .not_match => {
             var regex_diag: regex.Diagnostic = .{};
-            const re = regex.Regex.compile(arena, stringValue(raw, args[1].value_id), &regex_diag) catch |err| {
-                if (diag) |d| d.set(regex_diag.what, regex_diag.at);
+            const re = regex.Regex.compileCounted(arena, stringValue(raw, args[1].value_id), &regex_diag) catch |err| {
+                if (diag) |d| d.set(regex_diag.what(), regex_diag.at);
                 return err;
             };
             return .{ .match = .{ .capture = capture, .re = re, .negate = kind == .not_match } };
@@ -652,7 +661,7 @@ fn expectCompileError(text: []const u8, err: CompileError, at: []const u8) !void
     try alloc_bridge.install(testing.allocator);
     defer alloc_bridge.uninstall();
     var diag: Diagnostic = .{};
-    errdefer std.debug.print("query {s}: {s} at \"{s}\"\n", .{ text, diag.what, diag.at() });
+    errdefer std.debug.print("query {s}: {s} at \"{s}\"\n", .{ text, diag.what(), diag.at() });
     try testing.expectError(err, compile(testing.allocator, typescript.grammar(), text, &diag));
     try testing.expectEqualStrings(at, diag.at());
 }
@@ -708,7 +717,7 @@ test "q: a diagnostic cut to its buffer ends on a whole character" {
     try testing.expectEqualStrings("a" ** 63, diag.at());
     diag.set("x", "a" ** 62 ++ "ş");
     try testing.expectEqualStrings("a" ** 62 ++ "ş", diag.at());
-    try expectCompileError("((identifier) @violation (#match? @violation \"[ş-a]\"))", error.RegexSyntax, "ş-a");
+    try expectCompileError("((identifier) @violation (#match? @violation \"[ş-a]\"))", error.RegexSyntax, "[ş-a]");
 }
 
 test "q: every pattern must capture @violation" {
@@ -735,10 +744,16 @@ test "q: a predicate with the wrong arguments is refused by name" {
     try expectCompileError("((identifier) @violation (#not-match? @violation))", error.QueryPredicateArguments, "not-match?");
 }
 
-test "q: a regex outside the supported subset is refused by its construct" {
-    try expectCompileError("((identifier) @violation (#match? @violation \"^a{2}$\"))", error.RegexUnsupported, "{");
-    try expectCompileError("((identifier) @violation (#not-match? @violation \"(?=x)\"))", error.RegexUnsupported, "(?=x");
-    try expectCompileError("((identifier) @violation (#match? @violation \"(a\"))", error.RegexSyntax, "(");
+test "q: a regex PCRE2 refuses is refused with the text up to where it stopped" {
+    try expectCompileError("((identifier) @violation (#match? @violation \"a\\\\U\"))", error.RegexUnsupported, "a\\U");
+    try expectCompileError("((identifier) @violation (#match? @violation \"(a\"))", error.RegexSyntax, "(a");
+}
+
+test "q: #match? takes the full PCRE2 dialect" {
+    try expectFound("aa;\nab;\n", "((identifier) @violation (#match? @violation \"^(\\\\w)\\\\1$\"))", &.{"aa"});
+    try expectFound("aa;\nab;\n", "((identifier) @violation (#match? @violation \"^a{2}$\"))", &.{"aa"});
+    try expectFound("aa;\nab;\n", "((identifier) @violation (#not-match? @violation \"a(?=a)\"))", &.{"ab"});
+    try expectFound("Ab;\nb;\n", "((identifier) @violation (#match? @violation \"(?i)\\\\ba\"))", &.{"Ab"});
 }
 
 test "q: the query text is capped at 4 KB" {
@@ -866,8 +881,8 @@ test "q: a query that outruns its operation budget fails instead of passing" {
 }
 
 test "q: regex work counts against the same budget" {
-    const source = "const s = \"" ++ "a" ** 4000 ++ "\";\n";
-    const text = "((string_fragment) @violation (#match? @violation \"(a|aa)+b\"))";
+    const source = "const s = \"" ++ "a" ** 20 ++ "!\";\n";
+    const text = "((string_fragment) @violation (#match? @violation \"^(a|aa)+$\"))";
     try testing.expectError(error.QueryBudgetExceeded, findIn(typescript.grammar(), source, whole(source), text, .{ .operations = 5000 }));
     const found = try findIn(typescript.grammar(), source, whole(source), text, .{});
     defer found.deinit();
