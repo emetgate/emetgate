@@ -354,9 +354,11 @@ test "frozen hold: outside lockdown a command that rewrites the gate config keep
 test "frozen hold: under lockdown a new git hook, a hooks path and an alias are undone, and branch, user, submodule and sparse keys a command sets stay" {
     var env = try Env.init();
     defer env.deinit();
+    try env.repo.tmp.dir.createDirPath(testing.io, "repo/.git/hooks");
     var hooked = try env.run("echo exit 0 > .git/hooks/pre-commit && git config core.hooksPath elsewhere && git config alias.zz status");
     defer hooked.deinit();
     errdefer std.debug.print("{s}\n", .{hooked.text});
+    try testing.expectEqual(@as(i64, 0), (try hooked.field("exit_code")).?.integer);
     try testing.expect(env.missing(".git/hooks/pre-commit"));
     try testing.expect(!env.missing(".git/hooks"));
     try testing.expectError(error.GitSetupFailed, env.git(&.{ "config", "--get", "core.hooksPath" }));
