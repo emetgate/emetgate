@@ -98,6 +98,16 @@ pub fn isPropertyIn(g: *const Rename, up: anytype, node: ts.Node) bool {
     return false;
 }
 
+pub fn isKey(g: *const Rename, node: ts.Node) bool {
+    const parent = node.parent() orelse return false;
+    for (g.key_sites) |site| {
+        if (!std.mem.eql(u8, site.parent, parent.kind())) continue;
+        const held = parent.childByField(site.field) orelse continue;
+        if (held.eql(node)) return true;
+    }
+    return false;
+}
+
 pub fn isExternal(g: *const Rename, node: ts.Node) bool {
     return externalIn(g, TreeUp{}, node);
 }

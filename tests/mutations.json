@@ -5493,8 +5493,8 @@
     {
       "id": "RN9-untouched-file-not-checked",
       "file": "src/platform/rename_batch.zig",
-      "from": "    if (renamed == null and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;\n",
-      "to": "    _ = gpa;\n",
+      "from": "    if (renamed != null) return;\n    const left = (try rename.freeOccurrenceAt(gpa, snapshot, old, true)) orelse return;\n",
+      "to": "    if (renamed != null or old.len != 0) return;\n    const left = (try rename.freeOccurrenceAt(gpa, snapshot, old, true)) orelse return;\n",
       "kills": [
         "red team rename: a service that skips a whole file that still calls the old name is refused"
       ]
@@ -12541,8 +12541,8 @@
     {
       "id": "CSR13-linked-reference-not-proven",
       "file": "src/platform/rename_graph.zig",
-      "from": "                if (linked.eql(self.target)) try self.prove(file, ref.start);",
-      "to": "                _ = linked;",
+      "from": "                if (!linked.eql(self.target)) continue;\n                try self.prove(file, ref.start);\n",
+      "to": "                if (!linked.eql(self.target) or self.old.len != 0) continue;\n                try self.prove(file, ref.start);\n",
       "kills": [
         "rename facts: a Python function imported by another module is renamed at its import and its call"
       ]

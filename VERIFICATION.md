@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2856**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2872**
 - Mutations declared in `tests/mutations.json`: **1985**
   - killed: **1935**
   - equivalent: **9**
@@ -885,7 +885,7 @@ python tools/verification_page.py --check
 | `RN6-text-path-ignores-second-binder` | `src/platform/rename_batch.zig` | `if (try rename.binderCount(gpa, base, old) != 1) return error.R...` -> `` | rename: a language service that dies leaves a local name with a second binder u... | killed |
 | `RN7-location-not-an-identifier-skipped` | `src/engine/rename.zig` | `if (!listedAt(base, span) or !std.mem.eql(u8, base.source[span....` -> `` | red team rename: a location inside a comment or a string is refused and both st...; renam... | killed |
 | `RN8-free-occurrence-check-skipped` | `src/engine/rename.zig` | `if (try freeOccurrence(gpa, next, old, false)) return error.Inc...` -> `_ = .{ gpa, next, old };` | defense in depth: the independent resolution before the rename (SC3) already refuses a pr... | defense in depth |
-| `RN9-untouched-file-not-checked` | `src/platform/rename_batch.zig` | `if (renamed == null and try rename.freeOccurrence(gpa, snapshot...` -> `_ = gpa;` | red team rename: a service that skips a whole file that still calls the old nam... | killed |
+| `RN9-untouched-file-not-checked` | `src/platform/rename_batch.zig` | `if (renamed != null) return;     const left = (try rename.freeO...` -> `if (renamed != null or old.len != 0) return;     const left = (...` | red team rename: a service that skips a whole file that still calls the old nam... | killed |
 | `RN10-location-not-jailed` | `src/platform/rename_batch.zig` | `const abs = try jailLocation(gpa, io, root, location.file);` -> `_ = .{ io, root };         const abs = try gpa.dupe(u8, locatio...` | red team rename: a location outside the repo or in an untracked file is refused | killed |
 | `RN11-dynamic-access-ignored` | `src/platform/rename_batch.zig` | `if (sites.count != 0 and !sites.allow) return error.DynamicRefe...` -> `` | red team rename: a string key, eval or a computed require in a touched file is ... | killed |
 | `RN12-taken-name-accepted` | `src/engine/rename.zig` | `if (taken.len != 0) return error.NameTaken;` -> `` | red team rename: a new name that another touched file already uses is refused; rename: a ... | killed |
@@ -1470,7 +1470,7 @@ python tools/verification_page.py --check
 | `CSR10-overload-not-refused` | `src/platform/rename_graph.zig` | `if (self.parent != null and file == self.target.file and d.pare...` -> `` | an overloaded name never reaches the facts resolver: the symbol table refuses the ref as ... | survives (unclassified) |
 | `CSR11-redeclaring-subclass-not-refused` | `src/platform/rename_graph.zig` | `if (d.parent != 0 and graph.hasBase(.{ .file = file, .index = d...` -> `` | rename facts: a C# method that a derived class declares again is refused | killed |
 | `CSR12-constructor-name-not-proven` | `src/platform/rename_graph.zig` | `and std.mem.eql(u8, d.name, self.old)) try self.prove(self.targ...` -> `and std.mem.eql(u8, d.name, self.old)) {}` | a constructor name is a declaration, so the account step accepts it unproven, and the dec... | survives (unclassified) |
-| `CSR13-linked-reference-not-proven` | `src/platform/rename_graph.zig` | `if (linked.eql(self.target)) try self.prove(file, ref.start);` -> `_ = linked;` | rename facts: a Python function imported by another module is renamed at its im... | killed |
+| `CSR13-linked-reference-not-proven` | `src/platform/rename_graph.zig` | `if (!linked.eql(self.target)) continue;                 try sel...` -> `if (!linked.eql(self.target) or self.old.len != 0) continue;   ...` | rename facts: a Python function imported by another module is renamed at its im... | killed |
 | `CSR14-scope-bound-use-not-proven` | `src/platform/rename_graph.zig` | `if (self.isProven(file, resolution.binders[b].span.start)) try ...` -> `if (self.isProven(file, resolution.binders[b].span.start)) {}` | the facts store records every scope-bound use of the name as a ref linked to the def, cal... | survives (unclassified) |
 | `CSR15-global-type-use-not-proven` | `src/platform/rename_graph.zig` | `if (found.eql(self.target)) try self.prove(file, use.span.start...` -> `_ = found;` | rename facts: a C# class is renamed at its declaration, constructor, new, param... | killed |
 | `CSR16-static-call-on-global-type-not-proven` | `src/platform/rename_graph.zig` | `if (found.eql(parent_at)) {                     try self.prove(...` -> `if (found.eql(parent_at)) {} else` | the fact store now links this call through its own C# name lookup before proveGlobal look... | survives (unclassified) |

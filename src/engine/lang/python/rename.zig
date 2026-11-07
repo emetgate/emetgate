@@ -102,6 +102,7 @@ pub const grammar: Rename = .{
     .subscript = "subscript",
     .subscript_index_field = "subscript",
     .literal_index_kinds = &.{ "string", "integer", "float" },
+    .key_sites = &.{.{ .parent = "keyword_argument", .field = "name" }},
     .constructed_index_kinds = &.{ "binary_operator", "call", "parenthesized_expression", "conditional_expression" },
     .eval_callees = &.{ "eval", "exec" },
     .module_callees = &.{ "__import__", "importlib.import_module", "import_module" },
