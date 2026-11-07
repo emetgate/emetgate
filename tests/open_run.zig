@@ -218,10 +218,12 @@ test "open run: tools/list gives the open run tool under open run and the allowl
     const open = server.servedDef(listed, true);
     try testing.expectEqualStrings("emetgate_run", open.name);
     try testing.expect(!std.mem.eql(u8, listed.description, open.description));
-    try testing.expectEqual(@as(usize, 3), open.props.len);
+    try testing.expectEqual(@as(usize, 4), open.props.len);
     try testing.expect(!open.props[0].optional);
     try testing.expectEqualStrings("boolean", open.props[1].ty);
-    try testing.expectEqualStrings("integer", open.props[2].ty);
+    try testing.expectEqualStrings("as_user", open.props[2].name);
+    try testing.expectEqualStrings("boolean", open.props[2].ty);
+    try testing.expectEqualStrings("integer", open.props[3].ty);
     try testing.expect(!contains(open.description, "safe"));
     const other = server.servedDef(server.tool_defs[0], true);
     try testing.expectEqualStrings(server.tool_defs[0].description, other.description);
