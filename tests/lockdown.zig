@@ -36,6 +36,7 @@ test "a passthrough arg that would override the lock is refused in both spelling
         "--setting-sources",
         "--plugin-dir",
         "--agents",
+        "--agent",
         "--dangerously-skip-permissions",
         "--allow-dangerously-skip-permissions",
     };
@@ -626,4 +627,58 @@ test "a claude on PATH only inside the working folder stays skipped, and the err
     const hint = doctor.hint(error.ClaudeOnlyUnderWorkingDir).?;
     try testing.expect(std.mem.indexOf(u8, hint, "inside the current folder") != null);
     try testing.expect(doctor.hint(error.ClaudeNotFound) != null);
+}
+
+test "a project settings agent field is refused in every spelling claude reads" {
+    const gpa = testing.allocator;
+    const refused = [_][]const u8{
+        "{\"agent\":\"helper\"}",
+        "\xEF\xBB\xBF{\"agent\":\"helper\"}",
+        "{\"agent\":\"\"}",
+        "{\"agent\":{\"name\":\"helper\"}}",
+        "{\"agent\":null,\"agent\":\"helper\"}",
+        "{\"hooks\":{},\n  \"agent\" : \"helper\"}",
+    };
+    for (refused) |json| {
+        const field = (try lockdown.refusedSettingsField(gpa, json)) orelse return error.TestExpectedRefusal;
+        try testing.expectEqualStrings("agent", field);
+    }
+    const kept = [_][]const u8{
+        "{}",
+        "{\"agent\":null}",
+        "{\"permissions\":{\"agent\":\"x\"},\"env\":{\"agent\":\"x\"}}",
+        "[\"agent\"]",
+        "{\"agent\":",
+        "",
+    };
+    for (kept) |json| try testing.expectEqual(@as(?[]const u8, null), try lockdown.refusedSettingsField(gpa, json));
+}
+
+test "lockdown refuses to start when .claude settings set agent, before claude is looked up" {
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, ".claude");
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".claude/settings.json", .data = "{\"agent\":\"helper\"}" });
+    var parent: std.process.Environ.Map = .init(gpa);
+    defer parent.deinit();
+    try parent.put("LOCALAPPDATA", "C:\\nowhere");
+    try testing.expectError(error.LockdownProjectSetting, lockdown.checkProjectSettings(gpa, testing.io, tmp.dir));
+    try testing.expectError(error.LockdownProjectSetting, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, "claude-that-does-not-exist-x", "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".claude/settings.json", .data = "{\"hooks\":{}}" });
+    try lockdown.checkProjectSettings(gpa, testing.io, tmp.dir);
+    try testing.expectError(error.ClaudeNotFound, lockdown.launchIn(gpa, testing.io, tmp.dir, &parent, "claude-that-does-not-exist-x", "C:/tools/emetgate.exe", &.{ "-p", "hi" }));
+    try tmp.dir.deleteTree(testing.io, ".claude");
+    try lockdown.checkProjectSettings(gpa, testing.io, tmp.dir);
+    const hint = doctor.hint(error.LockdownProjectSetting) orelse return error.TestExpectedHint;
+    try testing.expect(std.mem.indexOf(u8, hint, ".claude\\settings.json") != null);
+    try testing.expect(std.mem.indexOf(u8, hint, "agent") != null);
+    try testing.expect(doctor.hint(error.LockdownProjectSettingsTooLarge) != null);
+}
+
+test "a --agent flag that would run claude as a project subagent is refused" {
+    try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{ "--agent", "helper", "-p", "hi" }));
+    try testing.expectError(error.LockdownFlagOverride, lockdown.refuseReserved(&.{"--agent=helper"}));
+    try lockdown.refuseReserved(&.{ "-p", "--agent is a word in this prompt" });
+    try lockdown.refuseReserved(&.{"--agentic"});
 }

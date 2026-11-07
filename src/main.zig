@@ -117,6 +117,8 @@ const usage =
     \\every other check passed; it refuses instead in a drive root, a home, system or
     \\profile folder or one that holds them, or a folder that holds other repositories.
     \\User settings and their hooks are not loaded (--setting-sources project).
+    \\Its own settings keep every hook on over a project disableAllHooks, and it
+    \\refuses to start when .claude\settings.json sets agent or a flag passes --agent.
     \\The lock is per launch: a claude started without emetgate lockdown is unlocked.
     \\
     \\For mutate/try with --hash <hex> (an existing symbol), --body/--body-file is

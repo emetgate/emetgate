@@ -17,6 +17,7 @@ pub const run_tool = "emetgate_run";
 pub const pretool_matcher = "^mcp__.+__" ++ run_tool ++ "$";
 pub const local_app_data_variable = "LOCALAPPDATA";
 pub const settings_name = "settings.json";
+pub const disable_hooks_field = "disableAllHooks";
 pub const command_dir = ".claude\\commands";
 pub const command_file_name = command_name ++ ".md";
 pub const command_file =
@@ -51,6 +52,8 @@ pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     defer out.deinit();
     var js: std.json.Stringify = .{ .writer = &out.writer };
     try js.beginObject();
+    try js.objectField(disable_hooks_field);
+    try js.write(false);
     try js.objectField("hooks");
     try js.beginObject();
     try js.objectField(hook_event);
