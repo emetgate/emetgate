@@ -10336,8 +10336,8 @@
     {
       "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
       "file": "src/platform/git_commit.zig",
-      "from": "    const parent = ids.next() orelse if (isUnborn(base)) base else return null;\n",
-      "to": "    const parent = ids.next() orelse base;\n",
+      "from": "    const parent = if (parent_ids.len == 1) parent_ids[0] else if (isUnborn(base)) base else return null;\n",
+      "to": "    const parent = if (parent_ids.len == 1) parent_ids[0] else base;\n",
       "kills": [
         "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
       ],
@@ -18901,7 +18901,7 @@
       "id": "GC42-set-attribute-taken-as-plain",
       "file": "src/platform/git_commit.zig",
       "from": "            if (!std.mem.eql(u8, value, \"unspecified\")) flag.* = false;\n",
-      "to": "",
+      "to": "            _ = value;\n",
       "kills": [
         "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
       ],
@@ -18941,7 +18941,7 @@
       "id": "GC46-unknown-fold-trusted",
       "file": "src/platform/git_commit.zig",
       "from": "            unsure = true;\n",
-      "to": "",
+      "to": "            unsure = false;\n",
       "kills": [
         "git commit: the index read in process lists exactly what git ls-files lists"
       ],

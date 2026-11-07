@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2846**
-- Mutations declared in `tests/mutations.json`: **1970**
-  - killed: **1920**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2856**
+- Mutations declared in `tests/mutations.json`: **1985**
+  - killed: **1935**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -765,7 +765,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1304 mutation(s).
+1319 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -984,7 +984,7 @@ python tools/verification_page.py --check
 | `SW7-file-list-change-forces-a-full-refresh` | `src/platform/search_session.zig` | `if (reason.len != 0) {             self.last.mode = .full;` -> `if (reason.len != 0 or list_changed) {             self.last.mo...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `SW8-git-index-stamp-never-trusted` | `src/platform/search_session.zig` | `return c.mtime_ns == saved.mtime_ns and c.size == saved.size an...` -> `return false and c.mtime_ns == saved.mtime_ns and c.size == sav...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
-| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signa...` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
+| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.ascii.isLower(signature[0])) return null;` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
 | `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
 | `ANS1-partial-answer-reported-complete` | `src/engine/answer.zig` | `if (missing.len == 0) return .{ .complete = .{ .value = value, ...` -> `if (missing.len != std.math.maxInt(usize)) return .{ .complete ...` | a missing file makes the answer partial and never complete | killed |
 | `ANS2-unaccounted-file-accepted` | `src/engine/answer.zig` | `if (accounted != in_scope) return "evaluated and missing files ...` -> `if (accounted != in_scope and false) return "evaluated and miss...` | an answer whose evaluated and missing files do not add up to the scope is refus... | killed |
@@ -1285,15 +1285,15 @@ python tools/verification_page.py --check
 | `PV5-head-on-a-tag-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, branch, branch_prefix)) return erro...` -> `if (!std.mem.startsWith(u8, branch, branch_prefix) and std.mem....` | redteam commit: a HEAD that points at a tag is refused and the tag does not move | killed |
 | `PV6-locked-index-found-after-the-gate` | `src/platform/git_commit.zig` | `if (try exists(io, try std.fmt.allocPrint(arena, "{s}.lock", .{...` -> `if (false and try exists(io, try std.fmt.allocPrint(arena, "{s}...` | commit protocol: an index lock is refused before the gate runs, so a failing te... | killed |
 | `PV7-commit-encoding-taken-from-config` | `src/platform/git_commit.zig` | `"-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p"` -> `"commit-tree", tree, "-p"` | redteam commit: a commit encoding setting does not mislabel the UTF-8 message | killed |
-| `PV8-any-index-lock-treated-as-ours` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, &found, &digest)) .ours else .foreig...` -> `return if (std.mem.eql(u8, &found, &digest) or true) .ours else...` | commit protocol: recover never removes or replaces an index lock it does not ow...; git c... | killed |
-| `PV9-index-lock-taken-over` | `src/platform/git_commit.zig` | `disk.moveExclusive(gpa, staged_abs, lock) catch \|err\| switch ...` -> `disk.moveOver(gpa, staged_abs, lock) catch \|err\| switch (err)...` | git commit: an index lock held by another process is never taken over, and it s... | killed |
+| `PV8-any-index-lock-treated-as-ours` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, &found, &expected)) .ours else .fore...` -> `return if (std.mem.eql(u8, &found, &expected) or true) .ours el...` | commit protocol: recover never removes or replaces an index lock it does not ow...; git c... | killed |
+| `PV9-index-lock-taken-over` | `src/platform/git_commit.zig` | `disk.moveExclusive(gpa, staged_abs, lock_path) catch \|err\| sw...` -> `disk.moveOver(gpa, staged_abs, lock_path) catch \|err\| switch ...` | git commit: an index lock held by another process is never taken over, and it s... | killed |
 | `PV10-changed-index-replaced` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, &now, &staged.base)) {         guard.delet...` -> `if (false and !std.mem.eql(u8, &now, &staged.base)) {         g...` | commit window: an entry staged on another file between the index copy and the l... | killed |
 | `PV11-intent-record-not-written` | `src/platform/commit_intent.zig` | `try disk.moveOver(gpa, staged, final);     commit_record.flushD...` -> `if (false) try disk.moveOver(gpa, staged, final);     commit_re...` | redteam commit: a process that dies between the write and the branch move is ro...; commi... | killed |
 | `PV12-recover-writes-what-head-does-not-hold` | `src/platform/commit_intent.zig` | `if (!wanted or !has) continue;         const outcome = forwardO...` -> `if ((false and !wanted) or !has) continue;         const outcom...` | commit window: after a soft reset to the commit before, recover writes no file ... | killed |
 | `PV13-recover-overwrites-a-hand-edit` | `src/platform/commit_intent.zig` | `if (base != null and !same(now, base)) return .left;` -> `if (false and base != null and !same(now, base)) return .left;` | commit window: recover leaves a file whose line ends the user changed after the... | killed |
 | `PV14-targets-not-measured-again-before-the-branch-moves` | `src/platform/commit_plan.zig` | `if (!sameHash(was.raw, p.base_hash)) return error.TargetHasUnco...` -> `if (false and !sameHash(was.raw, p.base_hash)) return error.Tar...` | commit window: a file renamed over the target after its measurement is kept, an... | killed |
 | `PV15-unpublished-index-not-reported` | `src/platform/commit_plan.zig` | `plan.unfinished = commit_intent.index_not_published;` -> `` | commit protocol: a publish that is refused a few times is retried, and one that... | killed |
-| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(gpa, io, root, item.path, staged, ...` -> `if (false and !try git_commit.storesAs(gpa, io, root, item.path...` | commit protocol: staged bytes that were tampered with are never written, whethe...; recov... | killed |
+| `PV17-staged-bytes-not-checked-against-the-blob` | `src/platform/commit_intent.zig` | `if (!try git_commit.storesAs(git, plain, item.path, bytes, stag...` -> `if (false and !try git_commit.storesAs(git, plain, item.path, b...` | commit protocol: staged bytes that were tampered with are never written, whethe...; recov... | killed |
 | `PV18-pending-commit-not-finished-before-the-next` | `src/platform/commit_plan.zig` | `const found = try recoverFound(gpa, io, root);` -> `const found: commit_intent.Report = .{};` | commit protocol: recover never removes or replaces an index lock it does not ow... | killed |
 | `PV22-receipt-digests-taken-from-the-working-tree` | `src/protocol/receipt_note.zig` | `if (made.oid) \|oid\| bound.commit = .{ .base = made.base.?, .o...` -> `if (made.oid) \|oid\| bound.commit = if (oid.len == 0) .{ .base...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
 | `PV23-receipt-symbol-hashes-taken-from-the-working-tree` | `src/platform/receipts.zig` | `const runtime = self.made.runtime orelse return claimed;` -> `const runtime = self.made.runtime orelse return claimed;       ...` | redteam commit: with autocrlf on verify accepts the commit emetgate just made | killed |
@@ -1317,7 +1317,7 @@ python tools/verification_page.py --check
 | `P1f-staged-entry-in-the-index-copy-not-compared` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, ...` -> `if (false and (!std.mem.eql(u8, found.oid, was.oid.?) or !std.m...` | redteam2 commit: a change staged on the target between its last measurement and... | killed |
 | `P1g-commit-lands-on-the-branch-that-was-measured` | `src/platform/commit_plan.zig` | `const branch = try git_commit.branchNow(arena, io, root, head);` -> `const branch = head.branch;` | commit window: a HEAD that was pointed at another branch after the measurement ...; redte... | killed |
 | `P1h-recover-advances-an-entry-on-a-rewritten-index` | `src/platform/commit_intent.zig` | `break :untouched std.mem.eql(u8, &current, &base_digest);` -> `break :untouched std.mem.eql(u8, &current, &base_digest) or tru...` | commit window: an entry staged after the crash on an index that was never publi... | killed |
-| `P1i-recover-writes-over-bytes-the-parent-does-not-hold` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, stored, base_oid)) return .left;` -> `` | commit window: a record that names the hash of the user's uncommitted edit as i... | killed |
+| `P1i-recover-writes-over-bytes-the-parent-does-not-hold` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, try git_commit.storedForm(git, plain, item...` -> `_ = bytes;` | commit window: a record that names the hash of the user's uncommitted edit as i... | killed |
 | `P1k-what-an-implicit-recover-left-is-not-reported` | `src/platform/commit_plan.zig` | `if (report.left == 0) return;     var found: Found` -> `if (report.left == 0 or true) return;     var found: Found` | commit window: what an implicit recover left as found is named in the reply of ... | killed |
 | `P1l-left-paths-not-named-in-the-reply` | `src/platform/commit_plan.zig` | `plan.left_names_len = report.names().len;` -> `plan.left_names_len = 0;` | commit window: a file created at the path between the two moves is kept, the co... | killed |
 | `P1m-record-blob-not-checked-against-the-commit` | `src/platform/commit_intent.zig` | `if (!std.mem.eql(u8, item.blob, after)) return error.CorruptInt...` -> `if (false and !std.mem.eql(u8, item.blob, after)) return error....` | commit window: a record whose blob is not the one its commit holds at that path... | killed |
@@ -1410,7 +1410,7 @@ python tools/verification_page.py --check
 | `PO1-elias-fano-low-bits-dropped` | `src/engine/postings.zig` | `return @intCast((@as(u64, high_value) << low) \| low_value);` -> `return @intCast((@as(u64, high_value) << low) \| (low_value & 0...` | postings: an encoded list iterates back to the same ids for sparse and dense sh...; posti... | killed |
 | `PO2-intersect-skips-an-equal-candidate` | `src/engine/postings.zig` | `candidate = iters[0].nextAtLeast(at) orelse return;` -> `candidate = iters[0].nextAtLeast(at + 1) orelse return;` | postings: intersect returns exactly the ids every list holds inside the range | killed |
 | `GI4-conflict-stages-listed-each` | `src/platform/git_index.zig` | `if (names.items.len != 0 and std.mem.eql(u8, names.items[names....` -> `` | a conflicted path is listed once and a submodule entry is not listed as a file; search an... | killed |
-| `GI5-submodule-listed-as-a-file` | `src/platform/git_index.zig` | `if (mode & 0o170000 == 0o160000) continue;` -> `_ = mode;` | a conflicted path is listed once and a submodule entry is not listed as a file | killed |
+| `GI5-submodule-listed-as-a-file` | `src/platform/git_index.zig` | `if (entry.mode & 0o170000 == 0o160000) continue;` -> `` | a conflicted path is listed once and a submodule entry is not listed as a file | killed |
 | `SA6-changed-file-given-as-dir-left-out` | `src/protocol/search_v1.zig` | `if (self.file) return change_watch.samePath(f, self.rel);` -> `` | search answers: a file given as dir is searched by itself after it changed in t... | killed |
 | `RB1-reply-size-budget-ignored` | `src/protocol/search_v1.zig` | `if (request.full) null else reply_budget` -> `if (request.full) null else null` | search answers: a reply over the size budget shows the best groups first, says ... | killed |
 | `RB2-cut-reply-reported-complete` | `src/protocol/search_v1.zig` | `if (cut != 0) try addMatchLimit(gpa, &result, cut);` -> `_ = cut;` | search answers: a reply over the size budget shows the best groups first, says ... | killed |
@@ -1837,7 +1837,7 @@ python tools/verification_page.py --check
 | `SRC7-undefined-script` | `src/platform/run_command.zig` | `return scripts.object.get(script) != null;` -> `return scripts.object.get(script) != null or true;` | package scripts and project tools inside the root run as project commands, othe... | killed |
 | `SRC8-scripts-without-venv` | `src/platform/run_command.zig` | `if (std.ascii.eqlIgnoreCase(dir_name, "Scripts") or std.ascii.e...` -> `if (std.ascii.eqlIgnoreCase(dir_name, "Scripts") or std.ascii.e...` | package scripts and project tools inside the root run as project commands, othe... | killed |
 | `SRC9-tool-outside-root` | `src/platform/run_command.zig` | `if (real.len <= real_root.len or !std.ascii.startsWithIgnoreCas...` -> `_ = real_root;` | package scripts and project tools inside the root run as project commands, othe... | killed |
-| `SRC10-new-file-stale-stage` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)...` -> `` | emetgate_commit: a new file staged with other content than its run receipt is r... | killed |
+| `SRC10-new-file-stale-stage` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, entry.oid, try storedOid(git, plain, path,...` -> `` | emetgate_commit: a new file staged with other content than its run receipt is r... | killed |
 | `SRC11-unborn-log-error` | `src/protocol/git_tools.zig` | `if (std.mem.eql(u8, sub, "status") or std.mem.eql(u8, sub, "dif...` -> `if (true) {` | git log on a repository with no commits answers no commits yet, show refuses wi... | killed |
 | `SRC12-run-check-verified` | `src/verify/checker.zig` | `outcome.raise(.unverified, run_not_rerun);` -> `` | emetgate_commit: files a run created or changed commit through the run receipt | killed |
 | `BR1-stale-kept-file-accepted` | `src/protocol/batch_stage.zig` | `if (sameHash(now_hash, s.hash)) continue;` -> `if (sameHash(now_hash, now_hash)) continue;` | a kept batch whose untouched file changed on disk is refused as stale and dropp...; batch... | killed |
@@ -2073,6 +2073,21 @@ python tools/verification_page.py --check
 | `SRC2-bare-src-chosen-first` | `src/platform/py_modules.zig` | `return first orelse bare_src;` -> `return bare_src orelse first;` | python move_file: in a src layout the tests keep the package name and the moved...; pytho... | killed |
 | `SRC3-spec-root-never-found` | `src/platform/py_modules.zig` | `const found = (try findAbsolute(cx, existing, importer, spec)) ...` -> `const found = (try findAbsolute(cx, existing, importer, spec)) ...` | python move_file: an import that spells the src folder keeps spelling it | killed |
 | `SRC4-shadowed-dir-chosen` | `src/platform/py_modules.zig` | `} else if (found) \|f\| if (!tsserver.sameFile(f.base, base)) c...` -> `} else if (found) \|f\| if (false and !tsserver.sameFile(f.base...` | python move: a package at the repo root that shadows the src one keeps the src ... | killed |
+| `GC40-carriage-return-hashed-in-process` | `src/platform/git_commit.zig` | `if (std.mem.indexOfScalar(u8, item.bytes, '\r') != null) contin...` -> `` | git commit: a blob id worked out in process is the one git stores, and any path... | killed |
+| `GC41-one-attribute-view-trusted` | `src/platform/git_commit.zig` | `if (in_index and in_tree) oids[i] = try blobOid(git.arena, hex,...` -> `if (in_index or in_tree) oids[i] = try blobOid(git.arena, hex, ...` | git commit: a blob id worked out in process is the one git stores, and any path... | killed |
+| `GC42-set-attribute-taken-as-plain` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, value, "unspecified")) flag.* = false;` -> `` | git commit: a blob id worked out in process is the one git stores, and any path... | killed |
+| `GC43-assume-unchanged-tag-dropped` | `src/platform/git_commit.zig` | `return if (entry.assumed) std.ascii.toLower(tag) else tag;` -> `return tag;` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC44-skip-worktree-tag-dropped` | `src/platform/git_commit.zig` | `const tag: u8 = if (entry.stage != 0) 'M' else if (entry.skippe...` -> `const tag: u8 = if (entry.stage != 0) 'M' else 'H';` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC45-pathspec-boundary-ignored` | `src/platform/git_commit.zig` | `if (name.len != spec.len and name[spec.len] != '/') return .no;` -> `` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC46-unknown-fold-trusted` | `src/platform/git_commit.zig` | `unsure = true;` -> `` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC47-dot-segment-taken-literally` | `src/platform/git_commit.zig` | `if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(...` -> `if (part.len == 0 or std.mem.eql(u8, part, "..")) return false;` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC48-non-ascii-folded-path-trusted` | `src/platform/git_commit.zig` | `for (spec) \|c\| if (c >= 0x80) return false;` -> `` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC49-drive-path-taken-literally` | `src/platform/git_commit.zig` | `if (std.mem.indexOfAny(u8, spec, ":\\") != null) return false;` -> `` | git commit: the index read in process lists exactly what git ls-files lists | killed |
+| `GC50-unterminated-head-trusted` | `src/platform/git_commit.zig` | `if (bytes.len == 0 or bytes[bytes.len - 1] != '\n') return null;` -> `if (bytes.len == 0) return null;` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
+| `GC51-dot-ref-part-trusted` | `src/platform/git_commit.zig` | `if (part.len == 0 or part[0] == '.' or part[part.len - 1] == '....` -> `if (part.len == 0) return false;` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
+| `GC52-double-dot-ref-trusted` | `src/platform/git_commit.zig` | `if (std.mem.indexOf(u8, name, "..") != null or std.mem.indexOf(...` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
+| `GC53-non-branch-ref-trusted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, name, "refs/")) return false;` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
+| `GC54-short-oid-detached` | `src/platform/git_commit.zig` | `if (line.len != 40 and line.len != 64) return null;` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
 
 ## What this system does not prove
 
