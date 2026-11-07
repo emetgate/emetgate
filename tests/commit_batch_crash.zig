@@ -87,7 +87,7 @@ const World = struct {
         }
     }
 
-    fn settle(self: *World) void {
+    pub fn settle(self: *World) void {
         if (self.kind == .move_file) self.served.session.deinit();
     }
 

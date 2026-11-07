@@ -239,6 +239,7 @@ fn outcomesBySnapshots(comptime Case: type, params: Case.Params) ![]bool {
     if (snapshots.failure) |err| return err;
     try testing.expect(!stopped);
     try testing.expect(try case.settled());
+    if (@hasDecl(Case, "settle")) case.settle();
     const outcomes = try testing.allocator.alloc(bool, snapshots.taken());
     errdefer testing.allocator.free(outcomes);
     var broken: usize = 0;

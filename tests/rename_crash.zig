@@ -38,6 +38,10 @@ const Rename = struct {
         self.case.deinit();
     }
 
+    pub fn settle(self: *Rename) void {
+        self.case.session.deinit();
+    }
+
     pub fn label(self: *Rename) []const u8 {
         return if (self.spec.files.len == 3) "three files" else "two files";
     }

@@ -51,6 +51,10 @@ const Move = struct {
         self.case.deinit();
     }
 
+    pub fn settle(self: *Move) void {
+        self.case.session.deinit();
+    }
+
     pub fn label(_: *Move) []const u8 {
         return "move";
     }

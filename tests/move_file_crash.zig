@@ -33,6 +33,10 @@ const MoveFile = struct {
         self.case.deinit();
     }
 
+    pub fn settle(self: *MoveFile) void {
+        self.case.session.deinit();
+    }
+
     pub fn label(_: *MoveFile) []const u8 {
         return "move file";
     }
