@@ -14,12 +14,9 @@ pub fn readTracked(gpa: Allocator, io: std.Io, index_path: []const u8) !?[][]u8 
 }
 
 pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
-    const hash_len = trailerLen(bytes) orelse return null;
-    const body = bytes[0 .. bytes.len - hash_len];
-    if (body.len < 12 or !std.mem.eql(u8, body[0..4], "DIRC")) return null;
-    const version = std.mem.readInt(u32, body[4..8], .big);
-    if (version < 2 or version > 4) return null;
-    const count = std.mem.readInt(u32, body[8..12], .big);
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const all = (try entries(arena_state.allocator(), bytes)) orelse return null;
 
     var names: std.ArrayList([]u8) = .empty;
     var handed_over = false;
@@ -27,8 +24,43 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
         for (names.items) |n| gpa.free(n);
         names.deinit(gpa);
     };
+    for (all) |entry| {
+        if (entry.mode & 0o170000 == 0o160000) continue;
+        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], entry.name)) continue;
+        try names.append(gpa, try gpa.dupe(u8, entry.name));
+    }
+    const out = try names.toOwnedSlice(gpa);
+    handed_over = true;
+    return out;
+}
+
+pub const Raw = struct {
+    name: []const u8,
+    mode: u32,
+    oid: []const u8,
+    stage: u2,
+    assumed: bool,
+    skipped: bool,
+};
+
+pub fn readEntries(arena: Allocator, io: std.Io, index_path: []const u8) !?[]Raw {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, index_path, arena, .limited(max_index_bytes)) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+    return entries(arena, bytes);
+}
+
+pub fn entries(arena: Allocator, bytes: []const u8) !?[]Raw {
+    const hash_len = trailerLen(bytes) orelse return null;
+    const body = bytes[0 .. bytes.len - hash_len];
+    if (body.len < 12 or !std.mem.eql(u8, body[0..4], "DIRC")) return null;
+    const version = std.mem.readInt(u32, body[4..8], .big);
+    if (version < 2 or version > 4) return null;
+    const count = std.mem.readInt(u32, body[8..12], .big);
+
+    var list: std.ArrayList(Raw) = .empty;
     var previous: std.ArrayList(u8) = .empty;
-    defer previous.deinit(gpa);
     var pos: usize = 12;
     const fixed = 40 + hash_len;
     var i: u32 = 0;
@@ -36,11 +68,14 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
         const start = pos;
         if (body.len < pos + fixed + 2) return null;
         const mode = std.mem.readInt(u32, body[pos + 24 ..][0..4], .big);
+        const oid = body[pos + 40 ..][0..hash_len];
         pos += fixed;
         const flags = std.mem.readInt(u16, body[pos..][0..2], .big);
         pos += 2;
+        var extended: u16 = 0;
         if (flags & 0x4000 != 0) {
             if (version < 3 or body.len < pos + 2) return null;
+            extended = std.mem.readInt(u16, body[pos..][0..2], .big);
             pos += 2;
         }
         var name: []const u8 = undefined;
@@ -60,7 +95,7 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
             if (strip > previous.items.len) return null;
             const end = std.mem.indexOfScalarPos(u8, body, pos, 0) orelse return null;
             previous.shrinkRetainingCapacity(previous.items.len - strip);
-            try previous.appendSlice(gpa, body[pos..end]);
+            try previous.appendSlice(arena, body[pos..end]);
             pos = end + 1;
             name = previous.items;
         } else {
@@ -71,21 +106,24 @@ pub fn parse(gpa: Allocator, bytes: []const u8) !?[][]u8 {
             if (pos > body.len) return null;
         }
         if (name.len == 0 or name[name.len - 1] == '/') return null;
-        if (mode & 0o170000 == 0o160000) continue;
-        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], name)) continue;
-        try names.append(gpa, try gpa.dupe(u8, name));
+        try list.append(arena, .{
+            .name = try arena.dupe(u8, name),
+            .mode = mode,
+            .oid = try arena.dupe(u8, oid),
+            .stage = @intCast((flags >> 12) & 3),
+            .assumed = flags & 0x8000 != 0,
+            .skipped = extended & 0x4000 != 0,
+        });
     }
     while (pos < body.len) {
         if (body.len < pos + 8) return null;
         const signature = body[pos..][0..4];
         const size = std.mem.readInt(u32, body[pos + 4 ..][0..4], .big);
-        if (std.mem.eql(u8, signature, "link") or std.mem.eql(u8, signature, "sdir")) return null;
+        if (std.ascii.isLower(signature[0])) return null;
         if (body.len - pos - 8 < size) return null;
         pos += 8 + size;
     }
-    const out = try names.toOwnedSlice(gpa);
-    handed_over = true;
-    return out;
+    return list.items;
 }
 
 fn trailerLen(bytes: []const u8) ?usize {
@@ -133,15 +171,15 @@ fn buildIndex(gpa: Allocator, name: []const u8, extension: ?[]const u8) ![]u8 {
 
 const Entry = struct { name: []const u8, mode: u32 = 0o100644, stage: u16 = 0 };
 
-fn buildEntries(gpa: Allocator, entries: []const Entry) ![]u8 {
+fn buildEntries(gpa: Allocator, wanted: []const Entry) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     try out.appendSlice(gpa, "DIRC");
     var header: [8]u8 = undefined;
     std.mem.writeInt(u32, header[0..4], 2, .big);
-    std.mem.writeInt(u32, header[4..8], @intCast(entries.len), .big);
+    std.mem.writeInt(u32, header[4..8], @intCast(wanted.len), .big);
     try out.appendSlice(gpa, &header);
-    for (entries) |e| {
+    for (wanted) |e| {
         const start = out.items.len;
         try out.appendNTimes(gpa, 0, 40 + 20);
         std.mem.writeInt(u32, out.items[start + 24 ..][0..4], e.mode, .big);

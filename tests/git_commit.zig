@@ -419,3 +419,109 @@ test "git commit: a blob id worked out in process is the one git stores, and any
     const few = try git_commit.plainOids(git, 40, items[0..1]);
     try testing.expect(few.oids[0] == null);
 }
+
+fn expectSameHead(arena: std.mem.Allocator, git: git_commit.Git) !void {
+    const git_dir = try git.need(&.{ "rev-parse", "--absolute-git-dir" });
+    const mine = (try git_commit.readHead(arena, testing.io, git_dir)) orelse return error.NotRead;
+    const theirs = try git.run(&.{ "symbolic-ref", "-q", "HEAD" });
+    switch (mine) {
+        .branch => |name| try testing.expectEqualStrings(theirs orelse return error.TestUnexpectedResult, name),
+        .detached => try testing.expect(theirs == null),
+    }
+}
+
+test "git commit: HEAD read in process names the branch git symbolic-ref names" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const git = try git_commit.Git.init(arena, testing.io, repo.root);
+    try expectSameHead(arena, git);
+    try repo.git(&.{ "checkout", "-q", "-b", "feature/x" });
+    try expectSameHead(arena, git);
+
+    const wt = try std.fmt.allocPrint(arena, "{s}-wt", .{repo.root});
+    try repo.git(&.{ "worktree", "add", "-q", "--detach", wt });
+    const other = try git_commit.Git.init(arena, testing.io, wt);
+    try expectSameHead(arena, other);
+    _ = try other.need(&.{ "checkout", "-q", "-b", "side" });
+    try expectSameHead(arena, other);
+    try expectSameHead(arena, git);
+
+    try repo.git(&.{ "checkout", "-q", "--detach" });
+    try expectSameHead(arena, git);
+    try repo.git(&.{ "symbolic-ref", "HEAD", "refs/heads/unborn" });
+    try expectSameHead(arena, git);
+
+    const head_abs = try std.fmt.allocPrint(arena, "{s}\\.git\\HEAD", .{repo.root});
+    const git_dir = try git.need(&.{ "rev-parse", "--absolute-git-dir" });
+    for ([_][]const u8{ "ref: refs/heads/main\r\n", "ref: refs/heads/.invalid\n", "ref: refs/heads/a..b\n", "ref: HEAD\n", "ref: refs/heads/main", "0123\n" }) |text| {
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = head_abs, .data = text });
+        try testing.expect((try git_commit.readHead(arena, testing.io, git_dir)) == null);
+    }
+}
+
+fn expectSameListing(arena: std.mem.Allocator, git: git_commit.Git, index_abs: []const u8, specs: []const []const u8, icase: bool) !void {
+    const all = (try emetgate.git_index.readEntries(arena, testing.io, index_abs)) orelse return error.NotRead;
+    const mine = (try git_commit.matchEntries(arena, all, specs, icase)) orelse return error.NotRead;
+    const theirs = try git_commit.indexEntries(git, specs, icase);
+    try testing.expectEqual(theirs.len, mine.len);
+    for (theirs, mine) |want, got| {
+        try testing.expectEqualStrings(want.path, got.path);
+        try testing.expectEqual(want.tag, got.tag);
+        try testing.expectEqualStrings(want.mode, got.mode);
+        try testing.expectEqualStrings(want.oid, got.oid);
+        try testing.expectEqual(want.stage, got.stage);
+    }
+}
+
+test "git commit: the index read in process lists exactly what git ls-files lists" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.createDirPath(testing.io, "repo/src/deep");
+    try repo.write("src/deep/x.ts", "export const x = 1;\n");
+    try repo.write("srcx.ts", "export const s = 1;\n");
+    try repo.write("tool.sh", "echo\n");
+    try repo.write("src/\xc3\xbcn\xc3\xaf.ts", "export const u = 1;\n");
+    try repo.write("new.ts", "export const n = 1;\n");
+    try repo.git(&.{ "add", "src", "srcx.ts", "tool.sh" });
+    try repo.git(&.{ "update-index", "--chmod=+x", "tool.sh" });
+    try repo.git(&.{ "add", "-N", "new.ts" });
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const git = try git_commit.Git.init(arena, testing.io, repo.root);
+    const head = try git.need(&.{ "rev-parse", "HEAD" });
+    const blob = try git.need(&.{ "rev-parse", "HEAD:src/a.ts" });
+    try repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "160000,{s},lib", .{head}) });
+    try repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "120000,{s},link", .{blob}) });
+    _ = try git.fed(&.{ "update-index", "--index-info" }, try std.fmt.allocPrint(arena, "100644 {s} 1\tconf.ts\n100644 {s} 2\tconf.ts\n100755 {s} 3\tconf.ts\n", .{ blob, blob, blob }));
+    try repo.git(&.{ "update-index", "--skip-worktree", "src/b.ts" });
+    try repo.git(&.{ "update-index", "--assume-unchanged", "src/a.ts" });
+
+    const index_abs = try std.fmt.allocPrint(arena, "{s}\\.git\\index", .{repo.root});
+    const exact = [_][]const u8{ "src", "src/a.ts", "conf.ts", "lib", "link", "srcx.ts", "sr", "missing", "src/deep", "tool.sh", "new.ts", "src/\xc3\xbcn\xc3\xaf.ts", "SRC/A.TS" };
+    const folded = [_][]const u8{ "SRC/A.TS", "Conf.ts", "LIB", "Src/Deep", "src", "SR", "Tool.SH", "NEW.ts" };
+    var many: [70][]const u8 = undefined;
+    for (&many, 0..) |*slot, i| slot.* = try std.fmt.allocPrint(arena, "f{d}", .{i});
+    many[0] = "src";
+    many[65] = "src";
+    many[66] = "conf.ts";
+    for ([_][]const u8{ "3", "4" }) |version| {
+        try repo.git(&.{ "update-index", "--index-version", version });
+        try expectSameListing(arena, git, index_abs, &exact, false);
+        try expectSameListing(arena, git, index_abs, &folded, true);
+        try expectSameListing(arena, git, index_abs, &many, false);
+        const all = (try emetgate.git_index.readEntries(arena, testing.io, index_abs)) orelse return error.NotRead;
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"src/abNcd.ts"}, true)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"./src"}, false)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"src/"}, false)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"src/\xc3\xbcn\xc3\xaf.ts"}, true)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"src/\xc4\xb0.ts"}, true)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"/src"}, false)) == null);
+        try testing.expect((try git_commit.matchEntries(arena, all, &.{"C:/src"}, false)) == null);
+    }
+}

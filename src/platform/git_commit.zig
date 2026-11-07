@@ -10,6 +10,7 @@ const own_dir = @import("own_dir.zig");
 const sandbox = @import("sandbox.zig");
 const commit_names = @import("commit_names.zig");
 const commit_refusal = @import("commit_refusal.zig");
+const git_index = @import("git_index.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -139,6 +140,7 @@ pub const Git = struct {
     exe: []const u8,
     env: ?*const std.process.Environ.Map = null,
     hex: usize = 40,
+    index_file: ?[]const u8 = null,
 
     pub fn init(arena: Allocator, io: std.Io, root: []const u8) !Git {
         return .{ .arena = arena, .io = io, .root = root, .exe = try exe_path.git(arena, root) };
@@ -203,6 +205,7 @@ pub const Git = struct {
         try env.put("GIT_INDEX_FILE", index_path);
         var copy = self;
         copy.env = env;
+        copy.index_file = if (std.fs.path.isAbsolute(index_path)) index_path else null;
         return copy;
     }
 };
@@ -227,7 +230,7 @@ fn exists(io: std.Io, path_abs: []const u8) !bool {
     return true;
 }
 
-const Tracked = struct {
+pub const Tracked = struct {
     path: []const u8,
     tag: u8,
     mode: []const u8,
@@ -268,7 +271,86 @@ pub fn parseTree(arena: Allocator, out: []const u8, list: *std.ArrayList(TreeEnt
     }
 }
 
-fn indexEntries(git: Git, paths: []const []const u8, icase: bool) ![]Tracked {
+fn plainSpec(spec: []const u8, icase: bool) bool {
+    if (std.mem.indexOfAny(u8, spec, ":\\") != null) return false;
+    if (icase) {
+        for (spec) |c| if (c >= 0x80) return false;
+    }
+    var parts = std.mem.splitScalar(u8, spec, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+    }
+    return true;
+}
+
+const SpecMatch = enum { no, yes, unsure };
+
+fn specMatch(spec: []const u8, name: []const u8, icase: bool) SpecMatch {
+    if (name.len < spec.len) return .no;
+    if (name.len != spec.len and name[spec.len] != '/') return .no;
+    if (!icase) return if (std.mem.eql(u8, spec, name[0..spec.len])) .yes else .no;
+    var unsure = false;
+    for (spec, name[0..spec.len]) |a, b| {
+        if (b >= 0x80) {
+            unsure = true;
+            continue;
+        }
+        if (std.ascii.toLower(a) != std.ascii.toLower(b)) return .no;
+    }
+    return if (unsure) .unsure else .yes;
+}
+
+fn tagOf(entry: git_index.Raw) u8 {
+    const tag: u8 = if (entry.stage != 0) 'M' else if (entry.skipped) 'S' else 'H';
+    return if (entry.assumed) std.ascii.toLower(tag) else tag;
+}
+
+fn hexOf(arena: Allocator, raw: []const u8) ![]const u8 {
+    const digits = "0123456789abcdef";
+    const out = try arena.alloc(u8, raw.len * 2);
+    for (raw, 0..) |b, i| {
+        out[2 * i] = digits[b >> 4];
+        out[2 * i + 1] = digits[b & 15];
+    }
+    return out;
+}
+
+pub fn matchEntries(arena: Allocator, all: []const git_index.Raw, paths: []const []const u8, icase: bool) !?[]Tracked {
+    for (paths) |path| {
+        if (!plainSpec(path, icase)) return null;
+    }
+    var list: std.ArrayList(Tracked) = .empty;
+    var at: usize = 0;
+    while (at < paths.len) {
+        const end = @min(paths.len, at + paths_per_call);
+        for (all) |entry| {
+            const hit = for (paths[at..end]) |spec| {
+                switch (specMatch(spec, entry.name, icase)) {
+                    .no => {},
+                    .yes => break true,
+                    .unsure => return null,
+                }
+            } else false;
+            if (!hit) continue;
+            try list.append(arena, .{
+                .path = entry.name,
+                .tag = tagOf(entry),
+                .mode = try std.fmt.allocPrint(arena, "{o:0>6}", .{entry.mode}),
+                .oid = try hexOf(arena, entry.oid),
+                .stage = entry.stage,
+            });
+        }
+        at = end;
+    }
+    return list.items;
+}
+
+pub fn indexEntries(git: Git, paths: []const []const u8, icase: bool) ![]Tracked {
+    if (git.index_file) |file| {
+        if (try git_index.readEntries(git.arena, git.io, file)) |all| {
+            if (try matchEntries(git.arena, all, paths, icase)) |list| return list;
+        }
+    }
     var list: std.ArrayList(Tracked) = .empty;
     var at: usize = 0;
     while (at < paths.len) {
@@ -745,6 +827,7 @@ fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
 
     const known = try facts(git);
     git.hex = known.oid.len;
+    git.index_file = known.index;
     for (in_progress) |name| {
         const path = try std.fs.path.join(arena, &.{ known.git_dir, name });
         if (try exists(io, path)) return error.OperationInProgress;
@@ -993,26 +1076,84 @@ fn copyIndex(arena: Allocator, io: std.Io, index: []const u8, staged_abs: []cons
     return base;
 }
 
+pub const HeadFile = union(enum) { branch: []const u8, detached };
+
+pub fn readHead(arena: Allocator, io: std.Io, git_dir: []const u8) !?HeadFile {
+    const path = try std.fs.path.join(arena, &.{ git_dir, "HEAD" });
+    const info = Dir.cwd().statFile(io, path, .{ .follow_symlinks = false }) catch return null;
+    if (info.kind != .file) return null;
+    const bytes = Dir.cwd().readFileAlloc(io, path, arena, .limited(4096)) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+    if (bytes.len == 0 or bytes[bytes.len - 1] != '\n') return null;
+    const line = bytes[0 .. bytes.len - 1];
+    if (std.mem.startsWith(u8, line, "ref: ")) {
+        const name = line["ref: ".len..];
+        return if (plainRefName(name)) .{ .branch = name } else null;
+    }
+    if (line.len != 40 and line.len != 64) return null;
+    for (line) |c| {
+        if (!std.ascii.isDigit(c) and (c < 'a' or c > 'f')) return null;
+    }
+    return .detached;
+}
+
+fn plainRefName(name: []const u8) bool {
+    if (!std.mem.startsWith(u8, name, "refs/")) return false;
+    if (std.mem.indexOf(u8, name, "..") != null or std.mem.indexOf(u8, name, "@{") != null) return false;
+    for (name) |c| {
+        if (c <= ' ' or c >= 0x7f) return false;
+        if (std.mem.indexOfScalar(u8, "~^:?*[\\", c) != null) return false;
+    }
+    var parts = std.mem.splitScalar(u8, name, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or part[0] == '.' or part[part.len - 1] == '.') return false;
+        if (std.mem.endsWith(u8, part, ".lock")) return false;
+    }
+    return true;
+}
+
 pub const Here = struct {
     git: Git,
     index: []const u8,
     head: ?[]const u8,
+    git_dir: ?[]const u8 = null,
 
     pub fn open(arena: Allocator, io: std.Io, root: []const u8) !Here {
         const git = try Git.init(arena, io, root);
-        const out = (try git.run(&.{ "rev-parse", "--git-path", "index", "HEAD^{commit}", "--" })) orelse
-            return .{ .git = git, .index = try indexPath(git), .head = null };
+        const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "HEAD^{commit}", "--" })) orelse
+            return withHead(git, try indexPath(git), null);
         var lines = std.mem.tokenizeAny(u8, out, "\r\n");
+        const git_dir = lines.next() orelse return error.GitFailed;
         const listed = lines.next() orelse return error.GitFailed;
         const head = lines.next() orelse return error.GitFailed;
         const dashes = lines.next() orelse return error.GitFailed;
         if (!std.mem.eql(u8, dashes, "--") or lines.next() != null) return error.GitFailed;
-        return .{ .git = git, .index = try listedPath(git, listed), .head = head };
+        var here = withHead(git, try listedPath(git, listed), head);
+        here.git_dir = git_dir;
+        return here;
     }
 
     fn at(arena: Allocator, io: std.Io, root: []const u8) !Here {
         const git = try Git.init(arena, io, root);
-        return .{ .git = git, .index = try indexPath(git), .head = null };
+        return withHead(git, try indexPath(git), null);
+    }
+
+    fn withHead(git: Git, index: []const u8, head: ?[]const u8) Here {
+        var known = git;
+        known.index_file = index;
+        return .{ .git = known, .index = index, .head = head };
+    }
+
+    pub fn symbolicHead(self: Here) !?[]const u8 {
+        if (self.git_dir) |dir| {
+            if (try readHead(self.git.arena, self.git.io, dir)) |found| return switch (found) {
+                .branch => |name| name,
+                .detached => null,
+            };
+        }
+        return self.git.run(&.{ "symbolic-ref", "-q", "HEAD" });
     }
 
     fn lock(self: Here) ![]const u8 {
@@ -1323,7 +1464,7 @@ pub fn standing(gpa: Allocator, here: Here, branch: []const u8, commit: []const 
     @memset(wanted, false);
     @memset(indexed, false);
 
-    const head_ref = try git.run(&.{ "symbolic-ref", "-q", "HEAD" });
+    const head_ref = try here.symbolicHead();
     const head_oid = here.head orelse return .{ .on_commit = false, .wanted = wanted, .indexed = indexed };
     const on_commit = head_ref != null and std.mem.eql(u8, head_ref.?, branch) and std.mem.eql(u8, head_oid, commit);
 
@@ -1419,6 +1560,24 @@ fn checkoutAll(git: Git, private: Git, tree: []const u8, target_abs: []const u8)
     _ = try private.need(&.{ source, "-c", "checkout.workers=0", "checkout-index", "-q", "-a", prefix });
 }
 
+fn filesIndexed(git: Git) !usize {
+    var count: usize = 0;
+    if (git.index_file) |file| {
+        if (try git_index.readEntries(git.arena, git.io, file)) |all| {
+            for (all) |entry| {
+                if (holdsFile(try std.fmt.allocPrint(git.arena, "{o:0>6}", .{entry.mode}))) count += 1;
+            }
+            return count;
+        }
+    }
+    var entries = std.mem.tokenizeScalar(u8, try git.needRaw(&.{ "ls-files", "-s", "-z" }), 0);
+    while (entries.next()) |entry| {
+        if (entry.len < 6) return error.GitFailed;
+        if (holdsFile(entry[0..6])) count += 1;
+    }
+    return count;
+}
+
 pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const u8, target_abs: []const u8) !usize {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -1428,12 +1587,7 @@ pub fn checkoutTree(gpa: Allocator, io: std.Io, root: []const u8, tree: []const 
     defer work.done();
     const private = try git.withIndex(try std.fs.path.join(arena, &.{ work.dir, "index" }));
     _ = try private.need(&.{ "read-tree", tree });
-    var count: usize = 0;
-    var entries = std.mem.tokenizeScalar(u8, try private.needRaw(&.{ "ls-files", "-s", "-z" }), 0);
-    while (entries.next()) |entry| {
-        if (entry.len < 6) return error.GitFailed;
-        if (holdsFile(entry[0..6])) count += 1;
-    }
+    const count = try filesIndexed(private);
     try std.Io.Dir.cwd().createDirPath(io, target_abs);
     try checkoutAll(git, private, tree, target_abs);
     return count;
