@@ -83,8 +83,8 @@ pub const Session = struct {
     derived: ?commit_derive.Derived = null,
     prepared: ?git_commit.Prepared = null,
 
-    pub fn open(gpa: Allocator, io: std.Io, root: []const u8, request: ?*Request, rels: []const []const u8) !Opened {
-        switch (try rules.frozenGate(gpa, io, root, rels)) {
+    pub fn open(gpa: Allocator, io: std.Io, root: []const u8, guard_config: bool, request: ?*Request, rels: []const []const u8) !Opened {
+        switch (try rules.frozenGate(gpa, io, root, rels, guard_config)) {
             .ok => {},
             .violated => |touched| return .{ .violated = touched },
             .failed => |unrunnable| return .{ .failed = unrunnable },

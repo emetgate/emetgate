@@ -3745,8 +3745,8 @@
     {
       "id": "RM15-mcp-batch-forces-trust",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory, .shadow_root",
-      "to": ".allow_repo_memory = true, .shadow_root",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .guard_config = policy.open_run, .shadow_root",
+      "to": ".allow_repo_memory = true, .guard_config = policy.open_run, .shadow_root",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -3754,8 +3754,8 @@
     {
       "id": "RM16-mcp-batch-drops-the-flag",
       "file": "src/protocol/handlers.zig",
-      "from": ".allow_repo_memory = policy.allow_repo_memory, .shadow_root",
-      "to": ".allow_repo_memory = false, .shadow_root",
+      "from": ".allow_repo_memory = policy.allow_repo_memory, .guard_config = policy.open_run, .shadow_root",
+      "to": ".allow_repo_memory = false, .guard_config = policy.open_run, .shadow_root",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -10502,8 +10502,8 @@
     {
       "id": "FZ1-changed-paths-not-handed-to-the-frozen-gate",
       "file": "src/platform/commit_plan.zig",
-      "from": "        switch (try rules.frozenGate(gpa, io, root, rels)) {",
-      "to": "        switch (try rules.frozenGate(gpa, io, root, rels[0..0])) {",
+      "from": "        switch (try rules.frozenGate(gpa, io, root, rels, guard_config)) {",
+      "to": "        switch (try rules.frozenGate(gpa, io, root, rels[0..0], guard_config)) {",
       "kills": [
         "frozen: a symbol edit of a frozen file is refused with and without commits, and a file outside the scope is written",
         "frozen: a node edit of a frozen file is refused",
@@ -17078,7 +17078,7 @@
     {
       "id": "FZ8-move-frozen-ends-checked-after-planning",
       "file": "src/platform/file_move.zig",
-      "from": "    if (try frozenEnds(gpa, io, root, options.request)) |refused| return .{ .plan = empty_plan, .result = refused };\n",
+      "from": "    if (try frozenEnds(gpa, io, root, options.request, options.guard_config)) |refused| return .{ .plan = empty_plan, .result = refused };\n",
       "to": "    _ = &frozenEnds;\n",
       "kills": [
         "frozen: a file move with a frozen end is refused before the language service is asked, so a silent service cannot hide it"

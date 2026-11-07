@@ -296,3 +296,103 @@ test "frozen hold: a toolchain command is held the same way" {
     try testing.expectEqual(@as(usize, 1), ran.frozen.restored.len);
     try testing.expectEqualStrings("package.json", ran.frozen.restored[0].path);
 }
+
+fn expectGateRestored(reply: *fixture.Reply, path: []const u8) !void {
+    try expectRestored(reply, path);
+    for ((try reply.field("frozen_restored")).?.array.items) |item| {
+        if (!std.mem.eql(u8, item.object.get("path").?.string, path)) continue;
+        try testing.expectEqualStrings(emetgate.gate_config.rule_id, item.object.get("rules").?.array.items[0].string);
+    }
+}
+
+const mcp_config = "{\"mcpServers\":{\"emetgate\":{}}}\n";
+const project_settings = "{\"permissions\":{}}\n";
+const gate_command = "echo {} > .mcp.json && git add .mcp.json && echo {} > .claude/settings.json && echo x > .claude/agents/free.md && echo changed > app.js";
+
+fn gateSetup(env: *Env) !void {
+    try env.repo.commitScript(".mcp.json", mcp_config);
+    try env.repo.tmp.dir.createDirPath(testing.io, "repo/.claude/agents");
+    try env.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.claude/settings.json", .data = project_settings });
+}
+
+test "frozen hold: under lockdown the mcp config, the Claude settings and agents come back, tracked or not, and folders that were there stay" {
+    var env = try Env.init();
+    defer env.deinit();
+    try gateSetup(&env);
+    var reply = try env.run(gate_command);
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try env.expectFile(".mcp.json", mcp_config);
+    try env.expectFile(".claude/settings.json", project_settings);
+    try testing.expect(env.missing(".claude/agents/free.md"));
+    try testing.expect(!env.missing(".claude/agents"));
+    try env.expectFile("app.js", "changed\n");
+    try expectGateRestored(&reply, ".mcp.json");
+    try expectGateRestored(&reply, ".claude/settings.json");
+    try expectGateRestored(&reply, ".claude/agents/free.md");
+    try env.expectGit(&.{ "diff", "--cached", "--name-only" }, "");
+    try testing.expect(env.missing(".emetgate/frozen-hold"));
+}
+
+test "frozen hold: outside lockdown a command that rewrites the gate config keeps its change" {
+    var env = try Env.init();
+    defer env.deinit();
+    try gateSetup(&env);
+    const shell = try emetgate.open_shell.find(gpa, env.repo.root_abs);
+    defer shell.deinit(gpa);
+    const ran = try run_command.runOpenInRepo(gpa, testing.io, env.repo.root_abs, shell, gate_command, .{}, "test", .{});
+    defer ran.report.deinit(gpa);
+    defer ran.frozen.deinit(gpa);
+    try testing.expect(ran.report.passed());
+    try testing.expectEqual(@as(usize, 0), ran.frozen.restored.len);
+    try env.expectFile(".mcp.json", "{}\n");
+    try env.expectFile(".claude/settings.json", "{}\n");
+    try env.expectFile(".claude/agents/free.md", "x\n");
+}
+
+test "frozen hold: under lockdown a new git hook, a hooks path and an alias are undone, and branch, user, submodule and sparse keys a command sets stay" {
+    var env = try Env.init();
+    defer env.deinit();
+    try env.repo.tmp.dir.createDirPath(testing.io, "repo/.git/hooks");
+    var hooked = try env.run("echo exit 0 > .git/hooks/pre-commit && git config core.hooksPath elsewhere && git config alias.zz status");
+    defer hooked.deinit();
+    errdefer std.debug.print("{s}\n", .{hooked.text});
+    try testing.expectEqual(@as(i64, 0), (try hooked.field("exit_code")).?.integer);
+    try testing.expect(env.missing(".git/hooks/pre-commit"));
+    try testing.expect(!env.missing(".git/hooks"));
+    try testing.expectError(error.GitSetupFailed, env.git(&.{ "config", "--get", "core.hooksPath" }));
+    try testing.expectError(error.GitSetupFailed, env.git(&.{ "config", "--get", "alias.zz" }));
+    try expectGateRestored(&hooked, ".git/hooks/pre-commit");
+    try expectGateRestored(&hooked, ".git/config");
+
+    var safe = try env.run("git config branch.topic.remote origin && git config user.email a@b.c && git config submodule.lib.url ../lib.git && git config core.sparseCheckout true");
+    defer safe.deinit();
+    errdefer std.debug.print("{s}\n", .{safe.text});
+    try testing.expect((try safe.field("frozen_restored")) == null);
+    try env.expectGit(&.{ "config", "--get", "branch.topic.remote" }, "origin");
+    try env.expectGit(&.{ "config", "--get", "user.email" }, "a@b.c");
+    try env.expectGit(&.{ "config", "--get", "submodule.lib.url" }, "../lib.git");
+    try env.expectGit(&.{ "config", "--get", "core.sparseCheckout" }, "true");
+}
+
+test "frozen hold: under lockdown a forged rules ledger is put back, and a command that changes rules keeps its change" {
+    var env = try Env.init();
+    defer env.deinit();
+    try env.freeze();
+    const ledger = try env.read(emetgate.gate_config.ledger);
+    defer gpa.free(ledger);
+    var forged = try env.run("echo forged >> .emetgate/ledger.ndjson");
+    defer forged.deinit();
+    errdefer std.debug.print("{s}\n", .{forged.text});
+    try env.expectFile(emetgate.gate_config.ledger, ledger);
+    try expectGateRestored(&forged, emetgate.gate_config.ledger);
+
+    var approved = try env.run("emetgate rule forget no-such-rule || echo approved >> .emetgate/ledger.ndjson");
+    defer approved.deinit();
+    errdefer std.debug.print("{s}\n", .{approved.text});
+    try testing.expect((try approved.field("frozen_restored")) == null);
+    const after = try env.read(emetgate.gate_config.ledger);
+    defer gpa.free(after);
+    try testing.expect(std.mem.endsWith(u8, after, "approved\n"));
+}
