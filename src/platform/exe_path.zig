@@ -12,18 +12,64 @@ const default_pathext = ".COM;.EXE;.BAT;.CMD";
 pub fn resolve(gpa: Allocator, name: []const u8, repo_root: ?[]const u8) Error![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
+    return resolveIn(gpa, name, try searchHere(arena_state.allocator(), repo_root));
+}
+
+fn searchHere(arena: Allocator, repo_root: ?[]const u8) Error!Search {
     const path_list = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH")) orelse "";
     const pathext = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATHEXT")) orelse default_pathext;
     const cwd = try currentDirectory(arena);
-    return resolveIn(gpa, name, .{ .path = path_list, .pathext = pathext, .cwd = cwd, .repo_root = repo_root });
+    return .{ .path = path_list, .pathext = pathext, .cwd = cwd, .repo_root = repo_root };
 }
 
 pub fn git(gpa: Allocator, repo_root: ?[]const u8) error{ GitNotFound, OutOfMemory }![]u8 {
-    return resolve(gpa, "git", repo_root) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.ExecutableNotFound, error.NameInvalid => error.GitNotFound,
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const search = searchHere(arena_state.allocator(), repo_root) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ExecutableNotFound, error.NameInvalid => return error.GitNotFound,
     };
+    return gitIn(gpa, search);
+}
+
+pub fn gitIn(gpa: Allocator, search: Search) error{ GitNotFound, OutOfMemory }![]u8 {
+    const found = resolveIn(gpa, "git", search) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ExecutableNotFound, error.NameInvalid => return error.GitNotFound,
+    };
+    const real = (behindLauncher(gpa, found, search) catch |err| {
+        gpa.free(found);
+        return err;
+    }) orelse return found;
+    gpa.free(found);
+    return real;
+}
+
+const git_launcher_dirs = [_][]const u8{ "cmd", "bin" };
+const git_real_dirs = [_][]const u8{ "mingw64\\bin", "clangarm64\\bin", "mingw32\\bin" };
+
+fn behindLauncher(gpa: Allocator, found: []const u8, search: Search) error{OutOfMemory}!?[]u8 {
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(found), "git.exe")) return null;
+    const launcher_dir = std.fs.path.dirname(found) orelse return null;
+    const leaf = std.fs.path.basename(launcher_dir);
+    for (git_launcher_dirs) |dir| {
+        if (std.ascii.eqlIgnoreCase(leaf, dir)) break;
+    } else return null;
+    const install = std.fs.path.dirname(launcher_dir) orelse return null;
+    var cwd_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    var root_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    var dir_buf: [windows.PATH_MAX_WIDE]u16 = undefined;
+    for (git_real_dirs) |sub| {
+        const dir = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ install, sub });
+        defer gpa.free(dir);
+        const dir_final = finalName(&dir_buf, dir);
+        if (search.cwd) |cwd| if (inside(dir, dir_final, cwd, finalName(&cwd_buf, cwd))) continue;
+        if (search.repo_root) |root| if (inside(dir, dir_final, root, finalName(&root_buf, root))) continue;
+        const real = try std.fmt.allocPrint(gpa, "{s}\\git.exe", .{dir});
+        if (isFile(real)) return real;
+        gpa.free(real);
+    }
+    return null;
 }
 
 pub fn gitBash(gpa: Allocator, repo_root: ?[]const u8) error{ BashNotFound, OutOfMemory }![]u8 {
@@ -90,11 +136,7 @@ pub fn skipped(gpa: Allocator, name: []const u8, repo_root: ?[]const u8) error{O
 fn skippedHere(gpa: Allocator, name: []const u8, repo_root: ?[]const u8) Error!?[]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const path_list = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH")) orelse "";
-    const pathext = try environment(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATHEXT")) orelse default_pathext;
-    const cwd = try currentDirectory(arena);
-    return skippedIn(gpa, name, .{ .path = path_list, .pathext = pathext, .cwd = cwd, .repo_root = repo_root });
+    return skippedIn(gpa, name, try searchHere(arena_state.allocator(), repo_root));
 }
 
 fn walk(gpa: Allocator, name: []const u8, search: Search, only_skipped: bool) Error![]u8 {
@@ -345,6 +387,38 @@ fn expectPath(dir: []const u8, file: []const u8, got: []const u8) !void {
     if (std.ascii.eqlIgnoreCase(want, got)) return;
     std.debug.print("want {s}, got {s}\n", .{ want, got });
     return error.TestUnexpectedResult;
+}
+
+test "exe path: git behind the Git for Windows launcher in cmd or bin is the git.exe the launcher starts, unless that is in the repository" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    for ([_][]const u8{ "Git/cmd/git.exe", "Git/bin/git.exe", "Git/mingw64/bin/git.exe", "Arm/cmd/git.exe", "Arm/clangarm64/bin/git.exe", "Plain/cmd/git.exe", "Other/tools/git.exe", "Other/mingw64/bin/git.exe" }) |file| {
+        try tmp.dir.createDirPath(testing.io, std.fs.path.dirname(file).?);
+        try tmp.dir.writeFile(testing.io, .{ .sub_path = file, .data = "x" });
+    }
+    const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
+    defer testing.allocator.free(root);
+    var b: [3][2048]u8 = undefined;
+    const cases = [_]struct { path: []const u8, want: []const u8 }{
+        .{ .path = "Git\\cmd", .want = "Git\\mingw64\\bin" },
+        .{ .path = "Git\\bin", .want = "Git\\mingw64\\bin" },
+        .{ .path = "Arm\\cmd", .want = "Arm\\clangarm64\\bin" },
+        .{ .path = "Plain\\cmd", .want = "Plain\\cmd" },
+        .{ .path = "Other\\tools", .want = "Other\\tools" },
+    };
+    for (cases) |case| {
+        const entry = try std.fmt.bufPrint(&b[0], "{s}\\{s}", .{ root, case.path });
+        const found = try gitIn(testing.allocator, .{ .path = entry });
+        defer testing.allocator.free(found);
+        try expectPath(try std.fmt.bufPrint(&b[1], "{s}\\{s}", .{ root, case.want }), "git.exe", found);
+    }
+    const launcher = try std.fmt.bufPrint(&b[0], "{s}\\Git\\cmd", .{root});
+    const repo_root = try std.fmt.bufPrint(&b[2], "{s}\\Git\\mingw64", .{root});
+    const kept = try gitIn(testing.allocator, .{ .path = launcher, .repo_root = repo_root });
+    defer testing.allocator.free(kept);
+    try expectPath(launcher, "git.exe", kept);
+    try testing.expectError(error.GitNotFound, gitIn(testing.allocator, .{ .path = repo_root }));
 }
 
 test "exe path: a name found nowhere else, a relative name and a relative path entry are refused" {

@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const disk = @import("emetgate").disk;
 const symbol = @import("emetgate").symbol;
 const fixture = @import("ts_fixture.zig");
+const git_fixture = @import("git_fixture.zig");
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -68,7 +69,7 @@ const Setup = struct {
     }
 
     fn tracked(self: *Setup, rel: []const u8) !bool {
-        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = self.repo.root_abs } });
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "ls-files", "--", rel }, .cwd = .{ .path = self.repo.root_abs } });
         defer testing.allocator.free(result.stdout);
         defer testing.allocator.free(result.stderr);
         return std.mem.trim(u8, result.stdout, " \r\n").len != 0;

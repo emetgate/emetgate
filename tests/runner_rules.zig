@@ -25,6 +25,7 @@ const hashOfRef = support.hashOfRef;
 const crash_command = support.crash_command;
 
 const test_util = @import("emetgate").test_util;
+const git_fixture = @import("git_fixture.zig");
 const testing = std.testing;
 
 const commented_body = "{\n  // why\n  return a - b;\n}";
@@ -283,7 +284,7 @@ fn tryNewFile(repo: *Repo, runtime: *Runtime, rel: []const u8, ref_text: []const
 }
 
 fn indexed(repo: *Repo, rel: []const u8) !bool {
-    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--error-unmatch", "--", rel }, .cwd = .{ .path = repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "ls-files", "--error-unmatch", "--", rel }, .cwd = .{ .path = repo.root_abs } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     return switch (result.term) {

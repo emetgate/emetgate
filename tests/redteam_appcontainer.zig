@@ -1,8 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const sandbox = @import("emetgate").sandbox;
 const appcontainer = @import("emetgate").appcontainer;
+const test_util = @import("emetgate").test_util;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -25,7 +25,7 @@ const Fixture = struct {
         try tmp.dir.writeFile(testing.io, .{ .sub_path = "secret/fake-profile/secret.txt", .data = marker });
 
         try tmp.dir.createDirPath(testing.io, "bin");
-        try std.Io.Dir.cwd().copyFile(build_options.probe_path, tmp.dir, "bin/sandbox-probe.exe", testing.io, .{});
+        try std.Io.Dir.cwd().copyFile(test_util.probePath(), tmp.dir, "bin/sandbox-probe.exe", testing.io, .{});
         const probe_abs = try tmp.dir.realPathFileAlloc(testing.io, "bin/sandbox-probe.exe", gpa);
         errdefer gpa.free(probe_abs);
         const shadow_abs = try tmp.dir.realPathFileAlloc(testing.io, "shadow", gpa);

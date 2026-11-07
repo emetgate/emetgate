@@ -429,10 +429,12 @@ fn buildSchema(arena: Allocator, io: std.Io, tree: std.Io.Dir, chosen: []const S
     }
 
     try std.Io.Dir.cwd().createDirPath(io, schema_dir);
-    const exe_name = if (@import("builtin").os.tag == .windows) "test-all.exe" else "test-all";
-    const from_path = try std.fmt.allocPrint(arena, "zig-out/bin/{s}", .{exe_name});
+    const ext = comptime @import("builtin").target.exeFileExt();
+    const exe_name = "test-all" ++ ext;
+    const probe_name = "sandbox-probe" ++ ext;
+    try tree.copyFile("zig-out/bin/" ++ probe_name, std.Io.Dir.cwd(), schema_dir ++ "/" ++ probe_name, io, .{});
     const to_path = schema_dir ++ "/" ++ exe_name;
-    try tree.copyFile(from_path, std.Io.Dir.cwd(), to_path, io, .{});
+    try tree.copyFile("zig-out/bin/" ++ exe_name, std.Io.Dir.cwd(), to_path, io, .{});
     return try std.Io.Dir.cwd().realPathFileAlloc(io, to_path, arena);
 }
 
@@ -551,7 +553,6 @@ fn withoutRed(arena: Allocator, outcome: *Outcome, m: Mutation, red: []const []c
     }
     return true;
 }
-
 
 fn judge(gpa: Allocator, outcome: *Outcome, m: Mutation, code: u8, output: []const u8, crashed: []const []const u8) !void {
     var failed: std.ArrayList([]const u8) = .empty;

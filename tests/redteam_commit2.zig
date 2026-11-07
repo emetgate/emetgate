@@ -822,7 +822,7 @@ const Reader = struct {
 
     fn loop(self: *Reader) void {
         while (!self.stop.load(.acquire)) {
-            for ([_][]const []const u8{ &.{ "git", "status", "--porcelain" }, &.{ "git", "diff", "--cached", "--name-only" }, &.{ "git", "ls-files", "-s" } }) |argv| {
+            for ([_][]const []const u8{ &.{ try git_fixture.git(), "status", "--porcelain" }, &.{ try git_fixture.git(), "diff", "--cached", "--name-only" }, &.{ try git_fixture.git(), "ls-files", "-s" } }) |argv| {
                 const result = @import("emetgate").bounded_run.run(std.heap.page_allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = self.root } }) catch continue;
                 std.heap.page_allocator.free(result.stdout);
                 std.heap.page_allocator.free(result.stderr);

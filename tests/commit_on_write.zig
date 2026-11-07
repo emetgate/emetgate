@@ -7,6 +7,7 @@ const Policy = @typeInfo(@TypeOf(handlers.callTool)).@"fn".params[6].type.?;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
+const git_fixture = @import("git_fixture.zig");
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -46,7 +47,7 @@ const Case = struct {
 
     fn git(self: *Case, argv: []const []const u8) ![]const u8 {
         var full: std.ArrayList([]const u8) = .empty;
-        try full.append(self.arena(), "git");
+        try full.append(self.arena(), try git_fixture.git());
         try full.appendSlice(self.arena(), argv);
         const result = try @import("emetgate").bounded_run.run(self.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = self.repo.root_abs } });
         switch (result.term) {

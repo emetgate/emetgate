@@ -11,6 +11,15 @@ const Template = struct {
 
 var template: ?Template = null;
 
+var git_exe: ?[]const u8 = null;
+
+pub fn git() error{ GitNotFound, OutOfMemory }![]const u8 {
+    if (git_exe) |found| return found;
+    const found = try @import("emetgate").exe_path.git(std.heap.page_allocator, null);
+    git_exe = found;
+    return found;
+}
+
 const layout = [_][]const u8{ "objects/info", "objects/pack", "refs/heads", "refs/tags" };
 
 pub fn initRepo(root_abs: []const u8) !void {
@@ -33,7 +42,7 @@ fn makeTemplate() !Template {
     defer tmp.cleanup();
     const dir_abs = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
     defer testing.allocator.free(dir_abs);
-    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "init", "-q", "--template=" }, .cwd = .{ .path = dir_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git(), "init", "-q", "--template=" }, .cwd = .{ .path = dir_abs } });
     testing.allocator.free(result.stdout);
     testing.allocator.free(result.stderr);
     switch (result.term) {

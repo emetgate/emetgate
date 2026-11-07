@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const fixture = @import("run_fixture.zig");
 const emetgate = @import("emetgate");
+const git_fixture = @import("git_fixture.zig");
 const server = emetgate.server;
 const memory = emetgate.memory;
 const bounded_run = emetgate.bounded_run;
@@ -70,7 +71,7 @@ const Env = struct {
 
     fn git(self: *Env, args: []const []const u8) ![]u8 {
         var argv: [10][]const u8 = undefined;
-        argv[0] = "git";
+        argv[0] = try git_fixture.git();
         @memcpy(argv[1..][0..args.len], args);
         const result = try bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.repo.root_abs } });
         gpa.free(result.stderr);
