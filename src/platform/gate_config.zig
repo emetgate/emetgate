@@ -3,7 +3,7 @@ const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
 
 pub const rule_id = "gate-config";
-pub const rule_text = "emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config) is changed by hand by the user";
+pub const rule_text = "under lockdown emetgate's own configuration (.mcp.json, the project Claude settings and agents, the rules ledger, the git hooks and git config) is changed by hand by the user";
 
 pub const ledger_dir = shadow.workspace_dir;
 pub const ledger_name = memory.ledger_name;
@@ -13,13 +13,23 @@ pub const git_config = git_dir ++ "/config";
 pub const git_hooks = git_dir ++ "/hooks";
 pub const agents = ".claude/agents";
 
-pub const tracked_files = [_][]const u8{ ".mcp.json", ".claude/settings.json", ".claude/settings.local.json" };
+pub const tracked_files = [_][]const u8{ ".mcp.json", ".claude/settings.json" };
 pub const tracked_dirs = [_][]const u8{agents};
 pub const files = tracked_files ++ [_][]const u8{git_config};
 pub const dirs = tracked_dirs ++ [_][]const u8{git_hooks};
 
-const kept_config_sections = [_][]const u8{ "branch", "remote" };
-const kept_config_keys = [_][]const u8{ "remote", "merge", "pushremote", "rebase", "description", "url", "pushurl", "fetch", "push" };
+const any_key_sections = [_][]const u8{ "branch", "user", "init" };
+const remote_keys = [_][]const u8{ "url", "pushurl", "fetch", "push", "mirror", "tagopt", "prune", "prunetags", "skipdefaultupdate", "skipfetchall", "promisor", "partialclonefilter" };
+const submodule_keys = [_][]const u8{ "url", "active", "branch" };
+const submodule_updates = [_][]const u8{ "checkout", "rebase", "merge", "none" };
+const core_keys = [_][]const u8{ "sparsecheckout", "sparsecheckoutcone", "repositoryformatversion", "bare", "logallrefupdates", "ignorecase", "precomposeunicode", "filemode", "symlinks" };
+const SafeKey = struct { section: []const u8, name: []const u8 };
+const safe_keys = [_]SafeKey{
+    .{ .section = "extensions", .name = "worktreeconfig" },
+    .{ .section = "pull", .name = "rebase" },
+    .{ .section = "push", .name = "default" },
+    .{ .section = "fetch", .name = "prune" },
+};
 
 pub fn covers(path: []const u8) bool {
     for (files) |file| {
@@ -50,17 +60,31 @@ pub fn inGitDir(path: []const u8) ?[]const u8 {
     return null;
 }
 
-pub fn keptConfigKey(key: []const u8) bool {
+pub fn safeConfigEntry(key: []const u8, value: []const u8) bool {
     const first = std.mem.indexOfScalar(u8, key, '.') orelse return false;
     const last = std.mem.lastIndexOfScalar(u8, key, '.') orelse return false;
-    if (last == first) return false;
     const section = key[0..first];
     const name = key[last + 1 ..];
-    for (kept_config_sections) |kept| {
-        if (!std.ascii.eqlIgnoreCase(section, kept)) continue;
-        for (kept_config_keys) |allowed| {
-            if (std.ascii.eqlIgnoreCase(name, allowed)) return true;
-        }
+    const nested = last != first;
+    if (anyOf(section, &any_key_sections)) return true;
+    if (std.ascii.eqlIgnoreCase(section, "remote")) return !nested or anyOf(name, &remote_keys);
+    if (std.ascii.eqlIgnoreCase(section, "submodule")) {
+        if (!nested) return false;
+        if (anyOf(name, &submodule_keys)) return true;
+        return std.ascii.eqlIgnoreCase(name, "update") and anyOf(value, &submodule_updates);
+    }
+    if (std.ascii.eqlIgnoreCase(section, "gc")) return std.ascii.indexOfIgnoreCase(name, "hook") == null;
+    if (nested) return false;
+    if (std.ascii.eqlIgnoreCase(section, "core")) return anyOf(name, &core_keys);
+    for (safe_keys) |safe| {
+        if (std.ascii.eqlIgnoreCase(section, safe.section) and std.ascii.eqlIgnoreCase(name, safe.name)) return true;
+    }
+    return false;
+}
+
+fn anyOf(text: []const u8, list: []const []const u8) bool {
+    for (list) |item| {
+        if (std.ascii.eqlIgnoreCase(text, item)) return true;
     }
     return false;
 }
@@ -80,15 +104,50 @@ fn samePath(a: []const u8, b: []const u8) bool {
 }
 
 test "gate config: the gate's own files and folders are covered, case and slashes aside, and nothing else is" {
-    for ([_][]const u8{ ".mcp.json", ".MCP.JSON", ".claude/settings.json", ".claude\\settings.local.json", ".claude/agents/a.md", ".claude/agents/deep/b.md", ".emetgate/ledger.ndjson", ".emetgate/LEDGER.ndjson.emetgate-0123.bak", ".git/config", ".git/hooks/pre-commit" }) |path| {
+    for ([_][]const u8{ ".mcp.json", ".MCP.JSON", ".claude/settings.json", ".claude\\Settings.json", ".claude/agents/a.md", ".claude/agents/deep/b.md", ".emetgate/ledger.ndjson", ".emetgate/LEDGER.ndjson.emetgate-0123.bak", ".git/config", ".git/hooks/pre-commit" }) |path| {
         try std.testing.expect(covers(path));
     }
-    for ([_][]const u8{ "a.mcp.json", ".claude/agents", ".claude/commands/rule.md", ".claude/settings.json.bak", ".git/index", ".emetgate/journal", ".emetgate/frozen-hold/1/0", ".emetgate/ledger.ndjson/x", "src/.mcp.json" }) |path| {
+    for ([_][]const u8{ "a.mcp.json", ".claude/settings.local.json", ".claude/agents", ".claude/commands/rule.md", ".claude/settings.json.bak", ".git/index", ".emetgate/journal", ".emetgate/frozen-hold/1/0", ".emetgate/ledger.ndjson/x", "src/.mcp.json" }) |path| {
         try std.testing.expect(!covers(path));
     }
 }
 
-test "gate config: branch tracking and remote urls are kept in the git config, hook paths and the rest are not" {
-    for ([_][]const u8{ "branch.main.remote", "branch.Feature.merge", "remote.origin.url", "remote.origin.fetch" }) |key| try std.testing.expect(keptConfigKey(key));
-    for ([_][]const u8{ "core.hookspath", "core.fsmonitor", "remote.origin.uploadpack", "branch.autosetupmerge", "include.path", "alias.st" }) |key| try std.testing.expect(!keptConfigKey(key));
+test "gate config: the git config keeps branch, remote, user, submodule, sparse and worktree keys, and puts back hook paths, fsmonitor, aliases and includes" {
+    const Entry = struct { []const u8, []const u8 };
+    for ([_]Entry{
+        .{ "branch.main.remote", "origin" },
+        .{ "branch.Feature.merge", "refs/heads/Feature" },
+        .{ "branch.autosetupmerge", "always" },
+        .{ "remote.origin.url", "https://example.com/r.git" },
+        .{ "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*" },
+        .{ "user.email", "a@b.c" },
+        .{ "submodule.lib.url", "../lib.git" },
+        .{ "submodule.lib.active", "true" },
+        .{ "submodule.lib.update", "rebase" },
+        .{ "extensions.worktreeconfig", "true" },
+        .{ "core.sparsecheckout", "true" },
+        .{ "core.sparsecheckoutcone", "true" },
+        .{ "core.repositoryformatversion", "1" },
+        .{ "init.defaultbranch", "main" },
+        .{ "pull.rebase", "true" },
+        .{ "gc.auto", "0" },
+    }) |entry| try std.testing.expect(safeConfigEntry(entry[0], entry[1]));
+    for ([_]Entry{
+        .{ "core.hookspath", "elsewhere" },
+        .{ "core.fsmonitor", "evil" },
+        .{ "core.sshcommand", "evil" },
+        .{ "core.editor", "evil" },
+        .{ "alias.st", "!evil" },
+        .{ "include.path", "evil" },
+        .{ "includeif.gitdir:/x/.path", "evil" },
+        .{ "remote.origin.uploadpack", "evil" },
+        .{ "submodule.lib.update", "!evil" },
+        .{ "submodule.lib.update", "custom" },
+        .{ "url.evil.insteadof", "https://example.com/" },
+        .{ "credential.helper", "evil" },
+        .{ "filter.lfs.smudge", "evil" },
+        .{ "diff.x.textconv", "evil" },
+        .{ "gc.prunehook", "evil" },
+        .{ "unknown.key", "x" },
+    }) |entry| try std.testing.expect(!safeConfigEntry(entry[0], entry[1]));
 }

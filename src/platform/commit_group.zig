@@ -45,6 +45,7 @@ pub const Options = struct {
     linked: []const []const u8 = &shadow.dependency_dirs,
     runtime: ?*Runtime = null,
     tests: ?Tests = null,
+    guard_config: bool = false,
 };
 
 pub const Tests = struct {
@@ -255,7 +256,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
     // Mirror commit_plan.Session.open, but admit the gate-written working tree:
     // the frozen-file and commit-message rule gates still run, and the commit is
     // built from HEAD, yet preflight tolerates the already-written content.
-    switch (try rules.frozenGate(gpa, io, root, rels.items)) {
+    switch (try rules.frozenGate(gpa, io, root, rels.items, options.guard_config)) {
         .ok => {},
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },

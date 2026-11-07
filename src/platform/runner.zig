@@ -57,6 +57,7 @@ pub const Options = struct {
     linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    guard_config: bool = false,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
@@ -230,7 +231,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     defer lock.release();
     const rel = try relativeUnder(gpa, root, options.file_abs);
     defer gpa.free(rel);
-    var session = switch (try commit_plan.Session.open(gpa, io, root, options.commit, &.{rel})) {
+    var session = switch (try commit_plan.Session.open(gpa, io, root, options.guard_config, options.commit, &.{rel})) {
         .ok => |opened| opened,
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },

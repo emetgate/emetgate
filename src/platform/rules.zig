@@ -387,18 +387,18 @@ pub fn isFrozen(rule: Rule) bool {
 
 pub const gate_config_rule: Rule = .{ .id = gate_config.rule_id, .check = checks.frozen_name, .text = gate_config.rule_text };
 
-pub fn frozenGate(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !Gate {
+pub fn frozenGate(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8, guard_config: bool) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
-    return evaluateFrozen(gpa, enforced.rules, paths);
+    return evaluateFrozen(gpa, enforced.rules, paths, guard_config);
 }
 
-pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []const u8) !Gate {
+pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []const u8, guard_config: bool) !Gate {
     var list: std.ArrayList(Violation) = .empty;
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
     const at: Position = .{ .line = 1, .col = 1 };
-    for (paths) |path| {
+    if (guard_config) for (paths) |path| {
         if (!gate_config.covers(path)) continue;
         const owned = try ownViolation(gpa, gate_config_rule, path, at, at, "");
         std.mem.replaceScalar(u8, owned.file, '\\', '/');
@@ -406,7 +406,7 @@ pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []cons
             freeViolation(gpa, owned);
             return err;
         };
-    }
+    };
     for (rules) |rule| {
         if (!isFrozen(rule)) continue;
         const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;

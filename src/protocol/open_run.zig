@@ -96,7 +96,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     var audit: run_audit.Audit = undefined;
     try audit.begin(gpa, io, runtime, root_abs, policy.nested_roots, policy.allow_repo_memory);
     defer audit.deinit();
-    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env }) catch |err| switch (err) {
+    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env, .guard_config = policy.open_run }) catch |err| switch (err) {
         error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);

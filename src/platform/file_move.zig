@@ -48,6 +48,7 @@ pub const Options = struct {
     linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    guard_config: bool = false,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
     trace: ?*runner.Trace = null,
@@ -707,12 +708,12 @@ pub const Outcome = struct {
 
 const empty_plan: Plan = .{ .prepared = &.{}, .edits = &.{}, .created_dirs = &.{}, .resolver = .text, .fallback = null, .users = 0, .rewritten = 0, .interface_change = false };
 
-fn frozenEnds(gpa: Allocator, io: std.Io, root: []const u8, request: Request) !?batch.BatchResult {
+fn frozenEnds(gpa: Allocator, io: std.Io, root: []const u8, request: Request, guard_config: bool) !?batch.BatchResult {
     const from_rel = try repo.relativeUnder(gpa, root, request.from_abs);
     defer gpa.free(from_rel);
     const to_rel = try repo.relativeUnder(gpa, root, request.to_abs);
     defer gpa.free(to_rel);
-    return switch (try rules.frozenGate(gpa, io, root, &.{ from_rel, to_rel })) {
+    return switch (try rules.frozenGate(gpa, io, root, &.{ from_rel, to_rel }, guard_config)) {
         .ok => null,
         .violated => |report| .{ .rule_violation = report },
         .failed => |failure| .{ .rule_check_failed = failure },
@@ -726,7 +727,7 @@ pub fn tryMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Optio
     defer gpa.free(root);
     const lock = try shadow.Lock.acquire(io, root);
     defer lock.release();
-    if (try frozenEnds(gpa, io, root, options.request)) |refused| return .{ .plan = empty_plan, .result = refused };
+    if (try frozenEnds(gpa, io, root, options.request, options.guard_config)) |refused| return .{ .plan = empty_plan, .result = refused };
     const planned = try plan(gpa, io, runtime, root, options.request, options.language_service);
     errdefer planned.deinit(gpa);
     const created: []const []const u8 = @ptrCast(planned.created_dirs);
@@ -737,6 +738,7 @@ pub fn tryMoveFile(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Optio
         .linked = options.linked,
         .limits = options.limits,
         .allow_repo_memory = options.allow_repo_memory,
+        .guard_config = options.guard_config,
         .shadow_root = options.shadow_root,
         .gate_tree = options.gate_tree,
         .trace = options.trace,

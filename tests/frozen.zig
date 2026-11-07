@@ -182,18 +182,23 @@ test "frozen: a batch whose doc edit is in a frozen directory is refused" {
     try testing.expectEqualStrings(other_src, try env.read("src/other.ts"));
 }
 
-test "frozen: with no rule a write to the gate's own config is refused, with and without commits, and a file beside it is written" {
+test "frozen: under lockdown a write to the gate's own config is refused, with and without commits, and outside lockdown it is written" {
     try skipOffWindows();
     var case: Plain = undefined;
     try case.init(&files);
     defer case.deinit();
     const env = &case.env;
+    env.open_run = true;
     const before = try env.head();
     try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".mcp.json"), .content = "{}\n" }, green, false), before, ".mcp.json");
     try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".claude/settings.json"), .content = "{}\n", .message = message }, green, true), before, ".claude/settings.json");
     try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".claude/agents/free.md"), .content = "x\n", .message = message }, green, true), before, ".claude/agents/free.md");
     try testing.expect(contains((try env.call("emetgate_write", .{ .file = try env.abs(".mcp.json"), .content = "{}\n" }, green, false)).text, emetgate.gate_config.rule_id));
     try expectLanded(env, try env.call("emetgate_write", .{ .file = try env.abs("docs/new.md"), .content = "new\n", .message = message }, green, true), before);
+    env.open_run = false;
+    const open = try env.head();
+    try expectLanded(env, try env.call("emetgate_write", .{ .file = try env.abs(".mcp.json"), .content = "{}\n", .message = message }, green, true), open);
+    try testing.expectEqualStrings("{}\n", try env.read(".mcp.json"));
 }
 
 test "frozen: write_doc on a frozen file is refused with and without commits, and another doc is written" {
@@ -362,8 +367,8 @@ test "frozen: scan and the code gate skip it, and it is listed among the rules o
     const elsewhere = try rules.adoptedFor(testing.allocator, testing.io, case.repo.root_abs, "src/other.ts");
     defer elsewhere.deinit();
     try testing.expectEqual(@as(usize, 0), elsewhere.items.len);
-    try testing.expect(try rules.evaluateFrozen(testing.allocator, &.{.{ .id = "r", .check = "frozen", .where = "src/util.ts" }}, &.{ "src\\other.ts", "docs/guide.md" }) == .ok);
-    const gated = try rules.evaluateFrozen(testing.allocator, &.{.{ .id = "r", .check = "frozen", .where = "src/" }}, &.{ "src\\other.ts", "docs/guide.md", "SRC/util.ts" });
+    try testing.expect(try rules.evaluateFrozen(testing.allocator, &.{.{ .id = "r", .check = "frozen", .where = "src/util.ts" }}, &.{ "src\\other.ts", "docs/guide.md" }, false) == .ok);
+    const gated = try rules.evaluateFrozen(testing.allocator, &.{.{ .id = "r", .check = "frozen", .where = "src/" }}, &.{ "src\\other.ts", "docs/guide.md", "SRC/util.ts" }, false);
     defer gated.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), gated.violated.violations.len);
     try testing.expectEqualStrings("src/other.ts", gated.violated.violations[0].file);

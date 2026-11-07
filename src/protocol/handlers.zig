@@ -150,7 +150,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, runtime, args, event, policy.root, policy.read_budget);
-    if (std.mem.eql(u8, name, "emetgate_git_write")) return git_write.callGitWrite(gpa, io, args, event, policy.root);
+    if (std.mem.eql(u8, name, "emetgate_git_write")) return git_write.callGitWrite(gpa, io, args, event, policy.root, policy.open_run);
     if (std.mem.eql(u8, name, "emetgate_run")) {
         const result = try run_tool.callRun(gpa, io, runtime, args, event, policy);
         return if (policy.open_run) rawCode(gpa, policy, result) else result;
@@ -670,6 +670,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
+        .guard_config = policy.open_run,
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .trace = &event.trace,
@@ -767,6 +768,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .runtime = runtime,
+        .guard_config = policy.open_run,
         .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = policy.typecheck_command orelse "", .allow_repo_config = policy.allow_repo_config },
     });
     defer result.deinit(gpa);
@@ -919,6 +921,7 @@ fn writeDocInto(gpa: Allocator, io: std.Io, file: []const u8, hash_hex: []const 
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
+        .guard_config = policy.open_run,
         .shadow_root = policy.shadow_root,
         .commit = if (commit) |*request| request else null,
         .gate_tree = policy.treeChoice(),
@@ -1325,7 +1328,7 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, code_used);
     defer gpa.free(before_hashes);
     for (edits[0..code_used], before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits[0..code_used], .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
+    const options: batch_mod.BatchOptions = .{ .edits = edits[0..code_used], .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .guard_config = policy.open_run, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits[0..code_used], options);

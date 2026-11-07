@@ -101,7 +101,7 @@ const Plan = struct {
     failed: bool = false,
 };
 
-pub const Options = struct { ledger_open: bool = false };
+pub const Options = struct { guard_config: bool = false, ledger_open: bool = false };
 
 pub const Hold = struct {
     io: std.Io,
@@ -116,6 +116,8 @@ pub const Hold = struct {
     dir_abs: []const u8 = "",
     dir_made: bool = false,
     ledger_open: bool = false,
+    guard_config: bool = false,
+    kept_dirs: std.StringArrayHashMapUnmanaged(void) = .empty,
     scopes: []const Scope = &.{},
     head: ?[]const u8 = null,
     refs: []const u8 = "",
@@ -166,7 +168,7 @@ pub const Hold = struct {
     }
 
     fn guarded(self: *Hold, path: []const u8) bool {
-        if (!gate_config.covers(path)) return false;
+        if (!self.guard_config or !gate_config.covers(path)) return false;
         return !(self.ledger_open and gate_config.isLedger(path));
     }
 
@@ -270,6 +272,7 @@ pub const Hold = struct {
                 if (self.covers(path)) try found.append(self.arena(), path);
             }
         }
+        if (!self.guard_config) return found.items;
         for (gate_config.files) |path| {
             if (try self.seenAt(path) != .absent) try found.append(self.arena(), path);
         }
@@ -295,6 +298,7 @@ pub const Hold = struct {
             else => |e| return e,
         };
         defer dir.close(self.io);
+        try self.keepDir(rel);
         var it = dir.iterate();
         while (try it.next(self.io)) |entry| {
             const child = try std.fmt.allocPrint(self.arena(), "{s}/{s}", .{ rel, entry.name });
@@ -315,10 +319,27 @@ pub const Hold = struct {
         return self.dir_abs;
     }
 
+    fn dirKey(self: *Hold, rel: []const u8) ![]const u8 {
+        const key = try std.ascii.allocLowerString(self.arena(), rel);
+        std.mem.replaceScalar(u8, key, '\\', '/');
+        return key;
+    }
+
+    fn keepDir(self: *Hold, rel: []const u8) !void {
+        var dir = rel;
+        while (true) {
+            try self.kept_dirs.put(self.arena(), try self.dirKey(dir), {});
+            dir = dir[0 .. std.mem.lastIndexOfAny(u8, dir, "/\\") orelse return];
+        }
+    }
+
     fn keepCopies(self: *Hold) !void {
         const entries = try self.listIndex();
         for (entries.keys(), entries.values()) |path, lines| try self.files.put(self.arena(), path, .{ .index = lines });
         for (try self.working()) |path| _ = try self.files.getOrPutValue(self.arena(), path, .{});
+        for (self.files.keys()) |path| {
+            if (std.mem.lastIndexOfAny(u8, path, "/\\")) |slash| try self.keepDir(path[0..slash]);
+        }
         for (self.files.keys(), self.files.values(), 0..) |path, *file, n| {
             file.seen = try self.seenAt(path);
             if (file.seen != .file) continue;
@@ -343,8 +364,9 @@ pub const Hold = struct {
         };
         if (stat.kind == .directory) try Dir.cwd().deleteDir(self.io, path) else try Dir.cwd().deleteFile(self.io, path);
         var parent = rel;
-        while (std.mem.lastIndexOfScalar(u8, parent, '/')) |slash| {
+        while (std.mem.lastIndexOfAny(u8, parent, "/\\")) |slash| {
             parent = parent[0..slash];
+            if (self.kept_dirs.contains(try self.dirKey(parent))) break;
             Dir.cwd().deleteDir(self.io, try self.abs(parent)) catch break;
         }
     }
@@ -718,8 +740,10 @@ fn sameGuardedConfig(old: []const u8, new: []const u8) bool {
 
 fn nextGuardedEntry(entries: *std.mem.TokenIterator(u8, .scalar)) ?[]const u8 {
     while (entries.next()) |entry| {
-        const key = entry[0 .. std.mem.indexOfScalar(u8, entry, '\n') orelse entry.len];
-        if (!gate_config.keptConfigKey(key)) return entry;
+        const split = std.mem.indexOfScalar(u8, entry, '\n');
+        const key = entry[0 .. split orelse entry.len];
+        const value = if (split) |at| entry[at + 1 ..] else "";
+        if (!gate_config.safeConfigEntry(key, value)) return entry;
     }
     return null;
 }
@@ -741,9 +765,14 @@ fn hashFile(io: std.Io, path: []const u8) !Digest {
     return digest;
 }
 
-pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Options) !*Hold {
+pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Options) !?*Hold {
     const enforced = try rules.peek(gpa, io, root_abs);
     defer enforced.deinit();
+    if (!options.guard_config) {
+        for (enforced.rules) |rule| {
+            if (rules.isFrozen(rule)) break;
+        } else return null;
+    }
 
     const state = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(state);
@@ -752,7 +781,7 @@ pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Options)
     const a = state.allocator();
 
     const hold = try a.create(Hold);
-    hold.* = .{ .io = io, .root_abs = root_abs, .state = state, .ledger_open = options.ledger_open };
+    hold.* = .{ .io = io, .root_abs = root_abs, .state = state, .ledger_open = options.ledger_open, .guard_config = options.guard_config };
     var scopes: std.ArrayList(Scope) = .empty;
     for (enforced.rules) |rule| {
         if (!rules.isFrozen(rule)) continue;

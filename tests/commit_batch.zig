@@ -59,6 +59,7 @@ pub const Env = struct {
     repo: *TsRepo,
     runtime: *Runtime,
     session: ?*tsserver.Session = null,
+    open_run: bool = false,
 
     pub fn init(repo: *TsRepo, runtime: *Runtime, session: ?*tsserver.Session) Env {
         return .{ .arena_state = std.heap.ArenaAllocator.init(testing.allocator), .repo = repo, .runtime = runtime, .session = session };
@@ -112,7 +113,7 @@ pub const Env = struct {
 
     pub fn call(self: *Env, tool: []const u8, args: anytype, test_command: []const u8, commit: bool) !Reply {
         var event: telemetry.Event = .{ .tool = tool };
-        const policy: Policy = .{ .root = self.repo.root_abs, .test_command = test_command, .commit = commit, .language_service = self.session };
+        const policy: Policy = .{ .root = self.repo.root_abs, .test_command = test_command, .commit = commit, .language_service = self.session, .open_run = self.open_run };
         const result = try handlers.callTool(testing.allocator, testing.io, self.runtime, tool, try toValue(self.arena(), args), &event, policy);
         defer testing.allocator.free(result.text);
         return .{ .text = try self.arena().dupe(u8, result.text), .is_error = result.is_error };
