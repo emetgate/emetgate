@@ -30,7 +30,7 @@ runs:
           Invoke-WebRequest $url -OutFile $zip
         }
         New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\zig" | Out-Null
-        tar -xf $zip -C "$env:RUNNER_TEMP\zig"
+        & "$env:SystemRoot\System32\tar.exe" -xf $zip -C "$env:RUNNER_TEMP\zig"
         if ($LASTEXITCODE -ne 0) { exit 1 }
         Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
     - shell: pwsh
@@ -50,7 +50,7 @@ runs:
         $zip = "$env:RUNNER_TEMP\downloads\$name.zip"
         if (-not (Test-Path $zip)) { Invoke-WebRequest $url -OutFile $zip }
         New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\rg" | Out-Null
-        tar -xf $zip -C "$env:RUNNER_TEMP\rg"
+        & "$env:SystemRoot\System32\tar.exe" -xf $zip -C "$env:RUNNER_TEMP\rg"
         if ($LASTEXITCODE -ne 0) { exit 1 }
         $dir = "$env:RUNNER_TEMP\rg\$name"
         Add-Content -Path $env:GITHUB_PATH -Value $dir
