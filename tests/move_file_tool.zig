@@ -5,6 +5,7 @@ const disk = @import("emetgate").disk;
 const symbol = @import("emetgate").symbol;
 const fixture = @import("ts_fixture.zig");
 const tool = @import("rename_tool.zig");
+const git_fixture = @import("git_fixture.zig");
 
 const testing = std.testing;
 pub const Case = tool.Case;
@@ -83,7 +84,7 @@ pub fn moveFile(case: *Case, args: Args) !file_move.Outcome {
 }
 
 pub fn tracked(case: *Case, rel: []const u8) !bool {
-    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = case.repo.root_abs } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "ls-files", "--", rel }, .cwd = .{ .path = case.repo.root_abs } });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
     return std.mem.trim(u8, result.stdout, " \r\n").len != 0;

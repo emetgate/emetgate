@@ -63,7 +63,7 @@ const Case = struct {
 
     fn gitRaw(self: *Case, argv: []const []const u8) !?[]const u8 {
         var full: std.ArrayList([]const u8) = .empty;
-        try full.append(self.arena(), "git");
+        try full.append(self.arena(), try git_fixture.git());
         try full.appendSlice(self.arena(), argv);
         const result = try @import("emetgate").bounded_run.run(self.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = self.repo.root_abs }, .stdout_limit = .limited(4 * 1024 * 1024) });
         return switch (result.term) {

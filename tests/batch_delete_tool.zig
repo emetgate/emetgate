@@ -7,6 +7,7 @@ const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const support = @import("runner_support.zig");
+const git_fixture = @import("git_fixture.zig");
 const TwoFile = support.TwoFile;
 const hashOfRef = support.hashOfRef;
 
@@ -28,7 +29,7 @@ const StopAt = struct {
 };
 
 fn tracked(root: []const u8, rel: []const u8) !bool {
-    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = root } });
+    const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "ls-files", "--", rel }, .cwd = .{ .path = root } });
     defer testing.allocator.free(result.stdout);
     defer testing.allocator.free(result.stderr);
     return std.mem.trim(u8, result.stdout, " \r\n").len != 0;

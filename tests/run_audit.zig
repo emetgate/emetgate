@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const emetgate = @import("emetgate");
+const git_fixture = @import("git_fixture.zig");
 
 const memory = emetgate.memory;
 const rules = emetgate.rules;
@@ -50,7 +51,7 @@ const Fixture = struct {
     fn gitOut(self: *Fixture, cwd: []const u8, args: []const []const u8, env: ?*const std.process.Environ.Map) ![]const u8 {
         const a = self.arena_state.allocator();
         var argv: std.ArrayList([]const u8) = .empty;
-        try argv.append(a, "git");
+        try argv.append(a, try git_fixture.git());
         try argv.appendSlice(a, args);
         const result = try bounded_run.run(a, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd }, .environ_map = env });
         switch (result.term) {

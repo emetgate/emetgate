@@ -37,7 +37,7 @@ const Repo = struct {
     fn out(self: *Repo, argv: []const []const u8) ![]u8 {
         var full: std.ArrayList([]const u8) = .empty;
         defer full.deinit(testing.allocator);
-        try full.append(testing.allocator, "git");
+        try full.append(testing.allocator, try git_fixture.git());
         try full.appendSlice(testing.allocator, argv);
         const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = full.items, .cwd = .{ .path = self.root } });
         defer testing.allocator.free(result.stderr);

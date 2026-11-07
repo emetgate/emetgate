@@ -4,6 +4,7 @@ const emetgate = @import("emetgate");
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
 const common = @import("commit_batch.zig");
+const git_fixture = @import("git_fixture.zig");
 
 const symbol = emetgate.symbol;
 const disk = emetgate.disk;
@@ -84,7 +85,7 @@ fn status(env: *Env) ![]const u8 {
 
 fn gitFails(env: *Env, argv: []const []const u8) !bool {
     var full: std.ArrayList([]const u8) = .empty;
-    try full.append(env.arena(), "git");
+    try full.append(env.arena(), try git_fixture.git());
     try full.appendSlice(env.arena(), argv);
     const result = try @import("emetgate").bounded_run.run(env.arena(), testing.io, .{ .argv = full.items, .cwd = .{ .path = env.repo.root_abs } });
     return switch (result.term) {
@@ -413,7 +414,7 @@ test "commit protocol: the files put back into the shadow are byte for byte what
     for (paths) |path| {
         const path_arg = try std.fmt.allocPrint(env.arena(), "--path={s}", .{path});
         const spec = try std.fmt.allocPrint(env.arena(), "HEAD:{s}", .{path});
-        var argv = [_][]const u8{ "git", "cat-file", "--filters", path_arg, spec };
+        var argv = [_][]const u8{ try git_fixture.git(), "cat-file", "--filters", path_arg, spec };
         const filtered = try @import("emetgate").bounded_run.run(env.arena(), testing.io, .{ .argv = &argv, .cwd = .{ .path = case.repo.root_abs } });
         const got = try std.Io.Dir.cwd().readFileAlloc(testing.io, try std.fmt.allocPrint(env.arena(), "{s}\\{s}", .{ out, path }), env.arena(), .unlimited);
         try testing.expectEqualStrings(filtered.stdout, got);
