@@ -340,7 +340,7 @@ test "scan tool: one call has a total operation budget, and the files past it co
         .{ "src/e.ts", file }, .{ "src/f.ts", file }, .{ "src/g.ts", file }, .{ "src/h.ts", file },
     });
     defer repo.deinit();
-    var reply = try call(&repo, .{ .check = "q:((string_fragment) @violation (#match? @violation \"" ++ "a?" ** 150 ++ "b\"))" });
+    var reply = try call(&repo, .{ .check = "q:((string_fragment) @violation (#match? @violation \"(?:a|b){250}[!?]\"))" });
     defer reply.deinit();
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings("check_failed", reply.field("status").string);

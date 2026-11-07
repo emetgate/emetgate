@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2876**
-- Mutations declared in `tests/mutations.json`: **1985**
-  - killed: **1935**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2882**
+- Mutations declared in `tests/mutations.json`: **1989**
+  - killed: **1939**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -50,7 +50,7 @@ python tools/verification_page.py --check
 
 ### CAS and the parsing engine
 
-144 mutation(s).
+141 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -146,17 +146,14 @@ python tools/verification_page.py --check
 | `NL14-literal-pair-kind-ignored` | `src/engine/checks.zig` | `if (isKind(node, shape.pair)) {         if (shape.pair_parent` -> `if (true) {         if (shape.pair_parent` | c#: no_literal flags named arguments, attributes, initializers, anonymous objec...; pytho... | killed |
 | `CMD1-cmd-prefix-dropped` | `src/engine/checks.zig` | `if (!std.mem.startsWith(u8, spec, command_prefix)) return null;` -> `if (!std.mem.startsWith(u8, spec, command_prefix)) return spec;` | only a cmd: prefix names a command predicate, and every other spec stays a regi...; an un... | killed |
 | `CMD2-empty-command-accepted-on-add` | `src/engine/checks.zig` | `if (std.mem.trim(u8, command, command_whitespace).len == 0) ret...` -> `` | rule: an empty or blank cmd: check is refused before the ledger is touched | killed |
-| `Q8-regex-backreference-read-as-literal` | `src/engine/regex.zig` | `'1'...'9' => self.unsupported("backreference", at, 2),` -> `'1'...'9' => self.single(ch),` | regex refuses every construct outside the subset by name; rule: a q: check without @viola... | killed |
-| `Q9-regex-lazy-quantifier-not-named` | `src/engine/regex.zig` | `if (after == '?') return self.unsupported("lazy quantifier", at...` -> `` | regex refuses every construct outside the subset by name | killed |
-| `Q11-regex-budget-ignored` | `src/engine/regex.zig` | `if (budget.* == 0) return error.BudgetExceeded;` -> `if (false) return error.BudgetExceeded;` | running out of budget is an error and never a miss; q: regex work counts against the same... | killed |
+| `RX1-regex-unsupported-escape-read-as-syntax` | `src/engine/regex.zig` | `c.PCRE2_ERROR_UNSUPPORTED_ESCAPE_SEQUENCE, c.PCRE2_ERROR_POSIX_...` -> `c.PCRE2_ERROR_UNSUPPORTED_ESCAPE_SEQUENCE, c.PCRE2_ERROR_POSIX_...` | regex refuses escapes PCRE2 does not implement as unsupported; q: a regex PCRE2 refuses i... | killed |
+| `RX2-regex-limit-read-as-no-match` | `src/engine/regex.zig` | `if (rc < 0) return error.BudgetExceeded;` -> `if (rc < 0) return null;` | a catastrophic pattern stops at the match limit instead of running away; a counted match ... | killed |
+| `RX3-regex-callout-step-uncharged` | `src/engine/regex.zig` | `budget.* -= 1;     return 0;` -> `return 0;` | a counted match charges the text and every pattern step, and running out is an ... | killed |
+| `RX4-regex-text-uncharged` | `src/engine/regex.zig` | `if (budget.* < text.len + 1) return error.BudgetExceeded;      ...` -> `` | a counted match charges the text and every pattern step, and running out is an ... | killed |
+| `RX5-regex-span-starts-at-its-end` | `src/engine/regex.zig` | `const start = @min(ovector[0], ovector[1]);` -> `const start = ovector[1];` | regex reports where a match starts and ends in bytes; a regex line match reports where th... | killed |
+| `RX6-regex-error-at-keeps-invalid-utf8` | `src/engine/regex.zig` | `return if (std.unicode.utf8ValidateSlice(window)) window else "...` -> `return window;` | regex refuses invalid UTF-8 in the pattern and points at nothing inside it | killed |
 | `Q14-language-mismatch-reported-as-malformed` | `src/engine/checks.zig` | `error.QueryNotForLanguage else error.QueryMalformed` -> `error.QueryMalformed else error.QueryMalformed` | conformance: a q: query over a node only one grammar has is a named failure els...; redte... | killed |
 | `Q16-query-that-compiles-nowhere-accepted` | `src/engine/checks.zig` | `if (!any) return results[0].err.?;` -> `` | rule: a q: check that compiles for no language is refused and writes nothing | killed |
-| `Q28-regex-vim-word-boundary-read-as-literal` | `src/engine/regex.zig` | `'<', '>' => if (in_class) self.single(ch) else self.unsupported...` -> `` | regex refuses GNU and Vim word boundaries and buffer anchors instead of reading... | killed |
-| `Q29-regex-shorthand-range-start-accepted` | `src/engine/regex.zig` | `if (lo.len != 1 or lo[0].lo != lo[0].hi) return self.syntax("cl...` -> `if (false and (lo.len != 1 or lo[0].lo != lo[0].hi)) return sel...` | regex refuses a class shorthand as the start of a range, as RE2 does | killed |
-| `Q30-regex-invalid-utf8-pattern-read-as-replacement` | `src/engine/regex.zig` | `const code_point = std.unicode.utf8Decode(rest[0..len]) catch r...` -> `const code_point = std.unicode.utf8Decode(rest[0..len]) catch 0...` | regex refuses invalid UTF-8 in the pattern | killed |
-| `Q31-regex-error-at-ends-inside-a-character` | `src/engine/regex.zig` | `while (end < self.pattern.len and isContinuation(self.pattern[e...` -> `while (false and end < self.pattern.len and isContinuation(self...` | regex errors point at whole characters, never into the middle of one | killed |
-| `RX1-class-probe-uncharged` | `src/engine/regex.zig` | `while (lo < hi) {         try spend(budget);` -> `while (lo < hi) {         _ = budget;` | a class of many ranges is searched in logarithmic steps and every step is charg... | killed |
-| `RX2-class-search-wrong-half` | `src/engine/regex.zig` | `if (code_point < ranges[mid].lo) {` -> `if (code_point > ranges[mid].lo) {` | a class of many ranges is searched in logarithmic steps and every step is charg... | killed |
 | `ZS1-test-name-escapes-not-decoded` | `tests/zig_source.zig` | `.string_literal => try names.append(arena, .{ .name = try std.z...` -> `.string_literal => try names.append(arena, .{ .name = text, .de...` | harness: kill names come only from files a suite compiles, with escapes decoded...; harne... | killed |
 | `ZS2-identifier-tests-ignored` | `tests/zig_source.zig` | `.identifier => try names.append(arena, .{ .name = text, .decl =...` -> `.identifier => {},` | harness: kill names come only from files a suite compiles, with escapes decoded... | killed |
 | `ZS3-imports-not-followed` | `tests/zig_source.zig` | `try pending.append(arena, try std.fs.path.resolvePosix(arena, &...` -> `_ = try std.fs.path.resolvePosix(arena, &.{ base, target });` | harness: kill names come only from files a suite compiles, with escapes decoded...; harne... | killed |
@@ -765,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1319 mutation(s).
+1326 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -837,8 +834,8 @@ python tools/verification_page.py --check
 | `RO3-rules-dropped-from-the-skeleton` | `src/protocol/handlers.zig` | `, text, adopted.items, if (docs)` -> `, text, &.{}, if (docs)` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
 | `RM13-mcp-try-forces-trust` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `RM14-mcp-try-drops-the-flag` | `src/protocol/handlers.zig` | `.new_body = body,         .test_command = test_command,        ...` -> `.new_body = body,         .test_command = test_command,        ...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = true, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
-| `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .shadow_root` -> `.allow_repo_memory = false, .shadow_root` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM15-mcp-batch-forces-trust` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .guard_config = ...` -> `.allow_repo_memory = true, .guard_config = policy.open_run, .sh...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
+| `RM16-mcp-batch-drops-the-flag` | `src/protocol/handlers.zig` | `.allow_repo_memory = policy.allow_repo_memory, .guard_config = ...` -> `.allow_repo_memory = false, .guard_config = policy.open_run, .s...` | redteam ledger: over mcp only the flag emetgate was started with trusts a commi... | killed |
 | `CB2-mcp-scan-without-call-budget` | `src/protocol/handlers.zig` | `.call_operations = max_scan_operations,` -> `.call_operations = null,` | scan tool: one call has a total operation budget, and the files past it come ba... | killed |
 | `ZS6-a-test-file-left-out-of-the-binary` | `test_root.zig` | `_ = @import("tests/lockdown.zig");` -> `` | suites: every test file under tests/ is imported exactly once by test_root.zig | killed |
 | `ZIG1-pub-check-inverted` | `src/engine/lang/profile.zig` | `if (std.mem.eql(u8, keyword, word)) return true;` -> `if (std.mem.eql(u8, keyword, word)) return false;` | zig: a pub top-level function is unbounded, a private one called in-file is bou... | killed |
@@ -974,8 +971,13 @@ python tools/verification_page.py --check
 | `SW2-watch-overflow-read-as-clean` | `src/platform/search_session.zig` | `reason = "overflow";` -> `reason = "";` | search freshness: a burst that overflows the watch buffer falls back to a full ... | killed |
 | `SW3-git-index-change-ignored` | `src/platform/search_session.zig` | `const list_changed = !(if (self.git_stamp) \|saved\| sameGitSta...` -> `const list_changed = self.git_stamp == null;` | search freshness: a git add and a git rm that change the tracked set are picked...; searc... | killed |
 | `SW4-dirty-file-not-reindexed` | `src/platform/search_session.zig` | `try self.applyPrepared(root, todo.items, seen, false);         ...` -> `_ = .{ root, seen };         self.last.updated = todo.items.len;` | search freshness: a tracked file written and searched with no pause is found, 2...; searc... | killed |
-| `RH1-hint-ignores-top-level-alternation` | `src/engine/regex_hint.zig` | `if (hasTopLevelAlternation(pattern)) return pattern[0..0];` -> `` | longestLiteralChunk never returns text a match can do without | killed |
-| `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `if (i > r) best.close(run, i - 1);` -> `if (i > r) best.close(run, i);` | longestLiteralChunk never returns text a match can do without; a regex whose literal part... | killed |
+| `RH1-hint-ignores-top-level-alternation` | `src/engine/regex_hint.zig` | `.alternation => if (depth == 0) return pattern[0..0],` -> `.alternation => {},` | longestLiteralChunk never returns text a match can do without | killed |
+| `RH2-hint-keeps-an-optional-character` | `src/engine/regex_hint.zig` | `.optional => if (run) \|r\| keep(&best, pattern[r..last]),` -> `.optional => if (run) \|r\| keep(&best, pattern[r..t.start]),` | longestLiteralChunk never returns text a match can do without; every line a regex matches... | killed |
+| `RH3-required-literals-keep-a-branch-without-literal` | `src/engine/regex_hint.zig` | `if (literal.len == 0) return out[0..0];` -> `` | requiredLiterals gives nothing when one branch can match without any literal | killed |
+| `RH4-hint-reads-a-flag-group-as-literal` | `src/engine/regex_hint.zig` | `if (std.mem.indexOfScalar(u8, "imnsxJUar^-)", pattern[t.end + 1...` -> `` | longestLiteralChunk gives nothing for constructs that change what a literal mea...; every... | killed |
+| `RH5-hint-reads-a-code-escape-as-literal` | `src/engine/regex_hint.zig` | `if (std.mem.indexOfScalar(u8, "xocNgkpPQ", c) != null) return f...` -> `` | longestLiteralChunk gives nothing for constructs that change what a literal mea... | killed |
+| `RH6-hint-unwraps-a-lookaround-group` | `src/engine/regex_hint.zig` | `if (!noncapturing and pattern.len > 1 and (pattern[1] == '?' or...` -> `` | requiredLiterals gives nothing when one branch can match without any literal | killed |
+| `RH7-hint-class-ends-at-a-leading-bracket` | `src/engine/regex_hint.zig` | `if (i < p.len and p[i] == ']') i += 1;` -> `` | longestLiteralChunk skips over a character class rather than splitting inside it | killed |
 | `SW5-index-loaded-before-the-watcher-starts` | `src/platform/search_session.zig` | `self.startWatcher();         self.git_index = gitIndexPath(self...` -> `self.git_index = gitIndexPath(self.gpa, self.io, root) catch nu...` | search on disk: a new session loads the saved index after its watcher started a... | killed |
 | `SW6-loaded-index-trusted-without-a-restat` | `src/platform/search_session.zig` | `try self.reconcile(root, listed, &report);` -> `if (false) try self.reconcile(root, listed, &report);` | search on disk: a new session loads the saved index after its watcher started a...; a fil... | killed |
 | `WR1-compact-reply-drops-new-hash` | `src/protocol/wire.zig` | `try js.objectField("new_hash");     try js.write(new_hex[0..]);...` -> `if (full) {         try js.objectField("new_hash");         try...` | compact committed payload drops the old hash and the shadow note | killed |
@@ -1097,8 +1099,10 @@ python tools/verification_page.py --check
 | `EV14-term-lines-ignored` | `src/engine/evidence.zig` | `if (weight != 0) try weights.put(self.arena, n, weight);` -> `if (false) try weights.put(self.arena, n, weight);` | evidence: a decides target that does not fit keeps every branch with a term who... | killed |
 | `EV15-cut-body-left-complete` | `src/engine/evidence.zig` | `if (!file_level.contains(path)) budget_files += 1;` -> `if (!file_level.contains(path)) budget_files += 0;` | evidence: a decides target that does not fit keeps every branch with a term who... | killed |
 | `IL1-index-load-failure-swallowed` | `src/platform/search_session.zig` | `.failed => \|why\| self.load_failure = why,` -> `.failed => {},` | search on disk: a damaged, cut or foreign index file is ignored and rebuilt | killed |
-| `TQ1-regex-budget-overrun-read-as-no-match` | `src/engine/text_query.zig` | `const matched = re.isMatchIn(scratch, line, &budget) catch {   ...` -> `const matched = re.isMatchIn(scratch, line, &budget) catch retu...` | a line that exhausts the regex step budget is reported, never read as no match; search an... | killed |
-| `RH3-required-literals-keep-only-the-first-branch` | `src/engine/regex_hint.zig` | `return out[0..n]; }  fn unwrapGroup` -> `return out[0..@min(n, 1)]; }  fn unwrapGroup` | every line a regex matches contains one of its required literals; requiredLiterals gives ... | killed |
+| `TQ1-regex-budget-overrun-read-as-no-match` | `src/engine/text_query.zig` | `error.BudgetExceeded => {                 most_steps.* = line_b...` -> `error.BudgetExceeded => {                 _ = most_steps;      ...` | a line that exhausts the regex step budget is reported, never read as no match; search an... | killed |
+| `TQ2-regex-hit-column-at-line-start` | `src/engine/text_query.zig` | `return .{ .hit = .{ .col = @intCast(span.start), .text = line[s...` -> `return .{ .hit = .{ .col = 0, .text = line[span.start..span.end...` | a regex line match reports where the match starts and the text it matched; a regex with f... | killed |
+| `SA9-search-reads-an-empty-line-after-the-last-newline` | `src/protocol/search_v1.zig` | `} else if (start == self.bytes.len and start != 0) {` -> `} else if (start == self.bytes.len and start != 0 and false) {` | search answers: a regex takes the PCRE2 dialect and never matches the empty lin... | killed |
+| `SA10-search-regex-refusal-without-its-message` | `src/protocol/search_v1.zig` | `outcome.regex = diag;` -> `` | search answers: a regex PCRE2 refuses is answered with its message and the text... | killed |
 | `SA1-partial-answer-reported-complete` | `src/protocol/search_v1.zig` | `try result.missing.append(gpa, .{ .path = item.path, .reason = ...` -> `{}` | search answers: a line that runs out of regex steps makes the answer partial an... | killed |
 | `SA2-unreadable-file-skipped-quietly` | `src/protocol/search_v1.zig` | `.unreadable, .link => {                 try self.missing.append...` -> `.unreadable, .link => .binary,` | search answers: a file that cannot be read makes the answer partial instead of ...; searc... | killed |
 | `SA3-file-given-as-dir-scoped-as-a-directory` | `src/protocol/search_v1.zig` | `if (scope.file) {         const id = view.find(scope.rel) orels...` -> `return view.dirRange(scope.rel);` | search answers: a file given as dir is searched by itself | killed |
@@ -1313,7 +1317,7 @@ python tools/verification_page.py --check
 | `VF5-symmetry-check-runs-without-the-checked-out-form` | `src/verify/checker.zig` | `if (!form.available) return outcome.raise(.unverified, not_chec...` -> `` | verify filtered commit: a rename whose files cannot be checked out is unverifie... | killed |
 | `VF6-symmetry-check-calls-unparsed-filter-output-a-mismatch` | `src/verify/checker.zig` | `if (!form.driven) continue;` -> `if (true or !form.driven) continue;` | verify filtered commit: a rename whose files cannot be checked out is unverifie... | killed |
 | `MB2-doc-edit-in-place-before-its-message-command` | `src/platform/doc_writer.zig` | `if (try runner.runMessageRules(gpa, io, root, runner.gateDir(lo...` -> `try workspace.writeFile(rel, applied.source);     if (try runne...` | redteam2 commit: a call cannot loosen the file its message command reads in the... | killed |
-| `FZ1-changed-paths-not-handed-to-the-frozen-gate` | `src/platform/commit_plan.zig` | `switch (try rules.frozenGate(gpa, io, root, rels)) {` -> `switch (try rules.frozenGate(gpa, io, root, rels[0..0])) {` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
+| `FZ1-changed-paths-not-handed-to-the-frozen-gate` | `src/platform/commit_plan.zig` | `switch (try rules.frozenGate(gpa, io, root, rels, guard_config)...` -> `switch (try rules.frozenGate(gpa, io, root, rels[0..0], guard_c...` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
 | `P1f-staged-entry-in-the-index-copy-not-compared` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, found.oid, was.oid.?) or !std.mem.eql(u8, ...` -> `if (false and (!std.mem.eql(u8, found.oid, was.oid.?) or !std.m...` | redteam2 commit: a change staged on the target between its last measurement and... | killed |
 | `P1g-commit-lands-on-the-branch-that-was-measured` | `src/platform/commit_plan.zig` | `const branch = try git_commit.branchNow(arena, io, root, head);` -> `const branch = head.branch;` | commit window: a HEAD that was pointed at another branch after the measurement ...; redte... | killed |
 | `P1h-recover-advances-an-entry-on-a-rewritten-index` | `src/platform/commit_intent.zig` | `break :untouched std.mem.eql(u8, &current, &base_digest);` -> `break :untouched std.mem.eql(u8, &current, &base_digest) or tru...` | commit window: an entry staged after the crash on an index that was never publi... | killed |
@@ -1881,7 +1885,7 @@ python tools/verification_page.py --check
 | `GC16-tombstones-left-behind` | `src/platform/cache_gc.zig` | `for (names.items) \|name\| settleTombstone(io, family, family_a...` -> `_ = report;` | an entry with a file held open and no lease survives the age rule and the size ... | killed |
 | `SL10-sweep-ignores-lease` | `src/platform/shadow_root.zig` | `error.Busy => return,` -> `error.Busy => return shadow.removeWorkspace(io, base_abs, works...` | sweep leaves a stale workspace whose lease a live process holds, and removes it... | killed |
 | `REDET2-late-command-not-reported` | `src/protocol/handlers.zig` | `const gated = test_command_mod.takeLate() orelse resolved;` -> `const gated = resolved;` | test detection: a batch that creates the project file with a failing test is re... | killed |
-| `FZ8-move-frozen-ends-checked-after-planning` | `src/platform/file_move.zig` | `if (try frozenEnds(gpa, io, root, options.request)) \|refused\|...` -> `_ = &frozenEnds;` | frozen: a file move with a frozen end is refused before the language service is... | killed |
+| `FZ8-move-frozen-ends-checked-after-planning` | `src/platform/file_move.zig` | `if (try frozenEnds(gpa, io, root, options.request, options.guar...` -> `_ = &frozenEnds;` | frozen: a file move with a frozen end is refused before the language service is... | killed |
 | `TN1-tool-names-never-match` | `src/engine/tool_names.zig` | `if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[...` -> `if (false) return .{ .start = start, .end = end };` | tool names: every known tool name is prefixed, the longest name wins and other ... | killed |
 | `TN2-tool-names-inside-words` | `src/engine/tool_names.zig` | `if ((start == 0 or !isIdent(prose[start - 1])) and known(prose[...` -> `if (known(prose[start..end])) return .{ .start = start, .end = ...` | tool names: every known tool name is prefixed, the longest name wins and other ... | killed |
 | `TN3-static-fix-not-prefixed` | `src/protocol/wire.zig` | `if (fix.dynamic) try js.write(fix.text) else try tool_names.wri...` -> `try js.write(fix.text);` | recovery hints: with a tool prefix computed and static fix lines name tools by ... | killed |

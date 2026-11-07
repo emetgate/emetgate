@@ -325,18 +325,18 @@ reports `f()` as well as `g(x)`. Leave out the `?` to require the node. Any othe
 predicate (`#is?`, `#lua-match?`, `#any-eq?` ...) is refused with `QueryUnknownPredicate`,
 and any directive (`#set!`, `#select-adjacent!` ...) with `QueryDirective`, both naming it.
 
-The regex is RE2 syntax run as a Thompson NFA: matching walks a set of states over the text,
-never backtracks, and takes time linear in the text. It searches: `#match? @c "Api"` holds when
-`Api` occurs anywhere in the capture's text; anchor with `^` and `$`, which mean the start and
-end of the whole text (there is no multi-line mode). `\d \w \s` are ASCII only, as in RE2:
-`\w` is `[0-9A-Za-z_]`, so it does not match `ş`. Supported: literals, `.` (any character but
-a newline), `[...]` and `[^...]`, `\d \w \s \D \W \S`, `^` and `$`, `* + ?`, `|` and `( )`.
-Anything else is refused with `RegexUnsupported` and its name: backreferences and named
-backreferences, lookahead, lookbehind, named and non-capturing groups, comments `(?#...)`,
-inline flags, lazy and possessive quantifiers, counted repetition `{n,m}` (escape a literal
-brace as `\{`), word boundaries `\b`, `\<` and `\>`, text anchors `\A`, `\z`, `` \` `` and
-`\'`, `\p{...}`, numeric escapes and POSIX classes. A pattern that is not valid UTF-8, or a
-class shorthand used as a range end point (`[\d-z]`), is refused with `RegexSyntax`.
+The regex is PCRE2 (`vendor/pcre2`, 10.49), the same dialect as `rg -P` and `grep -P`:
+backreferences, lookahead and lookbehind, named and non-capturing groups, inline flags such
+as `(?i)`, lazy and possessive quantifiers, counted repetition `{n,m}`, `\b`, `\p{...}`, POSIX
+classes, `\x{...}` and `\Q...\E` all work. It is compiled with `PCRE2_UTF | PCRE2_UCP`, so the
+pattern and the text are UTF-8 and `\w`, `\d`, `\b` and `[[:alpha:]]` follow Unicode: `\w`
+matches `ş`. It searches: `#match? @c "Api"` holds when `Api` occurs anywhere in the capture's
+text; `^` and `$` mean the start and end of the whole text unless `(?m)` asks otherwise, and
+`.` does not match a newline unless `(?s)` asks for it. Invalid UTF-8 in the text never
+matches. A pattern PCRE2 does not compile is refused with PCRE2's own message and the pattern
+text up to where it stopped: the escapes PCRE2 does not implement (`\U`, `\L`, `\l`, `\u`,
+`\N{name}`) and POSIX collating elements (`[[.a.]]`) with `RegexUnsupported`, anything else,
+a pattern that is not valid UTF-8 included, with `RegexSyntax`.
 
 Numbers in this table are generated from the source constants they name by
 `tools/readme_facts.py` and checked in CI; `python tools/readme_facts.py --check`
@@ -346,7 +346,7 @@ fails if a limit changes in code without this table changing too.
 |---|---|
 | query text | <!-- generated:max_query_bytes -->4 KB<!-- /generated --> including `q:`, as for `cmd:` (`QueryTooLong`) |
 | captures | at most <!-- generated:max_captures_per_pattern -->8<!-- /generated --> per pattern, none repeated with `+` or `*`, none on a group or alternation with `+` or `*` at its own level |
-| operations per run | <!-- generated:query_operations -->20,000,000<!-- /generated -->, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per state visited and 1 per probe into a character class) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
+| operations per run | <!-- generated:query_operations -->20,000,000<!-- /generated -->, shared by the tree-sitter cursor (100 per progress callback and 100 per match), the regex (1 per byte of the capture's text and 1 per pattern item PCRE2 visits, counted with `PCRE2_AUTO_CALLOUT`) and the other predicates (1 per capture visited, also when the match is reported, and 1 plus the bytes compared for each comparison) |
 | operations per `emetgate_scan` call | <!-- generated:max_scan_operations -->100,000,000<!-- /generated --> over all files; each file still gets at most 20,000,000 of it |
 | in-progress matches | <!-- generated:query_match_limit -->1024<!-- /generated --> |
 | tree depth times pattern depth | <!-- generated:max_depth_product -->6,000<!-- /generated --> (`query_depth_exceeded`); the tree depth is that of the deepest node the scope reaches, the pattern depth is how deeply the query's parentheses and brackets nest |
@@ -375,7 +375,9 @@ violations.
 
 The query is compiled against the file's grammar on every proposal and is not cached. The last
 row is the ceiling the budget puts on one rule:
-a 3,001-byte regex over a 20,000-character string, refused with `query_budget_exceeded`.
+the regex `^(a|aa)+[!?]` over a 20,000-character string, whose backtracking is exponential,
+refused with `query_budget_exceeded`. The rows were measured before the regex engine became
+PCRE2 (`a?` 1,500 times then `b`) and have not been run again.
 The ReleaseSafe worst case in the third row is noise from the process start; its best paired
 difference was negative.
 
@@ -1158,11 +1160,13 @@ The text output is one header line (`branch <verdict>: N commit(s)`), then one l
 ### Search
 
 `emetgate_search` (`src/protocol/search_v1.zig`) finds a literal substring or, with
-`regex:true`, a regular expression (`src/engine/regex.zig`) in the git-tracked text files
-under `dir`, which may name a directory or one file. A file up to 16 MiB is indexed and
-searched; a file over 1 MiB is searched line by line without a parse, so its lines carry no
-definition mark and, under a `kinds` filter, a source file of that size is named
-`unclassified`. A binary file, a file over 16 MiB and the internal paths are left out.
+`regex:true`, a PCRE2 regular expression (`src/engine/regex.zig`, the dialect of `rg -P`,
+JIT-compiled) in the git-tracked text files under `dir`, which may name a directory or one
+file. A file up to 16 MiB is indexed and searched; a file over 1 MiB is searched line by
+line without a parse, so its lines carry no definition mark and, under a `kinds` filter, a
+source file of that size is named `unclassified`. A binary file, a file over 16 MiB and the
+internal paths are left out. A hit's column and text are where the match starts and the
+text it matched.
 
 **The reply.** Inside `emetgate mcp` the reply is plain text (`src/protocol/search_text.zig`),
 shaped to cost fewer characters than ripgrep's own output for the same pattern:
@@ -1207,29 +1211,30 @@ The text has one reading on Windows, where `:`, `|` and `*` cannot appear in a f
 line that starts with digits followed by `:`, `|` or `*` is a hit, a line that starts with
 `|` is a legend entry, the last line is the status, and every other line is a path. An
 error reads `error: <Name>` (with a detail after a colon where there is one, such as
-ripgrep's message for a bad pattern).
+PCRE2's message for a bad pattern).
 
 The reasons a file is named: `unreadable` (could not be opened or read, for example held by
 another process without sharing, or a tracked path that is now a directory or a link),
 `vanished` (tracked but gone from the work tree; only a "not found" from the file system
 counts, a held file is never taken for gone because its size and times are read through
 attributes alone, and a read that meets a sharing or lock violation gives up at once
-instead of retrying), `budget` (a line ran past the regex step budget of 2,000,000 steps)
+instead of retrying), `budget` (a line on which the regex ran past its limit: PCRE2's match
+and depth limits of 2,000,000 per line, 64 MiB of heap, a JIT stack of at most 10 MiB)
 and `unclassified` (a `kinds` filter was given and the file did not parse cleanly, so its
 hits cannot be classified). `kinds:["code"]` (etc.) keeps hits of those kinds, judged from
 the tree-sitter node at the match in a registered language; a kind name other than `code`,
 `comment` or `string` is refused (`UnknownKind`). A literal with a `|` whose whole text is
 not found is searched once more as the literal alternatives between the bars.
 
-**Regular expressions the index cannot run.** A pattern the index's engine refuses (word
-boundaries `\b`, counted repetition `{n,m}`, non-capturing groups `(?:...)`, look-around,
-backreferences) is not refused to the model: the same tracked text files in scope, after
+**Regular expressions PCRE2 refuses.** PCRE2 runs word boundaries, counted repetition,
+non-capturing groups, look-around and backreferences itself. A pattern PCRE2 does not
+compile (such as ripgrep's `(?-u:...)` flag) is not refused to the model: the same tracked text files in scope, after
 the same refresh, are searched by ripgrep (`src/platform/rg_search.zig`: `rg --json
 --no-config --no-ignore --hidden --crlf -e <pattern> -- <files>`, started by its absolute
 path from a PATH entry outside the repository and the working directory). The text reply
 reads as any other, since the hits are the same; only the structured reply says
-`delegated:"rg"`. A pattern ripgrep rejects too answers `error: InvalidRegex:
-<ripgrep's message>`; with no ripgrep on PATH the answer is `error: RegexNeedsRipgrep`.
+`delegated:"rg"`. A pattern ripgrep rejects too, or any such pattern when no ripgrep is on
+PATH, answers `error: InvalidRegex: <PCRE2's message> at byte N, after "<pattern text>"`.
 `kinds` cannot be applied to a delegated pattern (`KindsNeedAnIndexedPattern`).
 
 **Structured reply.** The model's tool has no `format`, `certificate` or `stats`:
@@ -1452,16 +1457,17 @@ the script if a different weight function or corpus is worth checking.
 
 **Regex candidates.** Russ Cox's trigram-index regex matching
 (https://swtch.com/~rsc/regexp/regexp4.html) derives the trigrams every match must contain,
-alternation included, from the regex AST. This regex engine compiles straight to an NFA and
-does not expose that AST, so `regex_hint.requiredLiterals` takes, for each branch of a
-top-level alternation (also inside one group that encloses the whole pattern), the longest
-literal run that every match of that branch must contain: text outside any group, with the
-character before `?`, `*` or `{` left out. A match then holds at least one of those
-literals; a branch with no literal (`foo|.*`) means no hint at all. A file is a candidate
-when its grams cover the grams of one of the literals, a line is handed to the regex only
-when it contains one, and the hit's kind and role are read at that literal's column. Each
-line gets its own step budget, so one long line can make the reply partial but cannot hide
-matches in other lines or files. An earlier version shared one budget per worker thread
+alternation included, from the regex AST. PCRE2 does not expose its compiled pattern as an
+AST, so `regex_hint.requiredLiterals` takes, for each branch of a top-level alternation (also
+inside one plain or `(?:` group that encloses the whole pattern), the longest literal run that
+every match of that branch must contain: text outside any group, with the character before
+`?`, `*` or `{` left out. A match then holds at least one of those literals; a branch with no
+literal (`foo|.*`) means no hint at all, and so does any construct that changes what a literal
+means (inline flags such as `(?i)`, `(*VERB)`s, `\x`, `\o`, `\c`, `\N`, `\p`, `\Q`, back
+references), where the file and line filters are skipped rather than risk a wrong one. A file
+is a candidate when its grams cover the grams of one of the literals, and a line is handed to
+the regex only when it contains one. Each line gets its own limits, so one long line can make
+the reply partial but cannot hide matches in other lines or files. An earlier version shared one budget per worker thread
 across files and read a spent budget as no match; on n8n that returned 0 for
 `handleNodeExecutionError|continueExecution` where `rg` finds 6.
 
@@ -1510,9 +1516,8 @@ magnitude.
 
 **Limits:** no automatic index eviction (an index for a repo that is deleted or moved
 stays on disk under its old path hash; harmless, since a rebuilt repo gets a fresh hash,
-but it is never cleaned up); the regex engine's own feature set (no backreferences,
-lookaround, or counted `{n,m}` repetition, see `src/engine/regex.zig`) bounds what
-`regex:true` can express; definition/reference tagging is a heuristic over available
+but it is never cleaned up); `regex:true` matches one line at a time, so a pattern cannot
+span a newline; definition/reference tagging is a heuristic over available
 profile data (declaration span, call-site field), not a full tags.scm implementation, and
 can miss less direct reference shapes (e.g. an identifier passed as a callback rather than
 called directly stays untagged, not mistagged).
