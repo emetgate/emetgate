@@ -350,7 +350,6 @@ def analyse(session, replies):
 
 
 def score(session, replies, coverage):
-    tools = session["tools"]
     order = session["order"]
     calls = session["calls"]
     pos = {tid: k for k, tid in enumerate(order)}
