@@ -348,7 +348,7 @@ test "nested repos: a command runs in the session folder and a frozen file of a 
     defer f.deinit();
     try f.rule("kept stays", checks.frozen_name, "app/mobil/kept.txt");
     try f.serve(.{ .open_run = true });
-    const where = try f.call("emetgate_run", .{ .command = "ls" });
+    const where = try f.call("emetgate_run", .{ .command = "dir /b" });
     try expectHas(where.text, "mobil");
     try expectHas(where.text, "backend");
     const touched = try f.call("emetgate_run", .{ .command = "echo tampered > mobil/kept.txt" });

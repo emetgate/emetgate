@@ -100,10 +100,11 @@ const usage =
     \\lockdown starts claude with no built-in tool and only the .mcp.json servers
     \\(--tools "" --mcp-config .mcp.json --strict-mcp-config, ENABLE_TOOL_SEARCH=false)
     \\and lets emetgate's read-only tools run without a permission prompt (--allowedTools).
-    \\Its emetgate_run runs any command in the repo root (Git Bash, else cmd) at low
-    \\integrity, so it writes only inside the repo (the root gets a permanent low-write
-    \\label), with its own TEMP and caches under %LOCALAPPDATA%\emetgate; a plain git
-    \\push/fetch/pull/clone or gh, and an as_user call you approve, run with your rights.
+    \\Its emetgate_run runs any command in the repo root through cmd at low integrity
+    \\(Git Bash cannot start there), so it writes only inside the repo (the root gets a
+    \\permanent low-write label), with its own TEMP and caches under
+    \\%LOCALAPPDATA%\emetgate; a plain git push/fetch/pull/clone or gh, and an as_user
+    \\call you approve, run with your rights in Git Bash.
     \\It trims the output, labeling every cut; each command is logged with its
     \\exit code, and hook pretool asks you before a destructive one. emetgate mcp
     \\without lockdown keeps the allowlist (--allow-run, --test).

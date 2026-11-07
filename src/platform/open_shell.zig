@@ -35,6 +35,10 @@ pub fn find(gpa: Allocator, repo_root: ?[]const u8) !Shell {
         error.OutOfMemory => return error.OutOfMemory,
         error.BashNotFound => {},
     }
+    return cmd(gpa);
+}
+
+pub fn cmd(gpa: Allocator) !Shell {
     return .{ .kind = .cmd, .path = try exe_path.system(gpa, "cmd.exe") };
 }
 

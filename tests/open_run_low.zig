@@ -48,7 +48,8 @@ test "lockdown run: a command cannot write outside the repository but writes ins
     errdefer std.debug.print("{s}\n", .{inside.text});
     try testing.expectEqualStrings("ran", try inside.string("status"));
     try testing.expectEqualStrings("low", try inside.string("integrity"));
-    try testing.expectEqual(@as(i64, 0), (try inside.field("exit_code")).?.integer);
+    try testing.expectEqualStrings("cmd", try inside.string("shell"));
+    try testing.expectEqual(@as(i64, 0), ((try inside.field("exit_code")) orelse return error.NoExitCode).integer);
     try testing.expect(repo.exists("repo/inside_new.txt"));
 
     const command = try writeOutside(&repo, "outside_new.txt");
@@ -58,7 +59,7 @@ test "lockdown run: a command cannot write outside the repository but writes ins
     errdefer std.debug.print("{s}\n", .{outside.text});
     try testing.expectEqualStrings("ran", try outside.string("status"));
     try testing.expectEqualStrings("low", try outside.string("integrity"));
-    try testing.expect((try outside.field("exit_code")).?.integer != 0);
+    try testing.expect(((try outside.field("exit_code")) orelse return error.NoExitCode).integer != 0);
     try testing.expect(!repo.exists("outside_new.txt"));
     try testing.expectEqualStrings(low_run.denied_note, try outside.string("low_integrity_note"));
 }
@@ -138,7 +139,7 @@ test "lockdown run: as_user writes outside the repository with the user's rights
     defer reply.deinit();
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expectEqualStrings("user", try reply.string("integrity"));
-    try testing.expectEqual(@as(i64, 0), (try reply.field("exit_code")).?.integer);
+    try testing.expectEqual(@as(i64, 0), ((try reply.field("exit_code")) orelse return error.NoExitCode).integer);
     try testing.expect(repo.exists("outside_as_user.txt"));
 }
 
@@ -165,4 +166,79 @@ test "credential commands: a plain git push or gh runs as the user, a chained or
         errdefer std.debug.print("{s} should stay at low integrity\n", .{command});
         try testing.expect(!try command_danger.usesCredentials(arena, command));
     }
+}
+
+test "lockdown run: powershell and git start at low integrity through cmd" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    var reply = try fixture.call(openPolicy(repo.root_abs), .{ .command = "powershell -NoProfile -NonInteractive -Command \"Set-Content -Path ps_made.txt -Value made; Write-Output pwsh-ok\" && git rev-parse --is-inside-work-tree" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("low", try reply.string("integrity"));
+    try testing.expectEqual(@as(i64, 0), ((try reply.field("exit_code")) orelse return error.NoExitCode).integer);
+    const content = try reply.string("content");
+    try testing.expect(std.mem.indexOf(u8, content, "pwsh-ok") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "true") != null);
+    try testing.expect(repo.exists("repo/ps_made.txt"));
+}
+
+test "lockdown run: an MSYS program that cannot start at low integrity is named in the reply" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const bash = emetgate.exe_path.gitBash(gpa, null) catch |err| switch (err) {
+        error.BashNotFound => return error.SkipZigTest,
+        else => return err,
+    };
+    defer gpa.free(bash);
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    const command = try std.fmt.allocPrint(gpa, "\"{s}\" -c \"echo hi > msys_made.txt\"", .{bash});
+    defer gpa.free(command);
+    var reply = try fixture.call(openPolicy(repo.root_abs), .{ .command = command });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("low", try reply.string("integrity"));
+    try testing.expectEqualStrings(low_run.msys_note, try reply.string("low_integrity_note"));
+    try testing.expect(!repo.exists("repo/msys_made.txt"));
+}
+
+test "lockdown run: a repository reached through a junction labels its real folder" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{});
+    defer repo.deinit();
+    const link = try std.fmt.allocPrint(gpa, "{s}\\via", .{repo.top_abs});
+    defer gpa.free(link);
+    try emetgate.shadow.createJunction(testing.io, link, repo.root_abs);
+    var reply = try fixture.call(openPolicy(link), .{ .command = "echo hi > via_made.txt" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("low", try reply.string("integrity"));
+    try testing.expectEqual(@as(i64, 0), ((try reply.field("exit_code")) orelse return error.NoExitCode).integer);
+    try testing.expect(repo.exists("repo/via_made.txt"));
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    try testing.expect(try low_run.lowWritable(arena_state.allocator(), repo.root_abs));
+}
+
+test "lockdown run: emetgate's own config a low run rewrites is put back" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try fixture.Repo.init(&.{.{ .name = ".mcp.json", .body = "{\"kept\":1}\n" }});
+    defer repo.deinit();
+    var reply = try fixture.call(openPolicy(repo.root_abs), .{ .command = "echo {} > .mcp.json" });
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings("low", try reply.string("integrity"));
+    try testing.expect((try reply.field("frozen_restored")) != null);
+    const kept = try repo.tmp.dir.readFileAlloc(testing.io, "repo/.mcp.json", gpa, .limited(1024));
+    defer gpa.free(kept);
+    try testing.expectEqualStrings("{\"kept\":1}\n", kept);
+}
+
+test "lockdown run: each failure to prepare the sandbox has its own fix that offers as_user" {
+    for ([_]anyerror{ error.LowRootUnresolved, error.LowRootOnNetwork, error.LowRootLabelDenied, error.LowRootLabelFailed, error.LowDataDirUnavailable, error.LowTempUnavailable }) |err| {
+        const text = low_run.fix(err) orelse return error.FixMissing;
+        try testing.expect(std.mem.startsWith(u8, text, "the command did not run"));
+        try testing.expect(std.mem.indexOf(u8, text, "as_user:true") != null);
+    }
+    try testing.expect(low_run.fix(error.SandboxBusy) == null);
 }

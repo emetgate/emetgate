@@ -456,10 +456,7 @@ fn confined(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Li
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const place = low_run.prepare(arena, gpa, io, root_abs, open.place.env) catch |err| return switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        else => error.LowSandboxUnprepared,
-    };
+    const place = try low_run.prepare(arena, gpa, io, root_abs, open.place.env);
     defer shadow.clearTemp(io, place.temp) catch {};
     return open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, place.env, .{ .backend = .low_integrity, .temp = place.temp });
 }

@@ -87,7 +87,7 @@ test "open run: a file dump gets the larger budget" {
     const big = try numbered(3000);
     defer gpa.free(big);
     try repo.commitScript("big.txt", big);
-    var reply = try fixture.call(openPolicy(repo.root_abs), .{ .command = "git show HEAD:big.txt | sed -n 1,3000p" });
+    var reply = try fixture.call(openPolicy(repo.root_abs), .{ .command = "git show HEAD:big.txt | sed -n 1,3000p", .as_user = true });
     defer reply.deinit();
     errdefer std.debug.print("{s}\n", .{reply.text});
     const content = try reply.string("content");
@@ -160,12 +160,12 @@ test "open run: a file that only enters the listing, such as a cache file git ad
     try repo.tmp.dir.createDirPath(testing.io, "repo/__pycache__");
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/__pycache__/calc.pyc", .data = "cached bytes" });
     const policy = openPolicy(repo.root_abs);
-    var age = try fixture.call(policy, .{ .command = "touch -d 2020-01-01 __pycache__/calc.pyc" });
+    var age = try fixture.call(policy, .{ .command = "touch -d 2020-01-01 __pycache__/calc.pyc", .as_user = true });
     defer age.deinit();
     if (std.mem.eql(u8, try age.string("shell"), "cmd")) return;
     try testing.expectEqual(@as(i64, 0), (try age.field("exit_code")).?.integer);
     try testing.expect((try age.field("files_changed")) == null);
-    var add = try fixture.call(policy, .{ .command = "git add __pycache__ && echo made > made.txt" });
+    var add = try fixture.call(policy, .{ .command = "git add __pycache__ && echo made > made.txt", .as_user = true });
     defer add.deinit();
     errdefer std.debug.print("{s}\n", .{add.text});
     try testing.expectEqual(@as(i64, 0), (try add.field("exit_code")).?.integer);

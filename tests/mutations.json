@@ -19066,8 +19066,8 @@
     {
       "id": "LR1-root-unlabelled",
       "file": "src/platform/low_run.zig",
-      "from": "    try labelRoot(arena, root_abs);\n",
-      "to": "",
+      "from": "    const root = try labelRoot(arena, root_abs);\n",
+      "to": "    const root = try realRoot(arena, root_abs);\n",
       "kills": [
         "lockdown run: the repository root keeps a low-write label after the run",
         "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
@@ -19128,12 +19128,43 @@
     {
       "id": "LR7-denial-unexplained",
       "file": "src/protocol/open_run.zig",
-      "from": "    if (low and low_run.deniedWrite(ran.report)) {\n",
-      "to": "    if (!low and low_run.deniedWrite(ran.report)) {\n",
+      "from": "    if (low) if (low_run.note(ran.report)) |text| {\n",
+      "to": "    if (!low) if (low_run.note(ran.report)) |text| {\n",
       "kills": [
-        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity",
+        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
       ],
       "note": "a refused write would look like an ordinary failure"
+    },
+    {
+      "id": "LR8-low-run-in-git-bash",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const shell = if (low) try open_shell.cmd(gpa) else try open_shell.find(gpa, root_abs);\n",
+      "to": "    const shell = try open_shell.find(gpa, root_abs);\n",
+      "kills": [
+        "lockdown run: powershell and git start at low integrity through cmd"
+      ],
+      "note": "Git Bash cannot start at low integrity, so every lockdown run would crash"
+    },
+    {
+      "id": "LR9-msys-crash-unexplained",
+      "file": "src/platform/low_run.zig",
+      "from": "    if (mentions(report, &msys_markers)) return msys_note;\n",
+      "to": "",
+      "kills": [
+        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
+      ],
+      "note": "an MSYS crash at low integrity would be reported as a refused write"
+    },
+    {
+      "id": "LR10-fix-missing",
+      "file": "src/platform/low_run.zig",
+      "from": "        error.LowRootOnNetwork => \"the command did not run: the repository is on a network drive",
+      "to": "        error.LowRootOnNetwork => \"the repository is on a network drive",
+      "kills": [
+        "lockdown run: each failure to prepare the sandbox has its own fix that offers as_user"
+      ],
+      "note": "a network repository would not say the command did not run"
     }
   ]
 }
