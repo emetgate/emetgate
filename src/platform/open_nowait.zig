@@ -28,7 +28,7 @@ pub fn touch(path: []const u8) Error!void {
     const handle = try open(try toWide(&wide, path), win.file_write_attributes, win.file_attribute_normal);
     defer windows.CloseHandle(handle);
     var now: i64 = undefined;
-    win.GetSystemTimeAsFileTime(&now);
+    win.GetSystemTimePreciseAsFileTime(&now);
     if (win.SetFileTime(handle, null, &now, &now) == .FALSE) return queryError(win.GetLastError());
 }
 
@@ -217,7 +217,7 @@ const win = struct {
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, buffer: [*]u16, size: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
-    extern "kernel32" fn GetSystemTimeAsFileTime(time: *i64) callconv(.winapi) void;
+    extern "kernel32" fn GetSystemTimePreciseAsFileTime(time: *i64) callconv(.winapi) void;
     extern "kernel32" fn SetFileTime(file: windows.HANDLE, creation: ?*const i64, access: ?*const i64, write: ?*const i64) callconv(.winapi) windows.BOOL;
 };
 
