@@ -59,6 +59,7 @@ pub const open_run_def: Tool = .{
     .props = &.{
         .{ .name = "command", .desc = open_run.command_desc },
         .{ .name = "raw", .desc = open_run.raw_desc, .optional = true, .ty = "boolean" },
+        .{ .name = "as_user", .desc = open_run.as_user_desc, .optional = true, .ty = "boolean" },
         .{ .name = "timeout_s", .desc = open_run.timeout_desc, .optional = true, .ty = "integer" },
     },
 };

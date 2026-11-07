@@ -10,6 +10,7 @@ const toolchain = @import("toolchain.zig");
 const receipts = @import("receipts.zig");
 const frozen_hold = @import("frozen_hold.zig");
 const command_danger = @import("command_danger.zig");
+const low_run = @import("low_run.zig");
 const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
@@ -355,6 +356,7 @@ pub const OpenPlace = struct {
     also_hold: []const []const u8 = &.{},
     env: []const sandbox.EnvVar = &.{},
     guard_config: bool = false,
+    low: bool = false,
 };
 
 pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8, place: OpenPlace) !RepoRun {
@@ -363,9 +365,11 @@ pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: op
 
 const NestedHold = struct { root: []const u8, hold: *frozen_hold.Hold };
 
+const OpenSpawn = struct { shell: open_shell.Shell, command: []const u8, place: OpenPlace = .{} };
+
 const Spawn = union(enum) {
     toolchain: []const u8,
-    open: struct { shell: open_shell.Shell, command: []const u8, place: OpenPlace = .{} },
+    open: OpenSpawn,
 };
 
 fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8, spawn: Spawn) !RepoRun {
@@ -430,7 +434,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
         .check_kind = .run,
         .test_ms = ran.report.duration_ns / std.time.ns_per_ms,
         .limits = limits,
-        .integrity = "user",
+        .integrity = if (spawn == .open and spawn.open.place.low) "low" else "user",
         .version = version,
     }) catch |err| {
         ran.receipt_error = err;
@@ -444,8 +448,17 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
 fn spawned(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Limits, spawn: Spawn) !sandbox.Report {
     return switch (spawn) {
         .toolchain => |local| runner.runToolchain(gpa, io, root_abs, local, limits),
-        .open => |open| open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, open.place.env),
+        .open => |open| if (open.place.low) confined(gpa, io, root_abs, limits, open) else open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, open.place.env, .{}),
     };
+}
+
+fn confined(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Limits, open: OpenSpawn) !sandbox.Report {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const place = try low_run.prepare(arena, gpa, io, root_abs, open.place.env);
+    defer shadow.clearTemp(io, place.temp) catch {};
+    return open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, place.env, .{ .backend = .low_integrity, .temp = place.temp });
 }
 
 const Seen = std.StringArrayHashMapUnmanaged(receipt.Hash);

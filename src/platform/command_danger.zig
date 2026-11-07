@@ -450,6 +450,19 @@ pub fn changesRules(arena: Allocator, command: []const u8) Allocator.Error!bool 
     return try classifyText(arena, R.rule, command, 0) != null;
 }
 
+const chain_characters = "&|<>^%!;`$()\r\n\x00";
+const credential_subcommands = [_][]const u8{ "push", "fetch", "pull", "clone", "ls-remote" };
+
+pub fn usesCredentials(arena: Allocator, command: []const u8) Allocator.Error!bool {
+    if (command.len > max_command_bytes or std.mem.indexOfAny(u8, command, chain_characters) != null) return false;
+    const segments = try parse(arena, command);
+    if (segments.len != 1 or segments[0].nested.items.len != 0) return false;
+    const words = segments[0].words.items;
+    if (words.len == 0) return false;
+    if (is(words[0], &.{"gh"})) return true;
+    return words.len >= 2 and is(words[0], &.{"git"}) and eqlAny(words[1], &credential_subcommands);
+}
+
 fn kept(want: ?[]const u8, found: Finding) ?Finding {
     const wanted = want orelse return found;
     return if (std.mem.eql(u8, found.reason, wanted)) found else null;

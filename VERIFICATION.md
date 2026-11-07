@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2882**
-- Mutations declared in `tests/mutations.json`: **1989**
-  - killed: **1939**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2896**
+- Mutations declared in `tests/mutations.json`: **1999**
+  - killed: **1949**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1326 mutation(s).
+1336 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2092,6 +2092,16 @@ python tools/verification_page.py --check
 | `GC52-double-dot-ref-trusted` | `src/platform/git_commit.zig` | `if (std.mem.indexOf(u8, name, "..") != null or std.mem.indexOf(...` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
 | `GC53-non-branch-ref-trusted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, name, "refs/")) return false;` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
 | `GC54-short-oid-detached` | `src/platform/git_commit.zig` | `if (line.len != 40 and line.len != 64) return null;` -> `` | git commit: HEAD read in process names the branch git symbolic-ref names | killed |
+| `LR1-root-unlabelled` | `src/platform/low_run.zig` | `const root = try labelRoot(arena, root_abs);` -> `const root = try realRoot(arena, root_abs);` | lockdown run: the repository root keeps a low-write label after the run; lockdown run: a ... | killed |
+| `LR2-run-as-user` | `src/platform/run_command.zig` | `.{ .backend = .low_integrity, .temp = place.temp }` -> `.{ .backend = .user, .temp = place.temp }` | lockdown run: a command cannot write outside the repository but writes inside i...; lockd... | killed |
+| `LR3-chain-credential` | `src/platform/command_danger.zig` | `if (command.len > max_command_bytes or std.mem.indexOfAny(u8, c...` -> `if (command.len > max_command_bytes) return false;` | credential commands: a plain git push or gh runs as the user, a chained or pipe... | killed |
+| `LR4-no-credential-exception` | `src/protocol/open_run.zig` | `const low = !request.as_user and !try command_danger.usesCreden...` -> `const low = !request.as_user;` | lockdown run: a plain git fetch runs with the user's rights for the credential ... | killed |
+| `LR5-as-user-ignored` | `src/protocol/open_run.zig` | `.bool => \|flag\| request.as_user = flag,` -> `.bool => {},` | lockdown run: as_user writes outside the repository with the user's rights | killed |
+| `LR6-hook-as-user-passes` | `src/protocol/pretool_hook.zig` | `.bool => \|flag\| flag,` -> `.bool => false,` | pretool hook: as_user asks even for an everyday command, and as_user false or a... | killed |
+| `LR7-denial-unexplained` | `src/protocol/open_run.zig` | `if (low) if (low_run.note(ran.report)) \|text\| {` -> `if (!low) if (low_run.note(ran.report)) \|text\| {` | lockdown run: a command cannot write outside the repository but writes inside i...; lockd... | killed |
+| `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: powershell and git start at low integrity through cmd | killed |
+| `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | lockdown run: an MSYS program that cannot start at low integrity is named in th... | killed |
+| `LR10-fix-missing` | `src/platform/low_run.zig` | `error.LowRootOnNetwork => "the command did not run: the reposit...` -> `error.LowRootOnNetwork => "the repository is on a network drive` | lockdown run: each failure to prepare the sandbox has its own fix that offers a... | killed |
 
 ## What this system does not prove
 

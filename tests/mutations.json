@@ -19062,6 +19062,109 @@
         "git commit: HEAD read in process names the branch git symbolic-ref names"
       ],
       "note": "a HEAD holding no full object id would be read as detached"
+    },
+    {
+      "id": "LR1-root-unlabelled",
+      "file": "src/platform/low_run.zig",
+      "from": "    const root = try labelRoot(arena, root_abs);\n",
+      "to": "    const root = try realRoot(arena, root_abs);\n",
+      "kills": [
+        "lockdown run: the repository root keeps a low-write label after the run",
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
+      ],
+      "note": "a low-integrity run could not write its own repository"
+    },
+    {
+      "id": "LR2-run-as-user",
+      "file": "src/platform/run_command.zig",
+      "from": ".{ .backend = .low_integrity, .temp = place.temp }",
+      "to": ".{ .backend = .user, .temp = place.temp }",
+      "kills": [
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity",
+        "lockdown run: without a low token the command does not run"
+      ],
+      "note": "a lockdown run would write anywhere the user can"
+    },
+    {
+      "id": "LR3-chain-credential",
+      "file": "src/platform/command_danger.zig",
+      "from": "    if (command.len > max_command_bytes or std.mem.indexOfAny(u8, command, chain_characters) != null) return false;\n",
+      "to": "    if (command.len > max_command_bytes) return false;\n",
+      "kills": [
+        "credential commands: a plain git push or gh runs as the user, a chained or piped one does not"
+      ],
+      "note": "a redirected or substituted git push would run with the user's rights"
+    },
+    {
+      "id": "LR4-no-credential-exception",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const low = !request.as_user and !try command_danger.usesCredentials(arena, request.command);\n",
+      "to": "    const low = !request.as_user;\n",
+      "kills": [
+        "lockdown run: a plain git fetch runs with the user's rights for the credential manager"
+      ],
+      "note": "git push would run at low integrity where the credential manager fails"
+    },
+    {
+      "id": "LR5-as-user-ignored",
+      "file": "src/protocol/open_run.zig",
+      "from": ".bool => |flag| request.as_user = flag,",
+      "to": ".bool => {},",
+      "kills": [
+        "lockdown run: as_user writes outside the repository with the user's rights"
+      ],
+      "note": "an approved as_user run would still be confined"
+    },
+    {
+      "id": "LR6-hook-as-user-passes",
+      "file": "src/protocol/pretool_hook.zig",
+      "from": "        .bool => |flag| flag,\n",
+      "to": "        .bool => false,\n",
+      "kills": [
+        "pretool hook: as_user asks even for an everyday command, and as_user false or a string as_user is judged as it should be"
+      ],
+      "note": "a full-rights run would start without asking the user"
+    },
+    {
+      "id": "LR7-denial-unexplained",
+      "file": "src/protocol/open_run.zig",
+      "from": "    if (low) if (low_run.note(ran.report)) |text| {\n",
+      "to": "    if (!low) if (low_run.note(ran.report)) |text| {\n",
+      "kills": [
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity",
+        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
+      ],
+      "note": "a refused write would look like an ordinary failure"
+    },
+    {
+      "id": "LR8-low-run-in-git-bash",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const shell = if (low) try open_shell.cmd(gpa) else try open_shell.find(gpa, root_abs);\n",
+      "to": "    const shell = try open_shell.find(gpa, root_abs);\n",
+      "kills": [
+        "lockdown run: powershell and git start at low integrity through cmd"
+      ],
+      "note": "Git Bash cannot start at low integrity, so every lockdown run would crash"
+    },
+    {
+      "id": "LR9-msys-crash-unexplained",
+      "file": "src/platform/low_run.zig",
+      "from": "    if (mentions(report, &msys_markers)) return msys_note;\n",
+      "to": "",
+      "kills": [
+        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
+      ],
+      "note": "an MSYS crash at low integrity would be reported as a refused write"
+    },
+    {
+      "id": "LR10-fix-missing",
+      "file": "src/platform/low_run.zig",
+      "from": "        error.LowRootOnNetwork => \"the command did not run: the repository is on a network drive",
+      "to": "        error.LowRootOnNetwork => \"the repository is on a network drive",
+      "kills": [
+        "lockdown run: each failure to prepare the sandbox has its own fix that offers as_user"
+      ],
+      "note": "a network repository would not say the command did not run"
     }
   ]
 }
