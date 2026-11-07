@@ -257,7 +257,7 @@ test "redteam query: a q: rule that outruns its budget rejects the proposal and 
     defer repo.deinit();
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
-    const pattern = "a?" ** 1500 ++ "b";
+    const pattern = "^(a|aa)+[!?]";
     try repo.adopt("q:((string_fragment) @violation (#match? @violation \"" ++ pattern ++ "\"))");
 
     const body = "{\n  const s = \"" ++ "a" ** 20_000 ++ "\";\n  return a + b + s.length;\n}";

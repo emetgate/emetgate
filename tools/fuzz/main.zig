@@ -12,7 +12,7 @@ const Snapshot = emetgate.loader.Snapshot;
 const Runtime = emetgate.runtime.Runtime;
 
 const regex_seeds = [_][]const u8{
-    "a*", "(a|b)+", "[a-z]{2,5}", "\\d\\w\\s", "^abc$", ".", "a{1,3}",
+    "a*", "(a|b)+", "[a-z]{2,5}", "\\d\\w\\s", "^abc$", ".", "a{1,3}", "(?<=a)b", "(a)\\1", "(?i)\\bfox\\b", "^(a|aa)+$",
 };
 
 const protocol_seeds = [_][]const u8{
@@ -86,10 +86,16 @@ fn runRegex(random: std.Random, io: std.Io, deadline: std.Io.Timestamp, buf: []u
         const input = mutate(random, seed, buf);
         std.debug.print("\rregex last input: {any}          ", .{input});
         var diag: regex.Diagnostic = .{};
-        var compiled = regex.Regex.compile(gpa, input, &diag) catch continue;
-        defer compiled.deinit(gpa);
-        var budget: u64 = 10_000;
-        _ = compiled.isMatch(gpa, "the quick brown fox jumps over 12345", &budget) catch {};
+        if (regex.Regex.compileCounted(gpa, input, &diag)) |counted| {
+            defer counted.deinit(gpa);
+            var budget: u64 = 10_000;
+            _ = counted.isMatch(gpa, "the quick brown fox jumps over 12345", &budget) catch {};
+        } else |_| {}
+        const searched = regex.Regex.compile(gpa, input, null) catch continue;
+        defer searched.deinit(gpa);
+        const matcher = regex.Matcher.init(gpa, 10_000) catch continue;
+        defer matcher.deinit(gpa);
+        _ = matcher.find(searched, "the quick brown fox jumps over 12345") catch {};
     }
     return iterations;
 }

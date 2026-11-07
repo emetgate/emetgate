@@ -314,7 +314,7 @@ test "search text: a regex the index cannot run is searched by ripgrep with the 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    for ([_][]const u8{ "\\bforget\\b", "\\bbodyParser\\(", "(?:sess|Path)\\.", "trailing\\w{2,}" }) |pattern| {
+    for ([_][]const u8{ "\\bforget\\b", "\\bbodyParser\\(", "(?:sess|Path)\\.", "trailing\\w{2,}", "(?-u:\\bforget\\b)" }) |pattern| {
         const reply = try search(runtime, null, repo.root, .{ .pattern = pattern, .regex = true, .dir = repo.root });
         defer reply.deinit();
         errdefer std.debug.print("{s}:\n{s}\n", .{ pattern, reply.text });
@@ -326,9 +326,12 @@ test "search text: a regex the index cannot run is searched by ripgrep with the 
         try expectSameSpots(arena, theirs, ours);
     }
 
-    const structured = try searchServed(runtime, null, repo.root, &.{"--search-internals"}, .{ .pattern = "\\bforget\\b", .regex = true, .dir = repo.root, .format = "json" });
+    const structured = try searchServed(runtime, null, repo.root, &.{"--search-internals"}, .{ .pattern = "(?-u:\\bforget\\b)", .regex = true, .dir = repo.root, .format = "json" });
     defer structured.deinit();
     try testing.expect(std.mem.indexOf(u8, structured.text, "\"delegated\":\"rg\"") != null);
+    const native = try searchServed(runtime, null, repo.root, &.{"--search-internals"}, .{ .pattern = "\\bforget\\b", .regex = true, .dir = repo.root, .format = "json" });
+    defer native.deinit();
+    try testing.expect(std.mem.indexOf(u8, native.text, "\"delegated\"") == null);
 
     const broken = try search(runtime, null, repo.root, .{ .pattern = "(?:unclosed", .regex = true, .dir = repo.root });
     defer broken.deinit();
