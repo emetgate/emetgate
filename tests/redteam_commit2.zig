@@ -821,8 +821,9 @@ const Reader = struct {
     runs: std.atomic.Value(usize) = .init(0),
 
     fn loop(self: *Reader) void {
+        const exe = git_fixture.git() catch return;
         while (!self.stop.load(.acquire)) {
-            for ([_][]const []const u8{ &.{ try git_fixture.git(), "status", "--porcelain" }, &.{ try git_fixture.git(), "diff", "--cached", "--name-only" }, &.{ try git_fixture.git(), "ls-files", "-s" } }) |argv| {
+            for ([_][]const []const u8{ &.{ exe, "status", "--porcelain" }, &.{ exe, "diff", "--cached", "--name-only" }, &.{ exe, "ls-files", "-s" } }) |argv| {
                 const result = @import("emetgate").bounded_run.run(std.heap.page_allocator, testing.io, .{ .argv = argv, .cwd = .{ .path = self.root } }) catch continue;
                 std.heap.page_allocator.free(result.stdout);
                 std.heap.page_allocator.free(result.stderr);

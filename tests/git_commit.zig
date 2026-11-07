@@ -382,3 +382,40 @@ test "git commit: an index that changed after it was copied is not replaced, and
     try testing.expect(!repo.has(".git/index.lock"));
     try repo.expectOut("M  src/b.ts", &.{ "status", "--porcelain" });
 }
+
+test "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git" {
+    try skipOffWindows();
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.write(".gitattributes", "*.id ident\n*.flt filter=upper\n*.enc working-tree-encoding=UTF-16\n*.txt ident\n");
+    try repo.tmp.dir.createDirPath(testing.io, "repo/sub");
+    try repo.write("sub/.gitattributes", "*.txt !ident\n");
+    try repo.git(&.{ "add", "." });
+    try repo.git(&.{ "commit", "-q", "-m", "attributes" });
+    try repo.tmp.dir.deleteFile(testing.io, "repo/sub/.gitattributes");
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const git = try git_commit.Git.init(arena_state.allocator(), testing.io, repo.root);
+    const items = [_]git_commit.Content{
+        .{ .path = "src/a.ts", .bytes = "export const a = 2;\n" },
+        .{ .path = "src/crlf.ts", .bytes = "export const c = 1;\r\n" },
+        .{ .path = "x.id", .bytes = "$Id$\n" },
+        .{ .path = "x.flt", .bytes = "plain\n" },
+        .{ .path = "x.enc", .bytes = "plain\n" },
+        .{ .path = "sub/k.txt", .bytes = "$Id$\n" },
+        .{ .path = "src/b.ts", .bytes = "" },
+        .{ .path = "new/c.ts", .bytes = "export const c = 3;\n" },
+    };
+    const plain = try git_commit.plainOids(git, 40, &items);
+    const kept = [_]bool{ true, false, false, false, false, false, true, true };
+    for (items, plain.oids, kept) |item, oid, want| {
+        try testing.expectEqual(want, oid != null);
+        const found = oid orelse continue;
+        const path_arg = try std.fmt.allocPrint(arena_state.allocator(), "--path={s}", .{item.path});
+        try testing.expectEqualStrings(try git.fed(&.{ "hash-object", "--stdin", path_arg }, item.bytes), found);
+    }
+    try testing.expectEqualStrings("e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", try git_commit.blobOid(arena_state.allocator(), 40, ""));
+    try testing.expectEqualStrings("473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813", try git_commit.blobOid(arena_state.allocator(), 64, ""));
+    const few = try git_commit.plainOids(git, 40, items[0..1]);
+    try testing.expect(few.oids[0] == null);
+}

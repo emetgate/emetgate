@@ -9609,8 +9609,8 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, plain, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, plain, path, bytes))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
         "commit on write: a target edited by hand is refused and keeps the hand edit",
@@ -10139,8 +10139,8 @@
     {
       "id": "PV8-any-index-lock-treated-as-ours",
       "file": "src/platform/git_commit.zig",
-      "from": "    return if (std.mem.eql(u8, &found, &digest)) .ours else .foreign;",
-      "to": "    return if (std.mem.eql(u8, &found, &digest) or true) .ours else .foreign;",
+      "from": "        return if (std.mem.eql(u8, &found, &expected)) .ours else .foreign;",
+      "to": "        return if (std.mem.eql(u8, &found, &expected) or true) .ours else .foreign;",
       "kills": [
         "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after",
         "git commit: an index lock held by another process is never taken over, and it stays as it was"
@@ -10150,8 +10150,8 @@
     {
       "id": "PV9-index-lock-taken-over",
       "file": "src/platform/git_commit.zig",
-      "from": "    disk.moveExclusive(gpa, staged_abs, lock) catch |err| switch (err) {",
-      "to": "    disk.moveOver(gpa, staged_abs, lock) catch |err| switch (err) {",
+      "from": "        disk.moveExclusive(gpa, staged_abs, lock_path) catch |err| switch (err) {",
+      "to": "        disk.moveOver(gpa, staged_abs, lock_path) catch |err| switch (err) {",
       "kills": [
         "git commit: an index lock held by another process is never taken over, and it stays as it was"
       ],
@@ -10221,8 +10221,8 @@
     {
       "id": "PV17-staged-bytes-not-checked-against-the-blob",
       "file": "src/platform/commit_intent.zig",
-      "from": "    if (!try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
-      "to": "    if (false and !try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
+      "from": "    if (!try git_commit.storesAs(git, plain, item.path, bytes, staged, item.blob)) return error.CorruptIntent;\n",
+      "to": "    if (false and !try git_commit.storesAs(git, plain, item.path, bytes, staged, item.blob)) return error.CorruptIntent;\n",
       "kills": [
         "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match",
         "recovery: a hand-made intent record is not applied when the staged bytes, the blob or the commit do not tie together"
@@ -10609,8 +10609,8 @@
     {
       "id": "P1i-recover-writes-over-bytes-the-parent-does-not-hold",
       "file": "src/platform/commit_intent.zig",
-      "from": "        if (!std.mem.eql(u8, stored, base_oid)) return .left;\n",
-      "to": "",
+      "from": "        if (!std.mem.eql(u8, try git_commit.storedForm(git, plain, item.path, bytes), base_oid)) return .left;\n",
+      "to": "        _ = bytes;\n",
       "kills": [
         "commit window: a record that names the hash of the user's uncommitted edit as its base cannot write over that edit"
       ]
@@ -16496,7 +16496,7 @@
     {
       "id": "SRC10-new-file-stale-stage",
       "file": "src/platform/git_commit.zig",
-      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, plain, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
       "to": "",
       "kills": [
         "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"
@@ -18876,6 +18876,36 @@
       "kills": [
         "python move: a package at the repo root that shadows the src one keeps the src prefix"
       ]
+    },
+    {
+      "id": "GC40-carriage-return-hashed-in-process",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, item.bytes, '\\r') != null) continue;\n",
+      "to": "",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "bytes git would convert on the way in would get a blob id git does not store"
+    },
+    {
+      "id": "GC41-one-attribute-view-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (in_index and in_tree) oids[i] = try blobOid(git.arena, hex, items[i].bytes);\n",
+      "to": "        if (in_index or in_tree) oids[i] = try blobOid(git.arena, hex, items[i].bytes);\n",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "attributes seen only from the index or only from the working tree would pass a converting path"
+    },
+    {
+      "id": "GC42-set-attribute-taken-as-plain",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (!std.mem.eql(u8, value, \"unspecified\")) flag.* = false;\n",
+      "to": "",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "a path with ident, a filter or an encoding would get a blob id git does not store"
     }
   ]
 }

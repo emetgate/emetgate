@@ -352,7 +352,21 @@ fn surveyWith(git: Git, rels: []const []const u8, icase: bool) !Survey {
 }
 
 fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList(Measured), gpa: Allocator, pre_written: bool, attested: []const []const symbol.Hash) !void {
-    for (seen.paths, 0..) |path, at| {
+    const contents = try git.arena.alloc(error{ OutOfMemory, GitFailed }!?[]const u8, seen.paths.len);
+    var candidates: std.ArrayList(Content) = .empty;
+    for (seen.paths, contents) |path, *slot| {
+        slot.* = contentOf(git, path);
+        const bytes = (slot.* catch continue) orelse continue;
+        const in_index = tracked(seen.index, path);
+        const in_head = inTree(tree, path);
+        const asks = if (in_head) |head_entry|
+            !pre_written and in_index != null and std.mem.eql(u8, in_index.?.oid, head_entry.oid) and std.mem.eql(u8, in_index.?.mode, head_entry.mode)
+        else
+            pre_written and in_index != null;
+        if (asks) try candidates.append(git.arena, .{ .path = path, .bytes = bytes });
+    }
+    const plain = try plainOids(git, git.hex, candidates.items);
+    for (seen.paths, contents, 0..) |path, content, at| {
         errdefer |err| if (pre_written and err == error.TargetHasUncommittedChanges) commit_refusal.note(&.{path}, 1);
         const ours: []const symbol.Hash = if (at < attested.len) attested[at] else &.{};
         var stages: usize = 0;
@@ -367,11 +381,11 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
         const in_head = inTree(tree, path);
         var raw: ?symbol.Hash = null;
         var staged: ?[]const u8 = null;
-        if (try contentOf(git, path)) |bytes| {
+        if (try content) |bytes| {
             const head_entry = in_head orelse {
                 if (!pre_written) return error.TargetNotInHead;
                 if (in_index) |entry| {
-                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;
+                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, plain, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;
                     staged = entry.oid;
                 }
                 raw = symbol.hashOf(bytes);
@@ -387,7 +401,7 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
             // `pre_written` callers (emetgate commit) commit content a gate already
             // wrote into the working tree, so the working-tree copy is expected to
             // differ from HEAD. The index must still be clean (checked above).
-            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;
+            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, plain, path, bytes))) return error.TargetHasUncommittedChanges;
             raw = symbol.hashOf(bytes);
         } else if (in_head != null or in_index != null) {
             if (pre_written and in_head != null and in_index == null) {
@@ -416,9 +430,110 @@ fn isAttested(attested: []const symbol.Hash, bytes: []const u8) bool {
     return false;
 }
 
-fn storedOid(git: Git, path: []const u8, bytes: []const u8) ![]const u8 {
+fn storedOid(git: Git, plain: Plain, path: []const u8, bytes: []const u8) ![]const u8 {
+    if (plain.of(path, bytes)) |oid| return oid;
     const path_arg = try std.fmt.allocPrint(git.arena, "--path={s}", .{path});
     return git.fed(&.{ "hash-object", "--stdin", path_arg }, bytes);
+}
+
+pub const Content = struct { path: []const u8, bytes: []const u8 };
+
+pub const Plain = struct {
+    items: []const Content = &.{},
+    oids: []const ?[]const u8 = &.{},
+
+    pub fn of(self: Plain, path: []const u8, bytes: []const u8) ?[]const u8 {
+        for (self.items, self.oids) |item, oid| {
+            const found = oid orelse continue;
+            if (std.mem.eql(u8, item.path, path) and std.mem.eql(u8, item.bytes, bytes)) return found;
+        }
+        return null;
+    }
+};
+
+const min_plain = 3;
+
+pub fn mayHoldAttributes(path: []const u8) bool {
+    const leaf = path[if (std.mem.lastIndexOfAny(u8, path, "/\\")) |at| at + 1 else 0..];
+    const name = ".gitattributes";
+    if (leaf.len >= name.len and std.ascii.eqlIgnoreCase(leaf[0..name.len], name)) return true;
+    return std.mem.indexOfAny(u8, leaf, "~:") != null;
+}
+const conversion_attributes = [_][]const u8{ "filter", "ident", "working-tree-encoding" };
+
+pub fn plainOids(git: Git, hex: usize, items: []const Content) error{OutOfMemory}!Plain {
+    const oids = try git.arena.alloc(?[]const u8, items.len);
+    @memset(oids, null);
+    fillPlain(git, hex, items, oids) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => @memset(oids, null),
+    };
+    return .{ .items = items, .oids = oids };
+}
+
+fn fillPlain(git: Git, hex: usize, items: []const Content, oids: []?[]const u8) !void {
+    if (hex != 40 and hex != 64) return;
+    var request: std.ArrayList(u8) = .empty;
+    var asked: std.ArrayList(usize) = .empty;
+    var paths: std.ArrayList([]const u8) = .empty;
+    for (items, 0..) |item, i| {
+        if (std.mem.indexOfScalar(u8, item.bytes, '\r') != null) continue;
+        if (item.path.len == 0 or std.mem.indexOfScalar(u8, item.path, 0) != null) continue;
+        try request.appendSlice(git.arena, item.path);
+        try request.append(git.arena, 0);
+        try asked.append(git.arena, i);
+        try paths.append(git.arena, item.path);
+    }
+    if (asked.items.len < min_plain) return;
+    const absent_dir = try std.fs.path.join(git.arena, &.{ git.root, shadow.workspace_dir, work_dir, "absent" });
+    if (try exists(git.io, absent_dir)) return;
+    const seen = (try unspecified(git, request.items, paths.items)) orelse return;
+    const bare = (try unspecified(try git.withIndex(try std.fs.path.join(git.arena, &.{ absent_dir, "index" })), request.items, paths.items)) orelse return;
+    if (try exists(git.io, absent_dir)) return;
+    for (asked.items, seen, bare) |i, in_index, in_tree| {
+        if (in_index and in_tree) oids[i] = try blobOid(git.arena, hex, items[i].bytes);
+    }
+}
+
+fn unspecified(git: Git, request: []const u8, paths: []const []const u8) !?[]bool {
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(git.arena, &.{ "check-attr", "-z", "--stdin" });
+    try argv.appendSlice(git.arena, &conversion_attributes);
+    const out = (try git.feed(argv.items, request)) orelse return null;
+    const flags = try git.arena.alloc(bool, paths.len);
+    var fields = std.mem.splitScalar(u8, out, 0);
+    for (paths, flags) |path, *flag| {
+        flag.* = true;
+        for (conversion_attributes) |name| {
+            const said_path = fields.next() orelse return null;
+            const said_name = fields.next() orelse return null;
+            const value = fields.next() orelse return null;
+            if (!std.mem.eql(u8, said_path, path) or !std.mem.eql(u8, said_name, name)) return null;
+            if (!std.mem.eql(u8, value, "unspecified")) flag.* = false;
+        }
+    }
+    const tail = fields.next() orelse return null;
+    if (tail.len != 0 or fields.next() != null) return null;
+    return flags;
+}
+
+pub fn blobOid(arena: Allocator, hex: usize, bytes: []const u8) ![]const u8 {
+    var header_buffer: [32]u8 = undefined;
+    const header = std.fmt.bufPrint(&header_buffer, "blob {d}\x00", .{bytes.len}) catch unreachable;
+    return switch (hex) {
+        40 => digestHex(arena, std.crypto.hash.Sha1, header, bytes),
+        64 => digestHex(arena, Sha256, header, bytes),
+        else => error.GitFailed,
+    };
+}
+
+fn digestHex(arena: Allocator, comptime Hash: type, header: []const u8, bytes: []const u8) ![]const u8 {
+    var hasher = Hash.init(.{});
+    hasher.update(header);
+    hasher.update(bytes);
+    var digest: [Hash.digest_length]u8 = undefined;
+    hasher.final(&digest);
+    return arena.dupe(u8, &std.fmt.bytesToHex(digest, .lower));
 }
 
 fn keep(gpa: Allocator, out: ?*std.ArrayList(Measured), path: []const u8, raw: ?symbol.Hash, in_head: ?TreeEntry, staged: ?[]const u8) !void {
@@ -451,10 +566,6 @@ fn indexPath(git: Git) ![]const u8 {
         return out;
     }
     return absOf(git.arena, git.root, listed);
-}
-
-fn lockPath(git: Git) ![]const u8 {
-    return std.fmt.allocPrint(git.arena, "{s}.lock", .{try indexPath(git)});
 }
 
 pub fn currentBranch(gpa: Allocator, io: std.Io, root: []const u8) ![]u8 {
@@ -630,9 +741,10 @@ fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
+    var git = try Git.init(arena, io, root);
 
     const known = try facts(git);
+    git.hex = known.oid.len;
     for (in_progress) |name| {
         const path = try std.fs.path.join(arena, &.{ known.git_dir, name });
         if (try exists(io, path)) return error.OperationInProgress;
@@ -881,16 +993,101 @@ fn copyIndex(arena: Allocator, io: std.Io, index: []const u8, staged_abs: []cons
     return base;
 }
 
+pub const Here = struct {
+    git: Git,
+    index: []const u8,
+    head: ?[]const u8,
+
+    pub fn open(arena: Allocator, io: std.Io, root: []const u8) !Here {
+        const git = try Git.init(arena, io, root);
+        const out = (try git.run(&.{ "rev-parse", "--git-path", "index", "HEAD^{commit}", "--" })) orelse
+            return .{ .git = git, .index = try indexPath(git), .head = null };
+        var lines = std.mem.tokenizeAny(u8, out, "\r\n");
+        const listed = lines.next() orelse return error.GitFailed;
+        const head = lines.next() orelse return error.GitFailed;
+        const dashes = lines.next() orelse return error.GitFailed;
+        if (!std.mem.eql(u8, dashes, "--") or lines.next() != null) return error.GitFailed;
+        return .{ .git = git, .index = try listedPath(git, listed), .head = head };
+    }
+
+    fn at(arena: Allocator, io: std.Io, root: []const u8) !Here {
+        const git = try Git.init(arena, io, root);
+        return .{ .git = git, .index = try indexPath(git), .head = null };
+    }
+
+    fn lock(self: Here) ![]const u8 {
+        return std.fmt.allocPrint(self.git.arena, "{s}.lock", .{self.index});
+    }
+
+    pub fn digest(self: Here) !?Digest {
+        return digestOf(self.git.arena, self.git.io, self.index);
+    }
+
+    pub fn stage(self: Here, entries: []const Entry, staged_abs: []const u8) !StagedIndex {
+        const io = self.git.io;
+        const base = try copyIndex(self.git.arena, io, self.index, staged_abs);
+        errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
+        try applyEntries(try self.git.withIndex(staged_abs), entries);
+        const made = (try digestOf(self.git.arena, io, staged_abs)) orelse return error.GitFailed;
+        return .{ .base = base, .digest = made };
+    }
+
+    pub fn acquire(self: Here, gpa: Allocator, staged_abs: []const u8, staged: StagedIndex) !void {
+        const io = self.git.io;
+        const lock_path = try self.lock();
+        disk.moveExclusive(gpa, staged_abs, lock_path) catch |err| switch (err) {
+            error.PathAlreadyExists => return error.IndexLocked,
+            else => return error.GitFailed,
+        };
+        const now = try indexOrNone(self.git.arena, io, self.index);
+        if (!std.mem.eql(u8, &now, &staged.base)) {
+            Dir.deleteFileAbsolute(io, lock_path) catch {};
+            return error.IndexChanged;
+        }
+    }
+
+    pub fn lockState(self: Here, expected: Digest) !LockState {
+        const found = (try digestOf(self.git.arena, self.git.io, try self.lock())) orelse return .absent;
+        return if (std.mem.eql(u8, &found, &expected)) .ours else .foreign;
+    }
+
+    pub fn release(self: Here, expected: Digest) !void {
+        if (try self.lockState(expected) != .ours) return;
+        Dir.deleteFileAbsolute(self.git.io, try self.lock()) catch return error.GitFailed;
+    }
+
+    pub fn publish(self: Here, gpa: Allocator, expected: Digest) !bool {
+        if (try self.lockState(expected) != .ours) return false;
+        const lock_path = try self.lock();
+        var attempt: usize = 0;
+        while (attempt < publish_attempts) : (attempt += 1) {
+            if (attempt != 0) self.git.io.sleep(.fromMilliseconds(publish_retry_ms), .awake) catch {};
+            if (builtin.is_test and publish_refusals != 0) {
+                publish_refusals -= 1;
+                continue;
+            }
+            disk.moveOver(gpa, lock_path, self.index) catch continue;
+            return true;
+        }
+        return false;
+    }
+
+    pub fn advance(self: Here, gpa: Allocator, entries: []const Entry, staged_abs: []const u8, expected: Digest) !void {
+        const staged = try self.stage(entries, staged_abs);
+        errdefer Dir.deleteFileAbsolute(self.git.io, staged_abs) catch {};
+        if (!std.mem.eql(u8, &staged.base, &expected)) return error.IndexChanged;
+        try self.acquire(gpa, staged_abs, staged);
+        if (!try self.publish(gpa, staged.digest)) {
+            try self.release(staged.digest);
+            return error.IndexLocked;
+        }
+    }
+};
+
 pub fn stageIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []const Entry, staged_abs: []const u8) !StagedIndex {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    const base = try copyIndex(arena, io, try indexPath(git), staged_abs);
-    errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    try applyEntries(try git.withIndex(staged_abs), entries);
-    const digest = (try digestOf(arena, io, staged_abs)) orelse return error.GitFailed;
-    return .{ .base = base, .digest = digest };
+    return (try Here.at(arena_state.allocator(), io, root)).stage(entries, staged_abs);
 }
 
 pub fn stageChecked(gpa: Allocator, io: std.Io, root: []const u8, head: Head, entries: []const Entry, staged_abs: []const u8) !StagedIndex {
@@ -964,18 +1161,7 @@ pub fn publishHeld(gpa: Allocator, io: std.Io, head: Head, lock: disk.Guard) boo
 pub fn acquireIndex(gpa: Allocator, io: std.Io, root: []const u8, staged_abs: []const u8, staged: StagedIndex) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    const lock = try lockPath(git);
-    disk.moveExclusive(gpa, staged_abs, lock) catch |err| switch (err) {
-        error.PathAlreadyExists => return error.IndexLocked,
-        else => return error.GitFailed,
-    };
-    const now = try indexOrNone(arena, io, try indexPath(git));
-    if (!std.mem.eql(u8, &now, &staged.base)) {
-        Dir.deleteFileAbsolute(io, lock) catch {};
-        return error.IndexChanged;
-    }
+    return (try Here.at(arena_state.allocator(), io, root)).acquire(gpa, staged_abs, staged);
 }
 
 pub const LockState = enum { absent, ours, foreign };
@@ -983,40 +1169,21 @@ pub const LockState = enum { absent, ours, foreign };
 pub fn lockState(gpa: Allocator, io: std.Io, root: []const u8, digest: Digest) !LockState {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    const found = (try digestOf(arena, io, try lockPath(git))) orelse return .absent;
-    return if (std.mem.eql(u8, &found, &digest)) .ours else .foreign;
+    return (try Here.at(arena_state.allocator(), io, root)).lockState(digest);
 }
 
 pub fn releaseIndex(gpa: Allocator, io: std.Io, root: []const u8, digest: Digest) !void {
-    if (try lockState(gpa, io, root, digest) != .ours) return;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const git = try Git.init(arena_state.allocator(), io, root);
-    Dir.deleteFileAbsolute(io, try lockPath(git)) catch return error.GitFailed;
+    return (try Here.at(arena_state.allocator(), io, root)).release(digest);
 }
 
 pub var publish_refusals: usize = 0;
 
 pub fn publishIndex(gpa: Allocator, io: std.Io, root: []const u8, digest: Digest) !bool {
-    if (try lockState(gpa, io, root, digest) != .ours) return false;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
-    const git = try Git.init(arena_state.allocator(), io, root);
-    const lock = try lockPath(git);
-    const index = try indexPath(git);
-    var attempt: usize = 0;
-    while (attempt < publish_attempts) : (attempt += 1) {
-        if (attempt != 0) io.sleep(.fromMilliseconds(publish_retry_ms), .awake) catch {};
-        if (builtin.is_test and publish_refusals != 0) {
-            publish_refusals -= 1;
-            continue;
-        }
-        disk.moveOver(gpa, lock, index) catch continue;
-        return true;
-    }
-    return false;
+    return (try Here.at(arena_state.allocator(), io, root)).publish(gpa, digest);
 }
 
 pub fn moveBranch(gpa: Allocator, io: std.Io, root: []const u8, branch: []const u8, commit: []const u8, base: []const u8) !void {
@@ -1066,13 +1233,8 @@ pub fn blobs(arena: Allocator, io: std.Io, root: []const u8, specs: []const []co
     return found;
 }
 
-pub fn storedForm(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8, bytes: []const u8) ![]u8 {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    const path_arg = try std.fmt.allocPrint(arena, "--path={s}", .{path});
-    return gpa.dupe(u8, try git.fed(&.{ "hash-object", "--stdin", path_arg }, bytes));
+pub fn storedForm(git: Git, plain: Plain, path: []const u8, bytes: []const u8) ![]const u8 {
+    return storedOid(git, plain, path, bytes);
 }
 
 pub const Lineage = struct {
@@ -1087,11 +1249,7 @@ pub const Lineage = struct {
     }
 };
 
-pub fn lineage(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8, base: []const u8, paths: []const []const u8) !?Lineage {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
+pub fn lineage(gpa: Allocator, git: Git, commit: []const u8, base: []const u8, paths: []const []const u8) !?Lineage {
     const listed = (try git.run(&.{ "rev-list", "--parents", "-n", "1", commit })) orelse return null;
     var ids = std.mem.tokenizeAny(u8, listed, " \r\n");
     const self_id = ids.next() orelse return null;
@@ -1123,20 +1281,9 @@ pub fn lineage(gpa: Allocator, io: std.Io, root: []const u8, commit: []const u8,
     return .{ .base = base_oids, .after = after_oids };
 }
 
-pub fn indexDigest(gpa: Allocator, io: std.Io, root: []const u8) !?Digest {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    return digestOf(arena, io, try indexPath(git));
-}
-
-pub fn storesAs(gpa: Allocator, io: std.Io, root: []const u8, path: []const u8, file_abs: []const u8, blob: []const u8) !bool {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
-    const path_arg = try std.fmt.allocPrint(arena, "--path={s}", .{path});
+pub fn storesAs(git: Git, plain: Plain, path: []const u8, bytes: []const u8, file_abs: []const u8, blob: []const u8) !bool {
+    if (plain.of(path, bytes)) |oid| return std.mem.eql(u8, oid, blob);
+    const path_arg = try std.fmt.allocPrint(git.arena, "--path={s}", .{path});
     return std.mem.eql(u8, try git.need(&.{ "hash-object", path_arg, "--", file_abs }), blob);
 }
 
@@ -1166,11 +1313,9 @@ pub const Standing = struct {
     }
 };
 
-pub fn standing(gpa: Allocator, io: std.Io, root: []const u8, branch: []const u8, commit: []const u8, entries: []const Entry) !Standing {
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
+pub fn standing(gpa: Allocator, here: Here, branch: []const u8, commit: []const u8, entries: []const Entry, after: []const []const u8) !Standing {
+    const git = here.git;
+    const arena = git.arena;
     const wanted = try gpa.alloc(bool, entries.len);
     errdefer gpa.free(wanted);
     const indexed = try gpa.alloc(bool, entries.len);
@@ -1179,37 +1324,30 @@ pub fn standing(gpa: Allocator, io: std.Io, root: []const u8, branch: []const u8
     @memset(indexed, false);
 
     const head_ref = try git.run(&.{ "symbolic-ref", "-q", "HEAD" });
-    const head_oid = (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" })) orelse return .{ .on_commit = false, .wanted = wanted, .indexed = indexed };
+    const head_oid = here.head orelse return .{ .on_commit = false, .wanted = wanted, .indexed = indexed };
     const on_commit = head_ref != null and std.mem.eql(u8, head_ref.?, branch) and std.mem.eql(u8, head_oid, commit);
 
     const paths = try arena.alloc([]const u8, entries.len);
     for (entries, paths) |entry, *slot| slot.* = entry.path;
-    const tree = try treeEntries(git, head_oid, paths);
+    const known = std.mem.eql(u8, head_oid, commit) and after.len == entries.len;
+    const tree: []const TreeEntry = if (known) &.{} else try treeEntries(git, head_oid, paths);
     const index = try indexEntries(git, paths, false);
-    for (entries, wanted, indexed) |entry, *want, *have| {
-        const in_head = inTree(tree, entry.path);
+    for (entries, wanted, indexed, 0..) |entry, *want, *have, i| {
+        const head_blob: ?[]const u8 = if (known)
+            (if (after[i].len == 0) null else after[i])
+        else if (inTree(tree, entry.path)) |found| found.oid else null;
         const in_index = tracked(index, entry.path);
         if (entry.blob) |blob| {
-            want.* = in_head != null and std.mem.eql(u8, in_head.?.oid, blob);
+            want.* = head_blob != null and std.mem.eql(u8, head_blob.?, blob);
             have.* = in_index != null and in_index.?.stage == 0 and std.mem.eql(u8, in_index.?.oid, blob);
         } else {
-            want.* = in_head == null;
+            want.* = head_blob == null;
             have.* = in_index == null;
         }
     }
     return .{ .on_commit = on_commit, .wanted = wanted, .indexed = indexed };
 }
 
-pub fn advanceIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []const Entry, staged_abs: []const u8, expected: Digest) !void {
-    const staged = try stageIndex(gpa, io, root, entries, staged_abs);
-    errdefer Dir.deleteFileAbsolute(io, staged_abs) catch {};
-    if (!std.mem.eql(u8, &staged.base, &expected)) return error.IndexChanged;
-    try acquireIndex(gpa, io, root, staged_abs, staged);
-    if (!try publishIndex(gpa, io, root, staged.digest)) {
-        try releaseIndex(gpa, io, root, staged.digest);
-        return error.IndexLocked;
-    }
-}
 
 pub fn updateIndex(gpa: Allocator, io: std.Io, root: []const u8, entries: []const Entry) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
