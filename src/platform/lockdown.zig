@@ -24,6 +24,9 @@ pub const setting_sources_flag = "--setting-sources";
 pub const setting_sources = "project";
 const user_settings_off = [_][]const u8{ setting_sources_flag, setting_sources };
 pub const max_mcp_config_bytes = 1024 * 1024;
+pub const project_settings_path = ".claude\\settings.json";
+pub const refused_settings_fields = [_][]const u8{"agent"};
+pub const max_project_settings_bytes = 2 * 1024 * 1024;
 pub const tool_search_variable = "ENABLE_TOOL_SEARCH";
 pub const tool_search_value = "false";
 
@@ -58,6 +61,7 @@ const reserved_flags = [_][]const u8{
     "--setting-sources",
     "--plugin-dir",
     "--agents",
+    "--agent",
     "--dangerously-skip-permissions",
     "--allow-dangerously-skip-permissions",
 };
@@ -481,6 +485,35 @@ pub fn checkProjectConfig(gpa: Allocator, io: std.Io, dir: std.Io.Dir, given_tes
     gpa.free(server);
 }
 
+pub fn refusedSettingsField(gpa: Allocator, settings: []const u8) !?[]const u8 {
+    const text = if (std.mem.startsWith(u8, settings, "\xEF\xBB\xBF")) settings[3..] else settings;
+    const parsed = std.json.parseFromSlice(std.json.Value, gpa, text, .{ .duplicate_field_behavior = .use_last }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    defer parsed.deinit();
+    if (parsed.value != .object) return null;
+    for (refused_settings_fields) |field| {
+        const value = parsed.value.object.get(field) orelse continue;
+        if (value != .null) return field;
+    }
+    return null;
+}
+
+pub fn checkProjectSettings(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !void {
+    const settings = dir.readFileAlloc(io, project_settings_path, gpa, .limited(max_project_settings_bytes + 1)) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir, error.IsDir => return,
+        error.StreamTooLong => return error.LockdownProjectSettingsTooLarge,
+        else => return err,
+    };
+    defer gpa.free(settings);
+    const field = try refusedSettingsField(gpa, settings) orelse return;
+    const line = try std.fmt.allocPrint(gpa, "emetgate lockdown: {s} sets \"{s}\", which would start claude as that subagent with its own tools, hooks and MCP servers outside the lock; remove the field and run lockdown again\n", .{ project_settings_path, field });
+    defer gpa.free(line);
+    std.Io.File.stderr().writeStreamingAll(io, line) catch {};
+    return error.LockdownProjectSetting;
+}
+
 pub fn resolveClaude(gpa: Allocator, io: std.Io, program: []const u8) ![]u8 {
     return exe_path.resolve(gpa, program, null) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -508,6 +541,7 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     try refuseReserved(passthrough);
     const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
     try checkProjectConfig(gpa, io, dir, tests.command);
+    try checkProjectSettings(gpa, io, dir);
     const resolved = try resolveClaude(gpa, io, program);
     defer gpa.free(resolved);
     const dir_abs = try dir.realPathFileAlloc(io, ".", gpa);

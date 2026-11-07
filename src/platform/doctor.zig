@@ -140,6 +140,8 @@ pub fn hint(err: anyerror) ?[]const u8 {
         error.NoEmetgateServer => ".mcp.json has no emetgate server; run: claude mcp add --scope project emetgate -- emetgate mcp --test \"npm test\"",
         error.SeveralEmetgateServers => ".mcp.json has more than one emetgate server; keep one: claude mcp remove <name> --scope project",
         error.LockdownFlagOverride => "a claude flag you passed would undo the lock (--tools, --mcp-config, --settings, --dangerously-skip-permissions...); drop it",
+        error.LockdownProjectSetting => ".claude\\settings.json sets agent, which would run claude as that subagent with its own tools, hooks and MCP servers outside the lock; remove the field",
+        error.LockdownProjectSettingsTooLarge => ".claude\\settings.json is larger than 2 MiB, so lockdown cannot check it for fields that undo the lock; shrink it",
         error.NoTestCommand => "no test command; pass --test \"npm test\" or put {\"test_cmd\": \"npm test\"} in .emetgaterc.json and add --allow-repo-config",
         error.UntrustedRepoConfig => ".emetgaterc.json came with the repo; trust it with --allow-repo-config or pass --test \"<command>\"",
         error.InvalidConfig => ".emetgaterc.json is not valid JSON; e.g. {\"test_cmd\": \"npm test\"}",

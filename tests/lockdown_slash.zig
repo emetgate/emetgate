@@ -25,7 +25,8 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
     defer parsed.deinit();
 
-    try testing.expectEqual(@as(usize, 1), parsed.value.object.count());
+    try testing.expectEqual(@as(usize, 2), parsed.value.object.count());
+    try testing.expectEqual(false, parsed.value.object.get("disableAllHooks").?.bool);
     const events = parsed.value.object.get("hooks").?.object;
     try testing.expectEqual(@as(usize, 3), events.count());
     const prompt_groups = events.get("UserPromptSubmit").?.array.items;
@@ -43,6 +44,17 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
     try testing.expectEqual(@as(usize, 1), session_groups.len);
     try testing.expectEqual(@as(usize, 1), session_groups[0].object.count());
     try expectHandler(session_groups[0], "session");
+}
+
+test "lockdown slash: the settings keep every hook on over a project disableAllHooks" {
+    const json = try lockdown_slash.settingsJson(testing.allocator, exe);
+    defer testing.allocator.free(json);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, json, .{});
+    defer parsed.deinit();
+    const value = parsed.value.object.get(lockdown_slash.disable_hooks_field) orelse return error.TestExpectedDisableAllHooks;
+    try testing.expect(value == .bool);
+    try testing.expect(!value.bool);
+    try testing.expectEqualStrings("disableAllHooks", lockdown_slash.disable_hooks_field);
 }
 
 fn fileAt(dir: std.Io.Dir, sub_path: []const u8) ![]u8 {
