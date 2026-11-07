@@ -19026,6 +19026,78 @@
         "git commit: HEAD read in process names the branch git symbolic-ref names"
       ],
       "note": "a HEAD holding no full object id would be read as detached"
+    },
+    {
+      "id": "LR1-root-unlabelled",
+      "file": "src/platform/low_run.zig",
+      "from": "    try labelRoot(arena, root_abs);\n",
+      "to": "",
+      "kills": [
+        "lockdown run: the repository root keeps a low-write label after the run",
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
+      ],
+      "note": "a low-integrity run could not write its own repository"
+    },
+    {
+      "id": "LR2-run-as-user",
+      "file": "src/platform/run_command.zig",
+      "from": ".{ .backend = .low_integrity, .temp = place.temp }",
+      "to": ".{ .backend = .user, .temp = place.temp }",
+      "kills": [
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity",
+        "lockdown run: without a low token the command does not run"
+      ],
+      "note": "a lockdown run would write anywhere the user can"
+    },
+    {
+      "id": "LR3-chain-credential",
+      "file": "src/platform/command_danger.zig",
+      "from": "    if (command.len > max_command_bytes or std.mem.indexOfAny(u8, command, chain_characters) != null) return false;\n",
+      "to": "    if (command.len > max_command_bytes) return false;\n",
+      "kills": [
+        "credential commands: a plain git push or gh runs as the user, a chained or piped one does not"
+      ],
+      "note": "a redirected or substituted git push would run with the user's rights"
+    },
+    {
+      "id": "LR4-no-credential-exception",
+      "file": "src/protocol/open_run.zig",
+      "from": "    const low = !request.as_user and !try command_danger.usesCredentials(arena, request.command);\n",
+      "to": "    const low = !request.as_user;\n",
+      "kills": [
+        "lockdown run: a plain git fetch runs with the user's rights for the credential manager"
+      ],
+      "note": "git push would run at low integrity where the credential manager fails"
+    },
+    {
+      "id": "LR5-as-user-ignored",
+      "file": "src/protocol/open_run.zig",
+      "from": ".bool => |flag| request.as_user = flag,",
+      "to": ".bool => {},",
+      "kills": [
+        "lockdown run: as_user writes outside the repository with the user's rights"
+      ],
+      "note": "an approved as_user run would still be confined"
+    },
+    {
+      "id": "LR6-hook-as-user-passes",
+      "file": "src/protocol/pretool_hook.zig",
+      "from": "        .bool => |flag| flag,\n",
+      "to": "        .bool => false,\n",
+      "kills": [
+        "pretool hook: as_user asks even for an everyday command, and as_user false or a string as_user is judged as it should be"
+      ],
+      "note": "a full-rights run would start without asking the user"
+    },
+    {
+      "id": "LR7-denial-unexplained",
+      "file": "src/protocol/open_run.zig",
+      "from": "    if (low and low_run.deniedWrite(ran.report)) {\n",
+      "to": "    if (!low and low_run.deniedWrite(ran.report)) {\n",
+      "kills": [
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
+      ],
+      "note": "a refused write would look like an ordinary failure"
     }
   ]
 }

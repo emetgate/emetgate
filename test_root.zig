@@ -115,6 +115,7 @@ pub const checker = src.checker;
 pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const open_shell = src.open_shell;
+pub const low_run = src.low_run;
 pub const command_danger = src.command_danger;
 pub const gate_config = src.gate_config;
 pub const commit_guard = src.commit_guard;
@@ -242,6 +243,7 @@ test {
     _ = @import("tests/run_tool.zig");
     _ = @import("tests/open_run.zig");
     _ = @import("tests/open_run_frozen.zig");
+    _ = @import("tests/open_run_low.zig");
     _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_retry.zig");

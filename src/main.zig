@@ -85,7 +85,8 @@ const usage =
     \\a shell would, and asks the user before a command that deletes recursively, rewrites
     \\or discards git history or changes, drops a database, formats a disk, shuts down,
     \\changes permissions recursively, pipes a download into a shell or changes an
-    \\emetgate rule. It prints nothing for any other command.
+    \\emetgate rule. It always asks before an as_user call. It prints nothing for any
+    \\other command.
     \\hook session is the SessionStart hook that lockdown gives claude: it records a
     \\new context epoch, so that after a compaction or /clear emetgate mcp sends every
     \\file again instead of answering unchanged. It prints nothing, and it records the
@@ -99,8 +100,11 @@ const usage =
     \\lockdown starts claude with no built-in tool and only the .mcp.json servers
     \\(--tools "" --mcp-config .mcp.json --strict-mcp-config, ENABLE_TOOL_SEARCH=false)
     \\and lets emetgate's read-only tools run without a permission prompt (--allowedTools).
-    \\Its emetgate_run runs any command in the repo root (Git Bash, else cmd) with your
-    \\rights and trims the output, labeling every cut; each command is logged with its
+    \\Its emetgate_run runs any command in the repo root (Git Bash, else cmd) at low
+    \\integrity, so it writes only inside the repo (the root gets a permanent low-write
+    \\label), with its own TEMP and caches under %LOCALAPPDATA%\emetgate; a plain git
+    \\push/fetch/pull/clone or gh, and an as_user call you approve, run with your rights.
+    \\It trims the output, labeling every cut; each command is logged with its
     \\exit code, and hook pretool asks you before a destructive one. emetgate mcp
     \\without lockdown keeps the allowlist (--allow-run, --test).
     \\It refuses to start unless .mcp.json has exactly one emetgate server.

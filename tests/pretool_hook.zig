@@ -108,3 +108,22 @@ test "pretool hook: the reply is ASCII even for a command with other characters"
     defer testing.allocator.free(reason);
     try testing.expect(std.mem.indexOf(u8, reason, "d\u{e9}j\u{e0}") != null);
 }
+
+test "pretool hook: as_user asks even for an everyday command, and as_user false or a string as_user is judged as it should be" {
+    const asked = try reply("{\"tool_name\":\"mcp__emetgate__emetgate_run\",\"tool_input\":{\"command\":\"git status\",\"as_user\":true}}");
+    defer testing.allocator.free(asked);
+    const reason = try askReason(asked);
+    defer testing.allocator.free(reason);
+    try testing.expect(std.mem.indexOf(u8, reason, "as_user") != null);
+    try testing.expect(std.mem.indexOf(u8, reason, "git status") != null);
+
+    const passed = try reply("{\"tool_name\":\"mcp__emetgate__emetgate_run\",\"tool_input\":{\"command\":\"git status\",\"as_user\":false}}");
+    defer testing.allocator.free(passed);
+    try testing.expectEqualStrings("", passed);
+
+    const unreadable = try reply("{\"tool_name\":\"mcp__emetgate__emetgate_run\",\"tool_input\":{\"command\":\"git status\",\"as_user\":\"yes\"}}");
+    defer testing.allocator.free(unreadable);
+    const unreadable_reason = try askReason(unreadable);
+    defer testing.allocator.free(unreadable_reason);
+    try testing.expectEqualStrings(pretool_hook.unreadable_reason, unreadable_reason);
+}
