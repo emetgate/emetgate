@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from transcripts import PRICE, base_usd, iter_sessions
+from transcripts import PRICE, base_usd, iter_sessions, price_units
 
 BUCKETS = ["input", "cache_write_1h", "cache_write_5m", "cache_read", "output"]
 CONTEXT_BANDS = [(0, 20000), (20000, 50000), (50000, 100000), (100000, 200000), (200000, 10 ** 12)]
@@ -297,7 +297,7 @@ class Miner:
             self.rebuild_units += (pool - attributable)
             if pool > attributable:
                 cause = "after_user_prompt" if call.prompt_after else "compaction" if call.segment != nxt.segment else "inside_tool_loop"
-                write_price = (nxt.cache_write_1h * PRICE["cache_write_1h"] + nxt.cache_write_5m * PRICE["cache_write_5m"]) / max(nxt.cache_write, 1)
+                write_price = (nxt.cache_write_1h * price_units(nxt.model)["cache_write_1h"] + nxt.cache_write_5m * price_units(nxt.model)["cache_write_5m"]) / max(nxt.cache_write, 1)
                 self.rebuild_usd["%s|%s|%s" % (mode, "subagent" if session.is_subagent else "main", cause)] += (pool - attributable) * write_price * base_usd(nxt.model) / 1e6
             self.written_units += pool
             remaining = attributable - min(attributable, call.output)
@@ -309,7 +309,7 @@ class Miner:
             for use in results:
                 tokens = remaining * use.result_chars / chars
                 tool_tokens += tokens
-                rent = tokens * (RENT_WRITE + RENT_READ * later_in_segment[index])
+                rent = tokens * (RENT_WRITE + price_units(call.model)["cache_read"] * later_in_segment[index])
                 rent_usd = rent * base / 1e6
                 for table, key in ((self.tool_attr, short(use.name)), (self.kind_attr, (short(use.name), arg_kind(use)))):
                     row = table[key]
@@ -420,7 +420,7 @@ class Miner:
                         continue
                     my_read = buckets["cache_read"]
                     their_read = theirs.get("cacheReadInputTokens") or 0
-                    my_usd = sum(buckets[b] * PRICE[b] for b in BUCKETS) * base_usd(model) / 1e6
+                    my_usd = sum(buckets[b] * price_units(model)[b] for b in BUCKETS) * base_usd(model) / 1e6
                     rows.append({
                         "subagents_included": include_subs,
                         "model": model,

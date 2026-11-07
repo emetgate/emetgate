@@ -10,6 +10,10 @@ PRICE = {
     "output": 5.0,
 }
 
+MODEL_OVERRIDES = {
+    "opus-5-5": {"base": 4.0, "cache_read": 0.05},
+}
+
 BASE_USD_PER_MTOK = {
     "fable": 15.0,
     "opus": 5.0,
@@ -22,8 +26,24 @@ IMAGE_CHARS = 6400
 SKIPPED_TYPES = ('"type":"api-request', '"type":"file-history', '"type":"queue-operation', '"type":"last-prompt"')
 
 
+def override(model):
+    name = (model or "").lower()
+    for key, values in MODEL_OVERRIDES.items():
+        if key in name:
+            return values
+    return {}
+
+
+def price_units(model):
+    units = dict(PRICE)
+    units.update({k: v for k, v in override(model).items() if k in PRICE})
+    return units
+
+
 def base_usd(model):
     name = (model or "").lower()
+    if "base" in override(model):
+        return override(model)["base"]
     for family, usd in BASE_USD_PER_MTOK.items():
         if family in name:
             return usd
@@ -71,6 +91,7 @@ class Call:
         return self.input + self.cache_write + self.cache_read
 
     def units(self):
+        PRICE = price_units(self.model)
         return {
             "input": self.input * PRICE["input"],
             "cache_write_1h": self.cache_write_1h * PRICE["cache_write_1h"],
