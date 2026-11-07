@@ -11,6 +11,7 @@ const sandbox = @import("sandbox.zig");
 const commit_names = @import("commit_names.zig");
 const commit_refusal = @import("commit_refusal.zig");
 const git_index = @import("git_index.zig");
+const git_objects = @import("git_objects.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -141,9 +142,15 @@ pub const Git = struct {
     env: ?*const std.process.Environ.Map = null,
     hex: usize = 40,
     index_file: ?[]const u8 = null,
+    git_dir: ?[]const u8 = null,
 
     pub fn init(arena: Allocator, io: std.Io, root: []const u8) !Git {
         return .{ .arena = arena, .io = io, .root = root, .exe = try exe_path.git(arena, root) };
+    }
+
+    fn store(self: Git) !?git_objects.Store {
+        const dir = self.git_dir orelse return null;
+        return git_objects.Store.open(self.arena, self.io, dir, self.env);
     }
 
     pub fn raw(self: Git, argv: []const []const u8) !?[]const u8 {
@@ -366,8 +373,28 @@ pub fn indexEntries(git: Git, paths: []const []const u8, icase: bool) ![]Tracked
     return list.items;
 }
 
+const TreeSink = struct {
+    arena: Allocator,
+    list: *std.ArrayList(TreeEntry),
+
+    pub fn add(self: *TreeSink, path: []const u8, mode: u32, oid: git_objects.Oid) !void {
+        try self.list.append(self.arena, .{
+            .path = path,
+            .mode = try std.fmt.allocPrint(self.arena, "{o:0>6}", .{mode}),
+            .kind = git_objects.kindOfMode(mode),
+            .oid = try self.arena.dupe(u8, &std.fmt.bytesToHex(oid, .lower)),
+        });
+    }
+};
+
 fn treeEntries(git: Git, rev: []const u8, paths: []const []const u8) ![]TreeEntry {
     var list: std.ArrayList(TreeEntry) = .empty;
+    if (try git.store()) |opened| {
+        var objects = opened;
+        var sink: TreeSink = .{ .arena = git.arena, .list = &list };
+        if (try objects.entriesAt(rev, paths, &sink)) return list.items;
+        list.clearRetainingCapacity();
+    }
     var at: usize = 0;
     while (at < paths.len) {
         const end = @min(paths.len, at + paths_per_call);
@@ -828,6 +855,7 @@ fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     const known = try facts(git);
     git.hex = known.oid.len;
     git.index_file = known.index;
+    git.git_dir = known.git_dir;
     for (in_progress) |name| {
         const path = try std.fs.path.join(arena, &.{ known.git_dir, name });
         if (try exists(io, path)) return error.OperationInProgress;
@@ -885,7 +913,12 @@ pub var listings_read: usize = 0;
 
 fn treeListing(git: Git, commit: []const u8, tree: []const u8) ![]const u8 {
     if (try keptListing(git.arena, tree)) |kept| return kept;
-    const out = try git.needRaw(&.{ "ls-tree", "-r", "-z", if (isUnborn(commit)) tree else commit });
+    const rev = if (isUnborn(commit)) tree else commit;
+    const listed: ?[]const u8 = if (try git.store()) |opened| blk: {
+        var objects = opened;
+        break :blk try objects.listing(rev);
+    } else null;
+    const out = listed orelse try git.needRaw(&.{ "ls-tree", "-r", "-z", rev });
     if (builtin.is_test) listings_read += 1;
     keepListing(tree, out);
     return out;
@@ -1132,6 +1165,7 @@ pub const Here = struct {
         if (!std.mem.eql(u8, dashes, "--") or lines.next() != null) return error.GitFailed;
         var here = withHead(git, try listedPath(git, listed), head);
         here.git_dir = git_dir;
+        here.git.git_dir = git_dir;
         return here;
     }
 
@@ -1390,13 +1424,25 @@ pub const Lineage = struct {
     }
 };
 
-pub fn lineage(gpa: Allocator, git: Git, commit: []const u8, base: []const u8, paths: []const []const u8) !?Lineage {
+fn commitParents(git: Git, commit: []const u8) !?[]const []const u8 {
     const listed = (try git.run(&.{ "rev-list", "--parents", "-n", "1", commit })) orelse return null;
     var ids = std.mem.tokenizeAny(u8, listed, " \r\n");
     const self_id = ids.next() orelse return null;
-    const parent = ids.next() orelse if (isUnborn(base)) base else return null;
-    if (ids.next() != null) return null;
-    if (!std.mem.eql(u8, self_id, commit) or !std.mem.eql(u8, parent, base)) return null;
+    if (!std.mem.eql(u8, self_id, commit)) return null;
+    var list: std.ArrayList([]const u8) = .empty;
+    while (ids.next()) |id| try list.append(git.arena, id);
+    return list.items;
+}
+
+pub fn lineage(gpa: Allocator, git: Git, commit: []const u8, base: []const u8, paths: []const []const u8) !?Lineage {
+    const found: ?[]const []const u8 = if (try git.store()) |opened| blk: {
+        var objects = opened;
+        break :blk try objects.parents(commit);
+    } else null;
+    const parent_ids = found orelse (try commitParents(git, commit)) orelse return null;
+    if (parent_ids.len > 1) return null;
+    const parent = if (parent_ids.len == 1) parent_ids[0] else if (isUnborn(base)) base else return null;
+    if (!std.mem.eql(u8, parent, base)) return null;
     const before: []const TreeEntry = if (isUnborn(base)) &.{} else try treeEntries(git, base, paths);
     const after = try treeEntries(git, commit, paths);
     const base_oids = try gpa.alloc([]u8, paths.len);

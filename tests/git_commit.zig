@@ -525,3 +525,224 @@ test "git commit: the index read in process lists exactly what git ls-files list
         try testing.expect((try git_commit.matchEntries(arena, all, &.{"C:/src"}, false)) == null);
     }
 }
+
+const git_objects = emetgate.git_objects;
+
+const ObjectsCase = struct {
+    repo: Repo,
+    arena_state: std.heap.ArenaAllocator,
+    git_dir: []const u8,
+
+    fn init() !ObjectsCase {
+        var repo = try Repo.init();
+        errdefer repo.deinit();
+        var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+        errdefer arena_state.deinit();
+        const git_dir_out = try repo.out(&.{ "rev-parse", "--absolute-git-dir" });
+        defer testing.allocator.free(git_dir_out);
+        const git_dir = try arena_state.allocator().dupe(u8, std.mem.trim(u8, git_dir_out, " \r\n"));
+        return .{ .repo = repo, .arena_state = arena_state, .git_dir = git_dir };
+    }
+
+    fn deinit(self: *ObjectsCase) void {
+        self.arena_state.deinit();
+        self.repo.deinit();
+    }
+
+    fn store(self: *ObjectsCase) !?git_objects.Store {
+        return git_objects.Store.open(self.arena_state.allocator(), testing.io, self.git_dir, null);
+    }
+
+    fn line(self: *ObjectsCase, argv: []const []const u8) ![]const u8 {
+        const out = try self.repo.out(argv);
+        defer testing.allocator.free(out);
+        return self.arena_state.allocator().dupe(u8, std.mem.trim(u8, out, " \r\n"));
+    }
+
+    fn head(self: *ObjectsCase) ![]const u8 {
+        return self.line(&.{ "rev-parse", "HEAD" });
+    }
+
+    fn write(self: *ObjectsCase, rel: []const u8, text: []const u8) !void {
+        const sub = try std.fmt.allocPrint(testing.allocator, "repo/{s}", .{rel});
+        defer testing.allocator.free(sub);
+        if (std.fs.path.dirname(sub)) |parent| try self.repo.tmp.dir.createDirPath(testing.io, parent);
+        try self.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = sub, .data = text });
+    }
+
+    fn commitAll(self: *ObjectsCase, message: []const u8) !void {
+        try self.repo.git(&.{ "add", "-A" });
+        try self.repo.git(&.{ "commit", "-q", "-m", message });
+    }
+};
+
+const PathSink = struct {
+    arena: std.mem.Allocator,
+    out: std.ArrayList(u8) = .empty,
+
+    pub fn add(self: *PathSink, path: []const u8, mode: u32, oid: git_objects.Oid) !void {
+        try self.out.print(self.arena, "{o:0>6} {s} {s}\t{s}\x00", .{ mode, git_objects.kindOfMode(mode), std.fmt.bytesToHex(oid, .lower), path });
+    }
+};
+
+fn sortedRecords(arena: std.mem.Allocator, bytes: []const u8) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    var records = std.mem.tokenizeScalar(u8, bytes, 0);
+    while (records.next()) |record| try list.append(arena, record);
+    std.mem.sort([]const u8, list.items, {}, struct {
+        fn lessThan(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lessThan);
+    return list.items;
+}
+
+fn expectSameObjects(case: *ObjectsCase, commits: []const []const u8, paths: []const []const u8) !void {
+    const arena = case.arena_state.allocator();
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    for (commits) |commit| {
+        const theirs = try case.repo.out(&.{ "ls-tree", "-r", "-z", commit });
+        defer testing.allocator.free(theirs);
+        const mine = (try objects.listing(commit)) orelse return error.NotRead;
+        try testing.expectEqualStrings(theirs, mine);
+
+        const listed = try case.line(&.{ "rev-list", "--parents", "-n", "1", commit });
+        var ids = std.mem.tokenizeScalar(u8, listed, ' ');
+        try testing.expectEqualStrings(commit, ids.next().?);
+        const parents = (try objects.parents(commit)) orelse return error.NotRead;
+        for (parents) |parent| try testing.expectEqualStrings(ids.next() orelse return error.TestUnexpectedResult, parent);
+        try testing.expect(ids.next() == null);
+
+        var sink: PathSink = .{ .arena = arena };
+        try testing.expect(try objects.entriesAt(commit, paths, &sink));
+        var argv: std.ArrayList([]const u8) = .empty;
+        try argv.appendSlice(arena, &.{ "ls-tree", "-z", commit, "--" });
+        try argv.appendSlice(arena, paths);
+        const each = try case.repo.out(argv.items);
+        defer testing.allocator.free(each);
+        const want = try sortedRecords(arena, each);
+        const got = try sortedRecords(arena, sink.out.items);
+        try testing.expectEqual(want.len, got.len);
+        for (want, got) |a, b| try testing.expectEqualStrings(a, b);
+    }
+}
+
+test "git objects: trees and parents read in process match git for loose objects, offset deltas and ref deltas" {
+    try skipOffWindows();
+    var case = try ObjectsCase.init();
+    defer case.deinit();
+    const arena = case.arena_state.allocator();
+    var commits: std.ArrayList([]const u8) = .empty;
+    try commits.append(arena, try case.head());
+    var big: std.ArrayList(u8) = .empty;
+    for (0..4000) |i| try big.print(arena, "export const line{d} = {d};\n", .{ i, i * 7 });
+    for (0..4) |round| {
+        try big.print(arena, "export const round{d} = {d};\n", .{ round, round });
+        try case.write("src/deep/er/big.ts", big.items);
+        try case.write(try std.fmt.allocPrint(arena, "docs/n{d}.md", .{round}), "note\n");
+        try case.write("z.txt", try std.fmt.allocPrint(arena, "z {d}\n", .{round}));
+        try case.commitAll("round");
+        try commits.append(arena, try case.head());
+    }
+    const a_blob = try case.line(&.{ "rev-parse", "HEAD:src/a.ts" });
+    const first = commits.items[0];
+    try case.repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "120000,{s},src/link", .{a_blob}) });
+    try case.repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "160000,{s},vendor/sub", .{first}) });
+    try case.repo.git(&.{ "update-index", "--chmod=+x", "src/b.ts" });
+    try case.repo.git(&.{ "commit", "-q", "-m", "modes" });
+    try commits.append(arena, try case.head());
+    const branch = try case.line(&.{ "symbolic-ref", "--short", "HEAD" });
+    try case.repo.git(&.{ "checkout", "-q", "-b", "side", first });
+    try case.write("side.txt", "side\n");
+    try case.commitAll("side");
+    try commits.append(arena, try case.head());
+    try case.repo.git(&.{ "checkout", "-q", "-f", branch });
+    try case.repo.git(&.{ "merge", "-q", "--no-edit", "--no-ff", "side" });
+    try commits.append(arena, try case.head());
+    const paths = [_][]const u8{ "src/a.ts", "src/b.ts", "src/link", "vendor/sub", "vendor/subx", "src/deep/er/big.ts", "missing.ts", "src/b.tsx", "src/a.ts", "z.txt", "docs" };
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    var sink: PathSink = .{ .arena = arena };
+    try testing.expect(!try objects.entriesAt(first, &.{ "src", "src/a.ts" }, &sink));
+    try testing.expect(!try objects.entriesAt(first, &.{ "vendor/sub/x", "vendor/sub" }, &sink));
+    try testing.expect(!try objects.entriesAt(first, &.{"src/"}, &sink));
+    try testing.expect(!try objects.entriesAt(first, &.{":(icase)src"}, &sink));
+
+    try expectSameObjects(&case, commits.items, &paths);
+    try case.repo.git(&.{ "repack", "-a", "-d", "-f", "-q", "--depth=50", "--window=50" });
+    try case.repo.git(&.{"prune-packed"});
+    try expectSameObjects(&case, commits.items, &paths);
+    try case.repo.git(&.{ "-c", "repack.useDeltaBaseOffset=false", "repack", "-a", "-d", "-f", "-q", "--depth=50", "--window=50" });
+    try case.repo.git(&.{"prune-packed"});
+    try expectSameObjects(&case, commits.items, &paths);
+}
+
+test "git objects: the reader declines repositories whose objects git would find or rewrite another way" {
+    try skipOffWindows();
+    var case = try ObjectsCase.init();
+    defer case.deinit();
+    const arena = case.arena_state.allocator();
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    try testing.expect((try objects.read("0000000000000000000000000000000000000000")) == null);
+    try testing.expect((try objects.read("HEAD")) == null);
+    try testing.expect((try objects.listing("0000000000000000000000000000000000000000")) == null);
+
+    const first = try case.head();
+    try case.write("c.ts", "c\n");
+    try case.commitAll("two");
+    const second = try case.head();
+    try case.repo.git(&.{ "replace", second, first });
+    try testing.expect((try case.store()) == null);
+    try case.repo.git(&.{ "replace", "-d", second });
+    try case.repo.git(&.{ "pack-refs", "--all" });
+    try std.Io.Dir.cwd().deleteTree(testing.io, try std.fs.path.join(arena, &.{ case.git_dir, "refs", "replace" }));
+    try testing.expect((try case.store()) != null);
+
+    for ([_][]const u8{ "objects/info/alternates", "info/grafts", "shallow" }) |rest| {
+        const path = try std.fs.path.join(arena, &.{ case.git_dir, rest });
+        if (std.fs.path.dirname(path)) |parent| try std.Io.Dir.cwd().createDirPath(testing.io, parent);
+        try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = "x\n" });
+        try testing.expect((try case.store()) == null);
+        try std.Io.Dir.cwd().deleteFile(testing.io, path);
+        try testing.expect((try case.store()) != null);
+    }
+
+    try case.repo.git(&.{ "config", "extensions.worktreeConfig", "true" });
+    try testing.expect((try case.store()) == null);
+    try case.repo.git(&.{ "config", "--unset", "extensions.worktreeConfig" });
+    try testing.expect((try case.store()) != null);
+
+    var env = std.process.Environ.Map.init(arena);
+    try env.put("GIT_OBJECT_DIRECTORY", "x");
+    try testing.expect((try git_objects.Store.open(arena, testing.io, case.git_dir, &env)) == null);
+}
+
+test "git objects: a loose object whose bytes do not hash to its name is never returned" {
+    try skipOffWindows();
+    var case = try ObjectsCase.init();
+    defer case.deinit();
+    const arena = case.arena_state.allocator();
+    const commit = try case.head();
+    const tree = try case.line(&.{ "rev-parse", "HEAD^{tree}" });
+    const commit_path = try std.fmt.allocPrint(arena, "{s}/objects/{s}/{s}", .{ case.git_dir, commit[0..2], commit[2..] });
+    const tree_path = try std.fmt.allocPrint(arena, "{s}/objects/{s}/{s}", .{ case.git_dir, tree[0..2], tree[2..] });
+    const tree_bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, tree_path, arena, .unlimited);
+    try std.Io.Dir.cwd().deleteFile(testing.io, commit_path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = commit_path, .data = tree_bytes });
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    try testing.expect((try objects.read(commit)) == null);
+    try testing.expect((try objects.parents(commit)) == null);
+    try testing.expect((try objects.listing(commit)) == null);
+}
+
+test "git objects: a delta is applied exactly and a malformed one is refused" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = "hello world, hello zig";
+    const delta = [_]u8{ base.len, 11, 0x91, 0, 5, 6, ' ', 't', 'h', 'e', 'r', 'e' };
+    try testing.expectEqualStrings("hello there", try git_objects.applyDelta(arena, base, &delta));
+    try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, "short", &delta));
+    try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, base, &[_]u8{ base.len, 5, 0 }));
+    try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, base, &[_]u8{ base.len, 4, 0x91, 20, 5 }));
+    try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, base, &[_]u8{ base.len, 6, 0x91, 0, 5 }));
+}
