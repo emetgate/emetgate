@@ -9,6 +9,7 @@ const fixture = @import("ts_fixture.zig");
 const rename_case = @import("rename_tool.zig");
 const move_file_case = @import("move_file_tool.zig");
 const common = @import("commit_batch.zig");
+const Snapshots = @import("crash_snapshot.zig").Snapshots;
 
 const testing = std.testing;
 const Env = common.Env;
@@ -21,17 +22,6 @@ const setup_new = "## Setup\n\nnew\n";
 const hand_src = "export const hand = 1;\n";
 const hand_edited = "export const hand = 2;\n";
 const hand: fixture.File = .{ .rel = "src/hand.ts", .text = hand_src };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Kind = enum { batch, move_file };
 
@@ -63,6 +53,10 @@ const World = struct {
             .batch => self.plain.deinit(),
             .move_file => self.served.deinit(),
         }
+    }
+
+    fn settle(self: *World) void {
+        if (self.kind == .move_file) self.served.session.deinit();
     }
 
     fn run(self: *World, step: *const disk.Step, request: *commit_plan.Request) !bool {
@@ -122,24 +116,25 @@ fn expectInvariants(env: *Env, before: []const u8, report: ?disk.RecoverReport) 
     return moved;
 }
 
-fn crashAtEveryStep(kind: Kind) !void {
+fn crashAtEverySnapshot(kind: Kind) !void {
+    var world: World = .{ .kind = kind };
+    try world.init(kind);
+    defer world.deinit();
+    const env = &world.env;
+    const before = try env.head();
+    var snapshots = try Snapshots.init(env.repo.root_abs);
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    var request: commit_plan.Request = .{ .message = common.message };
+    defer request.deinit(testing.allocator);
+    try testing.expect(!try world.run(&step, &request));
+    const steps = try snapshots.taken();
+    try testing.expect(try expectInvariants(env, before, null));
+    try testing.expectEqualStrings(request.oid.?, try env.head());
+    world.settle();
     var broken: usize = 0;
-    var stop: usize = 1;
-    while (true) : (stop += 1) {
-        var world: World = .{ .kind = kind };
-        try world.init(kind);
-        defer world.deinit();
-        const env = &world.env;
-        const before = try env.head();
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-        var request: commit_plan.Request = .{ .message = common.message };
-        defer request.deinit(testing.allocator);
-        if (!try world.run(&step, &request)) {
-            try testing.expect(try expectInvariants(env, before, null));
-            try testing.expectEqualStrings(request.oid.?, try env.head());
-            break;
-        }
+    for (1..steps + 1) |stop| {
+        try snapshots.restore(stop);
         const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
         const moved = expectInvariants(env, before, report) catch |err| {
             broken += 1;
@@ -153,10 +148,10 @@ fn crashAtEveryStep(kind: Kind) !void {
 
 test "commit batch crash: a crash after any step of a committing try_batch recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEveryStep(.batch);
+    try crashAtEverySnapshot(.batch);
 }
 
 test "commit batch crash: a crash after any step of a committing file move recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEveryStep(.move_file);
+    try crashAtEverySnapshot(.move_file);
 }

@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .probe = probe };
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter };
     const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
@@ -91,18 +91,32 @@ pub fn build(b: *std.Build) void {
         .root_module = testModule(b, common),
         .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
     });
-    b.step("test-bin", "Build the test binary into zig-out/bin/test-all").dependOn(&b.addInstallArtifact(test_all, .{}).step);
+    const test_bin_step = b.step("test-bin", "Build the test binary and the sandbox probe it runs into zig-out/bin");
+    test_bin_step.dependOn(&b.addInstallArtifact(test_all, .{}).step);
+    test_bin_step.dependOn(&b.addInstallArtifact(probe, .{}).step);
 
     const test_step = b.step("test", "Run every test from one binary in parallel shards, then the CLI end-to-end tests");
-    const full_run = testRun(b, test_all, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
+    const test_selected = if (test_filters.len == 0) test_all else b.addTest(.{
+        .name = "test-selected",
+        .root_module = testModule(b, common),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+        .filters = test_filters,
+    });
+    const full_run = testRun(b, test_selected, probe, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
     if (test_manifest) |path| full_run.addArg(b.fmt("--manifest={s}", .{path}));
     test_step.dependOn(&full_run.step);
 
     const fast_step = b.step("test-fast", "Run the engine unit tests only: no git, no sandbox, no child process");
-    fast_step.dependOn(&testRun(b, test_all, .{ .filters = &.{"src.engine."} }, &.{}).step);
+    const test_fast = b.addTest(.{
+        .name = "test-fast",
+        .root_module = testModule(b, common),
+        .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
+        .filters = &.{"src.engine."},
+    });
+    fast_step.dependOn(&testRun(b, test_fast, probe, .{}, &.{}).step);
 
     const timing_step = b.step("test-timing", "Run every test one by one in one process and print the slowest tests and per-file totals");
-    const timing = testRun(b, test_all, selection, &.{"--timing"});
+    const timing = testRun(b, test_selected, probe, selection, &.{"--timing"});
     if (b.args) |args| timing.addArgs(args);
     timing_step.dependOn(&timing.step);
 
@@ -162,12 +176,10 @@ const TestModuleOptions = struct {
     c_module: *std.Build.Module,
     version_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
-    probe: *std.Build.Step.Compile,
 };
 
-fn buildOptions(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.Module {
+fn buildOptions(b: *std.Build, bench: bool) *std.Build.Module {
     const values = b.addOptions();
-    values.addOptionPath("probe_path", options.probe.getEmittedBin());
     values.addOption(bool, "bench", bench);
     return values.createModule();
 }
@@ -181,7 +193,7 @@ fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
             .{ .name = "version", .module = options.version_module },
-            .{ .name = "build_options", .module = buildOptions(b, options, bench) },
+            .{ .name = "build_options", .module = buildOptions(b, bench) },
         },
     });
     module.linkLibrary(options.tree_sitter);
@@ -197,7 +209,7 @@ fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
             .{ .name = "version", .module = options.version_module },
-            .{ .name = "build_options", .module = buildOptions(b, options, false) },
+            .{ .name = "build_options", .module = buildOptions(b, false) },
         },
     });
     module.addImport("emetgate", module);
@@ -218,8 +230,9 @@ fn partIsFirst(text: []const u8) ?bool {
     return index == 1;
 }
 
-fn testRun(b: *std.Build, compiled: *std.Build.Step.Compile, selection: TestSelection, extra: []const []const u8) *std.Build.Step.Run {
+fn testRun(b: *std.Build, compiled: *std.Build.Step.Compile, probe: *std.Build.Step.Compile, selection: TestSelection, extra: []const []const u8) *std.Build.Step.Run {
     const run = b.addRunArtifact(compiled);
+    run.addPrefixedArtifactArg("--probe=", probe);
     run.setCwd(b.path("."));
     run.has_side_effects = true;
     for (selection.filters) |filter| run.addArgs(&.{ "--filter", filter });

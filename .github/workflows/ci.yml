@@ -62,13 +62,25 @@ jobs:
           echo "checked $count commit(s) in ${range[*]}"
           exit $bad
 
+  generated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verification page, README facts and forbidden words are up to date
+        run: |
+          python3 tools/verification_page.py --check
+          python3 tools/readme_facts.py --check
+          python3 tools/forbidden_words.py --check
+          python3 tools/vendor_manifest.py --check
+
   test-part:
     runs-on: windows-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        optimize: [Debug, ReleaseSafe]
+        optimize: ${{ fromJSON(github.event_name == 'pull_request' && '["Debug"]' || '["Debug", "ReleaseSafe"]') }}
         part: [1, 2, 3, 4]
     name: test part (${{ matrix.optimize }} ${{ matrix.part }}/4)
     steps:
@@ -78,9 +90,11 @@ jobs:
         if: github.event_name != 'push'
         uses: actions/cache/restore@v4
         with:
-          path: .zig-cache
-          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
-          restore-keys: zig-cache-${{ matrix.optimize }}-
+          path: |
+            .zig-cache
+            ~\AppData\Local\zig
+          key: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-${{ github.sha }}
+          restore-keys: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-
       - name: Install TypeScript for the real language service tests
         shell: pwsh
         run: |
@@ -107,17 +121,10 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && matrix.part == 1
         uses: actions/cache/save@v4
         with:
-          path: .zig-cache
-          key: zig-cache-${{ matrix.optimize }}-${{ github.sha }}
-      - name: Verification page, README facts and forbidden words are up to date
-        if: matrix.optimize == 'Debug' && matrix.part == 1
-        shell: bash
-        run: |
-          python tools/verification_page.py --check
-          python tools/readme_facts.py --check
-          python tools/forbidden_words.py --check
-          python tools/vendor_manifest.py --check
-
+          path: |
+            .zig-cache
+            ~\AppData\Local\zig
+          key: zig-cache-${{ env.ZIG_VERSION }}-${{ matrix.optimize }}-${{ github.sha }}
   test:
     needs: test-part
     if: always()
@@ -129,13 +136,19 @@ jobs:
         optimize: [Debug, ReleaseSafe]
     name: test (${{ matrix.optimize }})
     steps:
+      - name: ReleaseSafe runs on main and nightly, not on pull requests
+        if: github.event_name == 'pull_request' && matrix.optimize == 'ReleaseSafe'
+        run: echo "ReleaseSafe parts run on every push to main and every nightly run"
       - uses: actions/checkout@v4
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
       - uses: actions/download-artifact@v4
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
         with:
           pattern: test-parts-${{ matrix.optimize }}-*
           path: parts
           merge-multiple: true
       - name: The four parts passed and together ran every selected test exactly once
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
         run: |
           mkdir -p parts
           python3 tools/check_parts.py --count 4 parts

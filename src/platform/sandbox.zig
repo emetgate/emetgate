@@ -450,6 +450,10 @@ pub const Service = struct {
         return !hasExited(self.process);
     }
 
+    pub fn kill(self: *const Service) void {
+        self.job.stop();
+    }
+
     pub fn stop(self: *Service) void {
         self.job.stop();
         std.os.windows.CloseHandle(self.stdin.handle);
@@ -1013,11 +1017,10 @@ fn waitExitCode(process: std.os.windows.HANDLE) !u32 {
 
 const test_util = @import("../engine/test_util.zig");
 const testing = std.testing;
-const build_options = @import("build_options");
 
 fn probe(args: []const []const u8, limits: Limits) !Report {
     var argv_buf: [8][]const u8 = undefined;
-    argv_buf[0] = build_options.probe_path;
+    argv_buf[0] = test_util.probePath();
     @memcpy(argv_buf[1..][0..args.len], args);
     return run(testing.allocator, testing.io, .{ .argv = argv_buf[0 .. args.len + 1], .cwd = ".", .limits = limits });
 }
@@ -1103,7 +1106,7 @@ test "the user backend runs without the low-integrity check while a sandboxed ru
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     defer injected_fault = null;
     injected_fault = .verify;
-    const argv = [_][]const u8{ build_options.probe_path, "both" };
+    const argv = [_][]const u8{ test_util.probePath(), "both" };
     try testing.expectError(error.SandboxUnavailable, run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 } }));
     const report = try run(testing.allocator, testing.io, .{ .argv = &argv, .cwd = ".", .limits = .{ .timeout_ms = 10_000 }, .backend = .user });
     defer report.deinit(testing.allocator);
@@ -1356,7 +1359,7 @@ test "a program that does not exist is an error, not a hang" {
 
 test "a service keeps running, answers each line on its stdin and dies with its job" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
+    var service = try spawnService(testing.allocator, &.{ test_util.probePath(), "echo" }, ".");
     var stopped = false;
     defer if (!stopped) service.stop();
     try requireLowIntegrity(service.process);
@@ -1393,7 +1396,7 @@ test "a service whose token is not low integrity is refused before it runs" {
         const step: TokenStep = @enumFromInt(field.value);
         errdefer std.debug.print("fault at {t} did not fail closed\n", .{step});
         injected_fault = step;
-        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
+        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ test_util.probePath(), "echo" }, "."));
     }
 }
 
@@ -1457,15 +1460,15 @@ fn settledChildren(image: []const u8, expected: usize) !usize {
 test "a spawn fault is decided before the process is created, so no child of the test is left behind" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     defer injected_fault = null;
-    const image = std.fs.path.basename(build_options.probe_path);
+    const image = std.fs.path.basename(test_util.probePath());
     const before = try ownChildrenNamed(image);
     inline for (std.meta.fields(TokenStep)) |field| {
         injected_fault = @enumFromInt(field.value);
-        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, "."));
+        try testing.expectError(error.SandboxUnavailable, spawnService(testing.allocator, &.{ test_util.probePath(), "echo" }, "."));
     }
     injected_fault = null;
     try testing.expectEqual(before, try settledChildren(image, before));
-    var service = try spawnService(testing.allocator, &.{ build_options.probe_path, "echo" }, ".");
+    var service = try spawnService(testing.allocator, &.{ test_util.probePath(), "echo" }, ".");
     try testing.expectEqual(before + 1, try ownChildrenNamed(image));
     service.stop();
 }

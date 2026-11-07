@@ -14,6 +14,10 @@ pub fn slow() error{SkipZigTest}!void {
     return error.SkipZigTest;
 }
 
+pub fn probePath() []const u8 {
+    return @import("root").emetgate_probe;
+}
+
 pub fn parser() ts.Error!ts.Parser {
     return ts.Parser.init(language.grammar());
 }

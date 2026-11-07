@@ -20,7 +20,7 @@ const Reply = struct { text: []const u8, is_error: bool };
 fn git(cwd: []const u8, args: []const []const u8) ![]u8 {
     var argv: std.ArrayList([]const u8) = .empty;
     defer argv.deinit(gpa);
-    try argv.append(gpa, "git");
+    try argv.append(gpa, try git_fixture.git());
     try argv.appendSlice(gpa, args);
     const result = try bounded_run.run(gpa, testing.io, .{ .argv = argv.items, .cwd = .{ .path = cwd } });
     defer gpa.free(result.stderr);

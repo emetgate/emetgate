@@ -79,6 +79,7 @@ fn gateEnv(git: Git, head: Head, gate_abs: []const u8, index_abs: []const u8) !G
     try env.put("GIT_INDEX_FILE", index_abs);
     var inside = git;
     inside.env = env;
+    inside.index_file = if (std.fs.path.isAbsolute(index_abs)) index_abs else null;
     inside.root = gate_abs;
     return inside;
 }

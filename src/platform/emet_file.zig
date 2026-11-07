@@ -1,6 +1,7 @@
 const std = @import("std");
 const display_path = @import("display_path.zig");
 const bounded_run = @import("bounded_run.zig");
+const exe_path = @import("exe_path.zig");
 const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
@@ -744,12 +745,13 @@ fn listGit(io: Io, gpa: Allocator, arena: Allocator, root: Io.Dir, root_path: []
         &.{ "--others", "--exclude-standard" },
     };
     const given = specs orelse &.{};
+    const git = exe_path.git(arena, root_path) catch return false;
     var start: usize = 0;
     while (true) {
         const end = chunkEnd(given, start);
         for (modes) |mode| {
             var argv: std.ArrayList([]const u8) = .empty;
-            try argv.appendSlice(arena, &.{ "git", "--literal-pathspecs", "-C", root_path, "ls-files", "-z" });
+            try argv.appendSlice(arena, &.{ git, "--literal-pathspecs", "-C", root_path, "ls-files", "-z" });
             try argv.appendSlice(arena, mode);
             if (specs != null) {
                 try argv.append(arena, "--");
@@ -769,11 +771,13 @@ fn listGit(io: Io, gpa: Allocator, arena: Allocator, root: Io.Dir, root_path: []
 
 pub fn ignored(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: []const []const u8) ![][]const u8 {
     var out: std.ArrayList([]const u8) = .empty;
+    if (paths.len == 0) return out.items;
+    const git = exe_path.git(arena, root_path) catch return out.items;
     var start: usize = 0;
     while (start < paths.len) {
         const end = chunkEnd(paths, start);
         var argv: std.ArrayList([]const u8) = .empty;
-        try argv.appendSlice(arena, &.{ "git", "-c", "core.quotePath=false", "-C", root_path, "check-ignore", "--" });
+        try argv.appendSlice(arena, &.{ git, "-c", "core.quotePath=false", "-C", root_path, "check-ignore", "--" });
         try argv.appendSlice(arena, paths[start..end]);
         const r = bounded_run.run(gpa, io, .{ .argv = argv.items }) catch return out.items;
         defer gpa.free(r.stdout);

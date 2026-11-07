@@ -14,14 +14,24 @@ runs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           fsutil 8dot3name query $drive
         }
+    - name: Restore the Zig and ripgrep downloads
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/downloads
+        key: tool-downloads-zig-${{ env.ZIG_VERSION }}-rg-14.1.1
     - name: Install Zig
       shell: pwsh
       run: |
-        $zip = "$env:RUNNER_TEMP\zig-x86_64-windows-$env:ZIG_VERSION.zip"
-        $url = "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip"
-        Invoke-WebRequest $url -OutFile $zip
-        Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\zig"
-        Remove-Item $zip
+        $dl = "$env:RUNNER_TEMP\downloads"
+        New-Item -ItemType Directory -Force $dl | Out-Null
+        $zip = "$dl\zig-x86_64-windows-$env:ZIG_VERSION.zip"
+        if (-not (Test-Path $zip)) {
+          $url = "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip"
+          Invoke-WebRequest $url -OutFile $zip
+        }
+        New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\zig" | Out-Null
+        & "$env:SystemRoot\System32\tar.exe" -xf $zip -C "$env:RUNNER_TEMP\zig"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
         Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\zig\zig-x86_64-windows-$env:ZIG_VERSION"
     - shell: pwsh
       run: zig version
@@ -37,8 +47,11 @@ runs:
         $version = "14.1.1"
         $name = "ripgrep-$version-x86_64-pc-windows-msvc"
         $url = "https://github.com/BurntSushi/ripgrep/releases/download/$version/$name.zip"
-        Invoke-WebRequest $url -OutFile "$env:RUNNER_TEMP\rg.zip"
-        Expand-Archive "$env:RUNNER_TEMP\rg.zip" -DestinationPath "$env:RUNNER_TEMP\rg"
+        $zip = "$env:RUNNER_TEMP\downloads\$name.zip"
+        if (-not (Test-Path $zip)) { Invoke-WebRequest $url -OutFile $zip }
+        New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\rg" | Out-Null
+        & "$env:SystemRoot\System32\tar.exe" -xf $zip -C "$env:RUNNER_TEMP\rg"
+        if ($LASTEXITCODE -ne 0) { exit 1 }
         $dir = "$env:RUNNER_TEMP\rg\$name"
         Add-Content -Path $env:GITHUB_PATH -Value $dir
         & "$dir\rg.exe" --version

@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const disk = @import("emetgate").disk;
 const symbol = @import("emetgate").symbol;
 const fixture = @import("ts_fixture.zig");
+const git_fixture = @import("git_fixture.zig");
+const Snapshots = @import("crash_snapshot.zig").Snapshots;
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -13,17 +15,6 @@ const u1_old = "import { a } from \"./a\";\nexport const one = a();\n";
 const u1_new = "import { a } from \"./lib/deep/a\";\nexport const one = a();\n";
 const u2_old = "import { a } from \"./a\";\nexport const two = a() + 1;\n";
 const u2_new = "import { a } from \"./lib/deep/a\";\nexport const two = a() + 1;\n";
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Setup = struct {
     repo: TsRepo,
@@ -68,7 +59,7 @@ const Setup = struct {
     }
 
     fn tracked(self: *Setup, rel: []const u8) !bool {
-        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "ls-files", "--", rel }, .cwd = .{ .path = self.repo.root_abs } });
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "ls-files", "--", rel }, .cwd = .{ .path = self.repo.root_abs } });
         defer testing.allocator.free(result.stdout);
         defer testing.allocator.free(result.stderr);
         return std.mem.trim(u8, result.stdout, " \r\n").len != 0;
@@ -130,28 +121,26 @@ fn recoverTwice(setup: *Setup, crash_in_recovery: bool) !void {
 test "file move crash: a move into two new directories with two users cut after every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     for ([_]bool{ false, true }) |crash_in_recovery| {
+        var setup = try Setup.init();
+        defer setup.deinit();
+        var snapshots = try Snapshots.init(setup.repo.root_abs);
+        defer snapshots.deinit();
+        const step = snapshots.step();
+        try setup.run(&step);
+        try testing.expectEqual(.new, try setup.state());
+        try setup.noDebris();
+        const steps = try snapshots.taken();
+        try testing.expect(steps >= 8);
         var seen_new = false;
-        var crashes: usize = 0;
-        var stop: usize = 1;
-        while (true) : (stop += 1) {
+        for (1..steps + 1) |stop| {
             errdefer std.debug.print("crash after step {d}, crash in recovery {}\n", .{ stop, crash_in_recovery });
-            var setup = try Setup.init();
-            defer setup.deinit();
-            var at: StopAt = .{ .target = stop };
-            const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-            if (setup.run(&step)) |_| {
-                try testing.expectEqual(.new, try setup.state());
-                try setup.noDebris();
-                break;
-            } else |err| try testing.expectEqual(error.Crashed, err);
-            crashes += 1;
+            try snapshots.restore(stop);
             try recoverTwice(&setup, crash_in_recovery);
             const now = try setup.state();
             try setup.noDebris();
             if (now == .new) seen_new = true;
             if (seen_new) try testing.expectEqual(.new, now);
         }
-        try testing.expect(crashes >= 8);
         try testing.expect(seen_new);
     }
 }

@@ -29,8 +29,8 @@ const Repo = struct {
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
         try git_fixture.initRepo(root_abs);
-        try run(root_abs, &.{ "git", "add", "." });
-        try run(root_abs, &.{ "git", "commit", "-q", "-m", "init" });
+        try run(root_abs, &.{ try git_fixture.git(), "add", "." });
+        try run(root_abs, &.{ try git_fixture.git(), "commit", "-q", "-m", "init" });
         return .{ .tmp = tmp, .root_abs = root_abs };
     }
 
@@ -223,7 +223,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     const ignore = try healthy.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/.gitignore", testing.allocator, .unlimited);
     defer testing.allocator.free(ignore);
     try testing.expectEqualStrings("*\n", ignore);
-    const status = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ "git", "status", "--porcelain", "--untracked-files=all" }, .cwd = .{ .path = healthy.root_abs } });
+    const status = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = &.{ try git_fixture.git(), "status", "--porcelain", "--untracked-files=all" }, .cwd = .{ .path = healthy.root_abs } });
     defer testing.allocator.free(status.stdout);
     defer testing.allocator.free(status.stderr);
     if (std.mem.indexOf(u8, status.stdout, ".emetgate") != null) return error.TestEmetgateVisibleToGit;
@@ -326,8 +326,8 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     var repo = try Repo.init();
     defer repo.deinit();
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/twice.ts", .data = "export function twice(x: number): number {\n  return x + x;\n}\n" });
-    try run(repo.root_abs, &.{ "git", "add", "." });
-    try run(repo.root_abs, &.{ "git", "commit", "-q", "-m", "twice" });
+    try run(repo.root_abs, &.{ try git_fixture.git(), "add", "." });
+    try run(repo.root_abs, &.{ try git_fixture.git(), "commit", "-q", "-m", "twice" });
 
     const ws = try repo.under(".emetgate");
     defer testing.allocator.free(ws);

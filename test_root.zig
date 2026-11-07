@@ -91,6 +91,7 @@ pub const search_session = src.search_session;
 pub const index_map = src.index_map;
 pub const stat_scan = src.stat_scan;
 pub const git_index = src.git_index;
+pub const git_objects = src.git_objects;
 pub const worker_pool = src.worker_pool;
 pub const io_seam = src.io_seam;
 pub const exe_path = src.exe_path;

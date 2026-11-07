@@ -43,7 +43,7 @@ const Repo = struct {
 
     fn git(self: *Repo, args: []const []const u8) ![]u8 {
         var argv: [12][]const u8 = undefined;
-        argv[0] = "git";
+        argv[0] = try git_fixture.git();
         @memcpy(argv[1..][0..args.len], args);
         const result = try @import("emetgate").bounded_run.run(gpa, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = self.root_abs } });
         defer gpa.free(result.stderr);

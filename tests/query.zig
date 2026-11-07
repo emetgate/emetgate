@@ -146,7 +146,7 @@ const Repo = struct {
 
     fn git(root_abs: []const u8, args: []const []const u8) !void {
         var argv: [8][]const u8 = undefined;
-        argv[0] = "git";
+        argv[0] = try git_fixture.git();
         @memcpy(argv[1..][0..args.len], args);
         const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv[0 .. args.len + 1], .cwd = .{ .path = root_abs } });
         testing.allocator.free(result.stdout);

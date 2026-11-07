@@ -6596,7 +6596,7 @@
     {
       "id": "GI2-split-git-index-read-as-complete",
       "file": "src/platform/git_index.zig",
-      "from": "        if (std.mem.eql(u8, signature, \"link\") or std.mem.eql(u8, signature, \"sdir\")) return null;",
+      "from": "        if (std.ascii.isLower(signature[0])) return null;",
       "to": "        if (std.mem.eql(u8, signature, \"sdir\")) return null;",
       "kills": [
         "an index whose entries live partly in a shared index is not read as the whole list"
@@ -9609,8 +9609,8 @@
     {
       "id": "GC5-hand-edited-target-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
-      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "from": "            if (!pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, plain, path, bytes))) return error.TargetHasUncommittedChanges;\n",
+      "to": "            if (false and !pre_written and !std.mem.eql(u8, head_entry.oid, try storedOid(git, plain, path, bytes))) return error.TargetHasUncommittedChanges;\n",
       "kills": [
         "git commit: a target edited by hand is refused, and an edit to another file is not in the way",
         "commit on write: a target edited by hand is refused and keeps the hand edit",
@@ -10139,8 +10139,8 @@
     {
       "id": "PV8-any-index-lock-treated-as-ours",
       "file": "src/platform/git_commit.zig",
-      "from": "    return if (std.mem.eql(u8, &found, &digest)) .ours else .foreign;",
-      "to": "    return if (std.mem.eql(u8, &found, &digest) or true) .ours else .foreign;",
+      "from": "        return if (std.mem.eql(u8, &found, &expected)) .ours else .foreign;",
+      "to": "        return if (std.mem.eql(u8, &found, &expected) or true) .ours else .foreign;",
       "kills": [
         "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after",
         "git commit: an index lock held by another process is never taken over, and it stays as it was"
@@ -10150,8 +10150,8 @@
     {
       "id": "PV9-index-lock-taken-over",
       "file": "src/platform/git_commit.zig",
-      "from": "    disk.moveExclusive(gpa, staged_abs, lock) catch |err| switch (err) {",
-      "to": "    disk.moveOver(gpa, staged_abs, lock) catch |err| switch (err) {",
+      "from": "        disk.moveExclusive(gpa, staged_abs, lock_path) catch |err| switch (err) {",
+      "to": "        disk.moveOver(gpa, staged_abs, lock_path) catch |err| switch (err) {",
       "kills": [
         "git commit: an index lock held by another process is never taken over, and it stays as it was"
       ],
@@ -10221,8 +10221,8 @@
     {
       "id": "PV17-staged-bytes-not-checked-against-the-blob",
       "file": "src/platform/commit_intent.zig",
-      "from": "    if (!try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
-      "to": "    if (false and !try git_commit.storesAs(gpa, io, root, item.path, staged, item.blob)) return error.CorruptIntent;\n",
+      "from": "    if (!try git_commit.storesAs(git, plain, item.path, bytes, staged, item.blob)) return error.CorruptIntent;\n",
+      "to": "    if (false and !try git_commit.storesAs(git, plain, item.path, bytes, staged, item.blob)) return error.CorruptIntent;\n",
       "kills": [
         "commit protocol: staged bytes that were tampered with are never written, whether or not the record was changed to match",
         "recovery: a hand-made intent record is not applied when the staged bytes, the blob or the commit do not tie together"
@@ -10336,8 +10336,8 @@
     {
       "id": "PV29-recover-deletes-a-file-the-replaced-commit-does-not-hold",
       "file": "src/platform/git_commit.zig",
-      "from": "    const parent = ids.next() orelse if (isUnborn(base)) base else return null;\n",
-      "to": "    const parent = ids.next() orelse base;\n",
+      "from": "    const parent = if (parent_ids.len == 1) parent_ids[0] else if (isUnborn(base)) base else return null;\n",
+      "to": "    const parent = if (parent_ids.len == 1) parent_ids[0] else base;\n",
       "kills": [
         "commit protocol: a record that did not come from a commit cannot delete a file the replaced commit does not hold"
       ],
@@ -10609,8 +10609,8 @@
     {
       "id": "P1i-recover-writes-over-bytes-the-parent-does-not-hold",
       "file": "src/platform/commit_intent.zig",
-      "from": "        if (!std.mem.eql(u8, stored, base_oid)) return .left;\n",
-      "to": "",
+      "from": "        if (!std.mem.eql(u8, try git_commit.storedForm(git, plain, item.path, bytes), base_oid)) return .left;\n",
+      "to": "        _ = bytes;\n",
       "kills": [
         "commit window: a record that names the hash of the user's uncommitted edit as its base cannot write over that edit"
       ]
@@ -11958,7 +11958,7 @@
     {
       "id": "GI4-conflict-stages-listed-each",
       "file": "src/platform/git_index.zig",
-      "from": "        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], name)) continue;\n",
+      "from": "        if (names.items.len != 0 and std.mem.eql(u8, names.items[names.items.len - 1], entry.name)) continue;\n",
       "to": "",
       "kills": [
         "a conflicted path is listed once and a submodule entry is not listed as a file",
@@ -11969,8 +11969,8 @@
     {
       "id": "GI5-submodule-listed-as-a-file",
       "file": "src/platform/git_index.zig",
-      "from": "        if (mode & 0o170000 == 0o160000) continue;\n",
-      "to": "        _ = mode;\n",
+      "from": "        if (entry.mode & 0o170000 == 0o160000) continue;\n",
+      "to": "",
       "kills": [
         "a conflicted path is listed once and a submodule entry is not listed as a file"
       ]
@@ -16496,7 +16496,7 @@
     {
       "id": "SRC10-new-file-stale-stage",
       "file": "src/platform/git_commit.zig",
-      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
+      "from": "                    if (!std.mem.eql(u8, entry.oid, try storedOid(git, plain, path, bytes)) and !try gateStaged(git, path, entry.oid, ours)) return error.TargetHasUncommittedChanges;\n",
       "to": "",
       "kills": [
         "emetgate_commit: a new file staged with other content than its run receipt is refused, the staged copy kept"
@@ -18876,6 +18876,156 @@
       "kills": [
         "python move: a package at the repo root that shadows the src one keeps the src prefix"
       ]
+    },
+    {
+      "id": "GC40-carriage-return-hashed-in-process",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, item.bytes, '\\r') != null) continue;\n",
+      "to": "",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "bytes git would convert on the way in would get a blob id git does not store"
+    },
+    {
+      "id": "GC41-one-attribute-view-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (in_index and in_tree) oids[i] = try blobOid(git.arena, hex, items[i].bytes);\n",
+      "to": "        if (in_index or in_tree) oids[i] = try blobOid(git.arena, hex, items[i].bytes);\n",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "attributes seen only from the index or only from the working tree would pass a converting path"
+    },
+    {
+      "id": "GC42-set-attribute-taken-as-plain",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (!std.mem.eql(u8, value, \"unspecified\")) flag.* = false;\n",
+      "to": "            _ = value;\n",
+      "kills": [
+        "git commit: a blob id worked out in process is the one git stores, and any path git could convert is left to git"
+      ],
+      "note": "a path with ident, a filter or an encoding would get a blob id git does not store"
+    },
+    {
+      "id": "GC43-assume-unchanged-tag-dropped",
+      "file": "src/platform/git_commit.zig",
+      "from": "    return if (entry.assumed) std.ascii.toLower(tag) else tag;\n",
+      "to": "    return tag;\n",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "an entry marked assume-unchanged would be listed with the tag git gives a plain entry"
+    },
+    {
+      "id": "GC44-skip-worktree-tag-dropped",
+      "file": "src/platform/git_commit.zig",
+      "from": "    const tag: u8 = if (entry.stage != 0) 'M' else if (entry.skipped) 'S' else 'H';\n",
+      "to": "    const tag: u8 = if (entry.stage != 0) 'M' else 'H';\n",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a skip-worktree entry would look like one the working tree holds"
+    },
+    {
+      "id": "GC45-pathspec-boundary-ignored",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (name.len != spec.len and name[spec.len] != '/') return .no;\n",
+      "to": "",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a path would match every name it is a prefix of, not only itself and what lies under it"
+    },
+    {
+      "id": "GC46-unknown-fold-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "            unsure = true;\n",
+      "to": "            unsure = false;\n",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a name git might fold differently in its locale would be matched in process"
+    },
+    {
+      "id": "GC47-dot-segment-taken-literally",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (part.len == 0 or std.mem.eql(u8, part, \".\") or std.mem.eql(u8, part, \"..\")) return false;\n",
+      "to": "        if (part.len == 0 or std.mem.eql(u8, part, \"..\")) return false;\n",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a path git normalises would be matched as written"
+    },
+    {
+      "id": "GC48-non-ascii-folded-path-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "        for (spec) |c| if (c >= 0x80) return false;\n",
+      "to": "",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a folded path with bytes git might fold differently would be matched in process"
+    },
+    {
+      "id": "GC49-drive-path-taken-literally",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (std.mem.indexOfAny(u8, spec, \":\\\\\") != null) return false;\n",
+      "to": "",
+      "kills": [
+        "git commit: the index read in process lists exactly what git ls-files lists"
+      ],
+      "note": "a path git reads as absolute would be matched as a repository path"
+    },
+    {
+      "id": "GC50-unterminated-head-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (bytes.len == 0 or bytes[bytes.len - 1] != '\\n') return null;\n",
+      "to": "    if (bytes.len == 0) return null;\n",
+      "kills": [
+        "git commit: HEAD read in process names the branch git symbolic-ref names"
+      ],
+      "note": "a HEAD file git would read differently would be taken as it stands"
+    },
+    {
+      "id": "GC51-dot-ref-part-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (part.len == 0 or part[0] == '.' or part[part.len - 1] == '.') return false;\n",
+      "to": "        if (part.len == 0) return false;\n",
+      "kills": [
+        "git commit: HEAD read in process names the branch git symbolic-ref names"
+      ],
+      "note": "a reftable placeholder HEAD would be read as a branch"
+    },
+    {
+      "id": "GC52-double-dot-ref-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (std.mem.indexOf(u8, name, \"..\") != null or std.mem.indexOf(u8, name, \"@{\") != null) return false;\n",
+      "to": "",
+      "kills": [
+        "git commit: HEAD read in process names the branch git symbolic-ref names"
+      ],
+      "note": "a ref name git rejects would be read as a branch"
+    },
+    {
+      "id": "GC53-non-branch-ref-trusted",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (!std.mem.startsWith(u8, name, \"refs/\")) return false;\n",
+      "to": "",
+      "kills": [
+        "git commit: HEAD read in process names the branch git symbolic-ref names"
+      ],
+      "note": "a HEAD naming something outside refs would be read as a branch"
+    },
+    {
+      "id": "GC54-short-oid-detached",
+      "file": "src/platform/git_commit.zig",
+      "from": "    if (line.len != 40 and line.len != 64) return null;\n",
+      "to": "",
+      "kills": [
+        "git commit: HEAD read in process names the branch git symbolic-ref names"
+      ],
+      "note": "a HEAD holding no full object id would be read as detached"
     }
   ]
 }
