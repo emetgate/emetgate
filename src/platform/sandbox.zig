@@ -450,6 +450,10 @@ pub const Service = struct {
         return !hasExited(self.process);
     }
 
+    pub fn kill(self: *const Service) void {
+        self.job.stop();
+    }
+
     pub fn stop(self: *Service) void {
         self.job.stop();
         std.os.windows.CloseHandle(self.stdin.handle);

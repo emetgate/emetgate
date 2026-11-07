@@ -93,6 +93,7 @@ pub const Client = struct {
 
     pub fn stop(self: *Client) void {
         if (self.service) |*service| {
+            service.kill();
             self.reader.deinit();
             service.stop();
             self.service = null;
