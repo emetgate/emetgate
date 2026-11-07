@@ -1919,9 +1919,11 @@ running them. The `test (Debug)` and `test (ReleaseSafe)` checks fail unless `to
 four parts passed, selected the same tests and together ran each of them exactly once. A test
 missing from `tests/test_times.tsv` counts as one second.
 `tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
-`test_root.zig`. On the development machine (Windows, Debug) the binary compiles in about 10 s
-with 0.7 GB of memory; the run takes about 20 s, and 40 s with the slow tests. The nine binaries
-this replaced took 28 s to compile in parallel after a one-line change.
+`test_root.zig`. On the development machine (Windows, Debug, 16 cores) the binary compiles in
+about 70 s, about 30 s of it the `src` code every test binary needs, so splitting the tests into
+several binaries does not compile faster. The tests take about an hour of CPU time in total, so
+locally run only the tests a change touches with `-Dtest-filter`; in CI each of the four Debug
+parts finishes in about 4 to 8 minutes.
 
 Register the server with an MCP client:
 
