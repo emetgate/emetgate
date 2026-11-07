@@ -35,6 +35,10 @@ pub fn find(gpa: Allocator, repo_root: ?[]const u8) !Shell {
         error.OutOfMemory => return error.OutOfMemory,
         error.BashNotFound => {},
     }
+    return cmd(gpa);
+}
+
+pub fn cmd(gpa: Allocator) !Shell {
     return .{ .kind = .cmd, .path = try exe_path.system(gpa, "cmd.exe") };
 }
 
@@ -68,7 +72,12 @@ pub fn tail(gpa: Allocator, kind: Kind, command: []const u8) ![]u8 {
     };
 }
 
-pub fn run(gpa: Allocator, io: std.Io, cwd: []const u8, shell: Shell, command: []const u8, limits: sandbox.Limits, extra_env: []const sandbox.EnvVar) !sandbox.Report {
+pub const Confine = struct {
+    backend: sandbox.Backend = .user,
+    temp: ?[]const u8 = null,
+};
+
+pub fn run(gpa: Allocator, io: std.Io, cwd: []const u8, shell: Shell, command: []const u8, limits: sandbox.Limits, extra_env: []const sandbox.EnvVar, confine: Confine) !sandbox.Report {
     const verbatim = try tail(gpa, shell.kind, command);
     defer gpa.free(verbatim);
     const bash_argv = [_][]const u8{ shell.path, "-c" };
@@ -79,7 +88,7 @@ pub fn run(gpa: Allocator, io: std.Io, cwd: []const u8, shell: Shell, command: [
     };
     const env = try std.mem.concat(gpa, sandbox.EnvVar, &.{ &shell_env, extra_env });
     defer gpa.free(env);
-    var report = try sandbox.run(gpa, io, .{ .argv = argv, .cwd = cwd, .limits = limits, .backend = .user, .env = env, .verbatim_tail = verbatim });
+    var report = try sandbox.run(gpa, io, .{ .argv = argv, .cwd = cwd, .limits = limits, .backend = confine.backend, .temp = confine.temp, .env = env, .verbatim_tail = verbatim });
     report.no_tests = test_outcome.noTests(report);
     return report;
 }

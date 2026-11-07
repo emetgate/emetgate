@@ -31,6 +31,12 @@ pub fn judge(arena: Allocator, input: []const u8) error{OutOfMemory}!Verdict {
     const command = tool_input.object.get("command") orelse return .pass;
     if (command == .null) return .pass;
     if (command != .string) return .{ .ask = unreadable_reason };
+    const as_user = switch (tool_input.object.get("as_user") orelse std.json.Value.null) {
+        .null => false,
+        .bool => |flag| flag,
+        else => return .{ .ask = unreadable_reason },
+    };
+    if (as_user) return .{ .ask = try std.fmt.allocPrint(arena, "emetgate: this command runs with the user's full rights outside the low-integrity sandbox (as_user): {s}", .{command.string}) };
     const found = (try command_danger.classify(arena, command.string)) orelse return .pass;
     return .{ .ask = try std.fmt.allocPrint(arena, "emetgate: this command {s}: {s}", .{ found.reason, found.fragment }) };
 }

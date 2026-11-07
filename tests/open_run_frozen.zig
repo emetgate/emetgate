@@ -41,7 +41,7 @@ const Env = struct {
     fn run(self: *Env, command: []const u8) !fixture.Reply {
         var policy: server.Policy = .{ .root = self.repo.root_abs };
         policy.open_run = true;
-        return fixture.call(policy, .{ .command = command });
+        return fixture.call(policy, .{ .command = command, .as_user = true });
     }
 
     fn setup(self: *Env, command: []const u8) !void {

@@ -16,6 +16,8 @@ const receipt_note = @import("receipt_note.zig");
 const run_trim = @import("run_trim.zig");
 const frozen_hold = @import("../platform/frozen_hold.zig");
 const run_audit = @import("../platform/run_audit.zig");
+const command_danger = @import("../platform/command_danger.zig");
+const low_run = @import("../platform/low_run.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -23,10 +25,11 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 
-pub const description = "Runs any shell command in the session folder (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule, and with no rule emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config), comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
+pub const description = "Runs any shell command in the session folder and replies with the shell, the integrity, the exit code and the output. It runs through cmd.exe at low integrity, so it can write only inside the repository; Git Bash and its tools (sh, sed, touch) cannot start at low integrity. as_user:true runs it in Git Bash (if installed, else cmd) with the user's full rights after the user approves, and a plain git push, fetch, pull, clone, ls-remote or gh runs with the user's rights for the credential manager. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule, and with no rule emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config), comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
 
 pub const command_desc = "the shell command, as you would type it";
 pub const raw_desc = "return the output uncut, up to 64 KiB";
+pub const as_user_desc = "run with the user's full rights instead of the low-integrity sandbox that keeps writes inside the repository; the user is asked first";
 pub const timeout_desc = "seconds before the command is killed: default 120, 600 for a test run, at most 600";
 
 pub const default_timeout_s: u64 = 120;
@@ -44,6 +47,7 @@ pub const hold_fix = "the command did not run: emetgate could not keep a copy of
 pub const Request = struct {
     command: []const u8,
     raw: bool = false,
+    as_user: bool = false,
     timeout_s: ?u64 = null,
 };
 
@@ -59,6 +63,11 @@ pub fn parse(args: ?Value) error{MissingArgument}!Request {
         .bool => |flag| request.raw = flag,
         .null => {},
         else => return tool_result.missing("raw (boolean)", .{}),
+    };
+    if (tool_result.getField(a, "as_user")) |value| switch (value) {
+        .bool => |flag| request.as_user = flag,
+        .null => {},
+        else => return tool_result.missing("as_user (boolean)", .{}),
     };
     if (tool_result.getField(a, "timeout_s")) |value| switch (value) {
         .integer => |n| {
@@ -90,14 +99,15 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     const timeout_s = request.timeout_s orelse if (shape.test_run) test_timeout_s else default_timeout_s;
     const limits: sandbox.Limits = .{ .timeout_ms = timeout_s * std.time.ms_per_s, .max_output_bytes = max_output_bytes };
 
-    const shell = try open_shell.find(gpa, root_abs);
+    const low = !request.as_user and !try command_danger.usesCredentials(arena, request.command);
+    const shell = if (low) try open_shell.cmd(gpa) else try open_shell.find(gpa, root_abs);
     defer shell.deinit(gpa);
     const guard = try guardEnvironment(arena, gpa, io, root_abs, policy);
     var audit: run_audit.Audit = undefined;
     try audit.begin(gpa, io, runtime, root_abs, policy.nested_roots, policy.allow_repo_memory);
     defer audit.deinit();
-    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env, .guard_config = policy.open_run }) catch |err| switch (err) {
-        error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
+    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env, .guard_config = policy.open_run, .low = low }) catch |err| switch (err) {
+        error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed, error.LowRootUnresolved, error.LowRootOnNetwork, error.LowRootLabelDenied, error.LowRootLabelFailed, error.LowDataDirUnavailable, error.LowTempUnavailable => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);
             return true;
@@ -123,6 +133,8 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     try js.write(request.command);
     try js.objectField("shell");
     try js.write(shell.kind.label());
+    try js.objectField("integrity");
+    try js.write(if (low) "low" else "user");
     try writeOutcome(&js, ran.report);
     try js.objectField("duration_ms");
     try js.write(ran.report.duration_ns / std.time.ns_per_ms);
@@ -144,6 +156,10 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
         try js.objectField("commit_guard_error");
         try js.write(reason);
     }
+    if (low) if (low_run.note(ran.report)) |text| {
+        try js.objectField("low_integrity_note");
+        try js.write(text);
+    };
     if (ran.report.no_tests) {
         try js.objectField("note");
         try js.write(test_outcome.no_tests_note);
@@ -310,7 +326,7 @@ fn writeNotRun(w: *Writer, command: []const u8, kind: open_shell.Kind, err: anye
     try js.write(switch (err) {
         error.SandboxBusy => "another command or test run is still running; call again when it ends",
         error.FrozenHoldFailed => hold_fix,
-        else => "emetgate could not start the shell; emetgate doctor says why",
+        else => low_run.fix(err) orelse "emetgate could not start the shell; emetgate doctor says why",
     });
     try js.endObject();
     try w.writeByte('\n');
