@@ -9,6 +9,7 @@ const test_command = @import("test_command.zig");
 const toolchain = @import("toolchain.zig");
 const receipts = @import("receipts.zig");
 const frozen_hold = @import("frozen_hold.zig");
+const command_danger = @import("command_danger.zig");
 const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
@@ -373,7 +374,11 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const before = try snapshot(arena, gpa, io, root_abs);
-    const hold = frozen_hold.begin(gpa, io, root_abs) catch |err| switch (err) {
+    const options: frozen_hold.Options = .{ .ledger_open = switch (spawn) {
+        .toolchain => false,
+        .open => |open| try command_danger.changesRules(arena, open.command),
+    } };
+    const hold = frozen_hold.begin(gpa, io, root_abs, options) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.FrozenHoldFailed,
     };
@@ -383,21 +388,21 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     };
     var nested: std.ArrayList(NestedHold) = .empty;
     for (others) |other| {
-        const held_other = frozen_hold.begin(gpa, io, other) catch |err| {
-            if (hold) |held| held.finish().deinit(gpa);
+        const held_other = frozen_hold.begin(gpa, io, other, options) catch |err| {
+            hold.finish().deinit(gpa);
             for (nested.items) |item| item.hold.finish().deinit(gpa);
             return if (err == error.OutOfMemory) error.OutOfMemory else error.FrozenHoldFailed;
-        } orelse continue;
+        };
         try nested.append(arena, .{ .root = other, .hold = held_other });
     }
     const started_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
     const report = spawned(gpa, io, root_abs, limits, spawn) catch |err| {
-        if (hold) |held| held.finish().deinit(gpa);
+        hold.finish().deinit(gpa);
         for (nested.items) |item| item.hold.finish().deinit(gpa);
         return err;
     };
     var ran: RepoRun = .{ .report = report };
-    if (hold) |held| ran.frozen = held.finish();
+    ran.frozen = hold.finish();
     for (nested.items) |item| {
         const label = std.mem.trimStart(u8, item.root[@min(root_abs.len, item.root.len)..], "\\/");
         const held_report = item.hold.finish();

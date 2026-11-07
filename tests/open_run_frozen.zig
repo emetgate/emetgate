@@ -296,3 +296,73 @@ test "frozen hold: a toolchain command is held the same way" {
     try testing.expectEqual(@as(usize, 1), ran.frozen.restored.len);
     try testing.expectEqualStrings("package.json", ran.frozen.restored[0].path);
 }
+
+fn expectGateRestored(reply: *fixture.Reply, path: []const u8) !void {
+    try expectRestored(reply, path);
+    for ((try reply.field("frozen_restored")).?.array.items) |item| {
+        if (!std.mem.eql(u8, item.object.get("path").?.string, path)) continue;
+        try testing.expectEqualStrings(emetgate.gate_config.rule_id, item.object.get("rules").?.array.items[0].string);
+    }
+}
+
+test "frozen hold: with no rule the mcp config, the Claude settings and agents come back, tracked or not" {
+    var env = try Env.init();
+    defer env.deinit();
+    const mcp = "{\"mcpServers\":{\"emetgate\":{}}}\n";
+    const local = "{\"permissions\":{}}\n";
+    try env.repo.commitScript(".mcp.json", mcp);
+    try env.repo.tmp.dir.createDirPath(testing.io, "repo/.claude");
+    try env.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/.claude/settings.local.json", .data = local });
+    var reply = try env.run("echo {} > .mcp.json && git add .mcp.json && echo {} > .claude/settings.local.json && mkdir -p .claude/agents && echo x > .claude/agents/free.md && echo changed > app.js");
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try env.expectFile(".mcp.json", mcp);
+    try env.expectFile(".claude/settings.local.json", local);
+    try testing.expect(env.missing(".claude/agents/free.md"));
+    try env.expectFile("app.js", "changed\n");
+    try expectGateRestored(&reply, ".mcp.json");
+    try expectGateRestored(&reply, ".claude/settings.local.json");
+    try expectGateRestored(&reply, ".claude/agents/free.md");
+    try env.expectGit(&.{ "diff", "--cached", "--name-only" }, "");
+    try testing.expect(env.missing(".emetgate/frozen-hold"));
+}
+
+test "frozen hold: with no rule a new git hook and a hooks path are undone, and branch tracking set by a command stays" {
+    var env = try Env.init();
+    defer env.deinit();
+    var hooked = try env.run("echo exit 0 > .git/hooks/pre-commit && git config core.hooksPath elsewhere");
+    defer hooked.deinit();
+    errdefer std.debug.print("{s}\n", .{hooked.text});
+    try testing.expect(env.missing(".git/hooks/pre-commit"));
+    try testing.expectError(error.GitSetupFailed, env.git(&.{ "config", "--get", "core.hooksPath" }));
+    try expectGateRestored(&hooked, ".git/hooks/pre-commit");
+    try expectGateRestored(&hooked, ".git/config");
+
+    var tracked = try env.run("git config branch.topic.remote origin");
+    defer tracked.deinit();
+    errdefer std.debug.print("{s}\n", .{tracked.text});
+    try testing.expect((try tracked.field("frozen_restored")) == null);
+    try env.expectGit(&.{ "config", "--get", "branch.topic.remote" }, "origin");
+}
+
+test "frozen hold: with no rule a forged rules ledger is put back, and a command that changes rules keeps its change" {
+    var env = try Env.init();
+    defer env.deinit();
+    try env.freeze();
+    const ledger = try env.read(emetgate.gate_config.ledger);
+    defer gpa.free(ledger);
+    var forged = try env.run("echo forged >> .emetgate/ledger.ndjson");
+    defer forged.deinit();
+    errdefer std.debug.print("{s}\n", .{forged.text});
+    try env.expectFile(emetgate.gate_config.ledger, ledger);
+    try expectGateRestored(&forged, emetgate.gate_config.ledger);
+
+    var approved = try env.run("emetgate rule forget no-such-rule || echo approved >> .emetgate/ledger.ndjson");
+    defer approved.deinit();
+    errdefer std.debug.print("{s}\n", .{approved.text});
+    try testing.expect((try approved.field("frozen_restored")) == null);
+    const after = try env.read(emetgate.gate_config.ledger);
+    defer gpa.free(after);
+    try testing.expect(std.mem.endsWith(u8, after, "approved\n"));
+}

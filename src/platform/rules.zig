@@ -12,6 +12,7 @@ const where_mod = @import("where.zig");
 const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
 const commit_message = @import("commit_message.zig");
+const gate_config = @import("gate_config.zig");
 const rule_catalog = @import("../protocol/rule_catalog.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -384,6 +385,8 @@ pub fn isFrozen(rule: Rule) bool {
     return checks.isFrozen(rule.check);
 }
 
+pub const gate_config_rule: Rule = .{ .id = gate_config.rule_id, .check = checks.frozen_name, .text = gate_config.rule_text };
+
 pub fn frozenGate(gpa: Allocator, io: std.Io, root_abs: []const u8, paths: []const []const u8) !Gate {
     const enforced = try load(gpa, io, root_abs);
     defer enforced.deinit();
@@ -395,6 +398,15 @@ pub fn evaluateFrozen(gpa: Allocator, rules: []const Rule, paths: []const []cons
     defer list.deinit(gpa);
     defer for (list.items) |v| freeViolation(gpa, v);
     const at: Position = .{ .line = 1, .col = 1 };
+    for (paths) |path| {
+        if (!gate_config.covers(path)) continue;
+        const owned = try ownViolation(gpa, gate_config_rule, path, at, at, "");
+        std.mem.replaceScalar(u8, owned.file, '\\', '/');
+        list.append(gpa, owned) catch |err| {
+            freeViolation(gpa, owned);
+            return err;
+        };
+    }
     for (rules) |rule| {
         if (!isFrozen(rule)) continue;
         const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;

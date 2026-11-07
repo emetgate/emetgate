@@ -182,6 +182,20 @@ test "frozen: a batch whose doc edit is in a frozen directory is refused" {
     try testing.expectEqualStrings(other_src, try env.read("src/other.ts"));
 }
 
+test "frozen: with no rule a write to the gate's own config is refused, with and without commits, and a file beside it is written" {
+    try skipOffWindows();
+    var case: Plain = undefined;
+    try case.init(&files);
+    defer case.deinit();
+    const env = &case.env;
+    const before = try env.head();
+    try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".mcp.json"), .content = "{}\n" }, green, false), before, ".mcp.json");
+    try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".claude/settings.json"), .content = "{}\n", .message = message }, green, true), before, ".claude/settings.json");
+    try expectFrozen(env, try env.call("emetgate_write", .{ .file = try env.abs(".claude/agents/free.md"), .content = "x\n", .message = message }, green, true), before, ".claude/agents/free.md");
+    try testing.expect(contains((try env.call("emetgate_write", .{ .file = try env.abs(".mcp.json"), .content = "{}\n" }, green, false)).text, emetgate.gate_config.rule_id));
+    try expectLanded(env, try env.call("emetgate_write", .{ .file = try env.abs("docs/new.md"), .content = "new\n", .message = message }, green, true), before);
+}
+
 test "frozen: write_doc on a frozen file is refused with and without commits, and another doc is written" {
     try skipOffWindows();
     var case: Plain = undefined;

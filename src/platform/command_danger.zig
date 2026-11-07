@@ -405,36 +405,58 @@ fn joined(arena: Allocator, words: []const []const u8) ![]const u8 {
 
 pub fn classify(arena: Allocator, command: []const u8) !?Finding {
     if (command.len > max_command_bytes) return .{ .reason = R.long, .fragment = command[0..max_fragment] };
-    return classifyText(arena, command, 0);
+    return classifyText(arena, null, command, 0);
 }
 
-fn classifyText(arena: Allocator, text: []const u8, depth: usize) Allocator.Error!?Finding {
-    if (depth > max_depth) return .{ .reason = R.deep, .fragment = text[0..@min(text.len, max_fragment)] };
+fn classifyText(arena: Allocator, want: ?[]const u8, text: []const u8, depth: usize) Allocator.Error!?Finding {
+    if (depth > max_depth) return kept(want, .{ .reason = R.deep, .fragment = text[0..@min(text.len, max_fragment)] });
     const segments = try parse(arena, text);
     var pipeline_start: usize = 0;
     for (segments, 0..) |segment, k| {
         if (!segment.piped) pipeline_start = k;
         const words = unwrap(segment.words.items);
         for (segment.nested.items) |inner| {
-            if (try classifyText(arena, inner, depth + 1)) |found| return found;
+            if (try classifyText(arena, want, inner, depth + 1)) |found| return found;
         }
-        if (try classifyWords(arena, segment.words.items, words, depth)) |found| return found;
+        if (try classifyWords(arena, want, segment.words.items, words, depth)) |found| {
+            if (kept(want, found)) |wanted| return wanted;
+        }
         if (words.len != 0 and is(words[0], &sql_clients)) {
             for (segments[pipeline_start..k]) |earlier| {
-                if (sqlDrops(earlier.words.items)) return .{ .reason = R.sql, .fragment = try fragmentOf(arena, earlier.words.items) };
+                if (sqlDrops(earlier.words.items)) {
+                    if (kept(want, .{ .reason = R.sql, .fragment = try fragmentOf(arena, earlier.words.items) })) |wanted| return wanted;
+                }
             }
         }
         if (words.len == 0 or !is(words[0], &interpreters)) continue;
         for (segments[pipeline_start..k]) |earlier| {
-            if (try downloads(arena, earlier, depth)) return .{ .reason = R.pipe_shell, .fragment = try fragmentOf(arena, words) };
+            if (try downloads(arena, earlier, depth)) {
+                if (kept(want, .{ .reason = R.pipe_shell, .fragment = try fragmentOf(arena, words) })) |wanted| return wanted;
+            }
         }
         for (segment.nested.items) |inner| {
             for (try parse(arena, inner)) |nested| {
-                if (try downloads(arena, nested, depth + 1)) return .{ .reason = R.pipe_shell, .fragment = try fragmentOf(arena, words) };
+                if (try downloads(arena, nested, depth + 1)) {
+                    if (kept(want, .{ .reason = R.pipe_shell, .fragment = try fragmentOf(arena, words) })) |wanted| return wanted;
+                }
             }
         }
     }
     return null;
+}
+
+pub fn changesRules(arena: Allocator, command: []const u8) Allocator.Error!bool {
+    if (command.len > max_command_bytes) return false;
+    return try classifyText(arena, R.rule, command, 0) != null;
+}
+
+fn kept(want: ?[]const u8, found: Finding) ?Finding {
+    const wanted = want orelse return found;
+    return if (std.mem.eql(u8, found.reason, wanted)) found else null;
+}
+
+fn ruleChange(words: []const []const u8) bool {
+    return words.len >= 3 and is(words[0], &.{"emetgate"}) and std.mem.eql(u8, words[1], "rule") and eqlAny(words[2], &.{ "add", "supersede", "forget" });
 }
 
 fn downloads(arena: Allocator, segment: Segment, depth: usize) Allocator.Error!bool {
@@ -449,7 +471,7 @@ fn downloads(arena: Allocator, segment: Segment, depth: usize) Allocator.Error!b
     return false;
 }
 
-fn classifyWords(arena: Allocator, all: []const []const u8, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
+fn classifyWords(arena: Allocator, want: ?[]const u8, all: []const []const u8, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
     if (words.len == 0) return null;
     const program = words[0];
     const args = words[1..];
@@ -481,9 +503,9 @@ fn classifyWords(arena: Allocator, all: []const []const u8, words: []const []con
         if (hasPowerShellSwitch(args, "Recurse", 1) or hasPowerShellSwitch(args, "Force", 2)) return hit(arena, R.remove_item, words);
         return null;
     }
-    if (is(program, &.{"find"})) return findCommand(arena, words, depth);
+    if (is(program, &.{"find"})) return findCommand(arena, want, words, depth);
     if (is(program, &.{"git"})) return gitCommand(arena, words);
-    if (is(program, &.{"emetgate"}) and args.len >= 2 and std.mem.eql(u8, args[0], "rule") and eqlAny(args[1], &.{ "add", "supersede", "forget" })) return hit(arena, R.rule, words);
+    if (ruleChange(words)) return hit(arena, R.rule, words);
     if (is(program, &.{ "mkfs", "mke2fs", "mkswap", "format", "format-volume", "clear-disk", "initialize-disk", "diskpart", "fdisk", "sfdisk", "gdisk", "parted", "wipefs", "diskutil" }) or std.ascii.startsWithIgnoreCase(programName(program), "mkfs.")) return hit(arena, R.disk, words);
     if (is(program, &.{"dd"})) {
         for (args) |arg| {
@@ -503,31 +525,31 @@ fn classifyWords(arena: Allocator, all: []const []const u8, words: []const []con
     if (is(program, &.{"takeown"}) and hasSlash(args, "r")) return hit(arena, R.permissions, words);
     if (is(program, &shells)) {
         const script = shellScript(args) orelse return null;
-        return classifyText(arena, script, depth + 1);
+        return classifyText(arena, want, script, depth + 1);
     }
     if (is(program, &.{"cmd"})) {
         for (args, 0..) |arg, k| {
-            if (eqlAny(arg, &.{ "/c", "/k", "/r" })) return classifyText(arena, try joined(arena, args[k + 1 ..]), depth + 1);
+            if (eqlAny(arg, &.{ "/c", "/k", "/r" })) return classifyText(arena, want, try joined(arena, args[k + 1 ..]), depth + 1);
             if (arg.len > 2 and arg[0] == '/' and std.mem.indexOfScalar(u8, "cCkKrR", arg[1]) != null) {
                 const rest = try joined(arena, args[k + 1 ..]);
-                return classifyText(arena, try std.mem.concat(arena, u8, &.{ arg[2..], " ", rest }), depth + 1);
+                return classifyText(arena, want, try std.mem.concat(arena, u8, &.{ arg[2..], " ", rest }), depth + 1);
             }
         }
         return null;
     }
-    if (is(program, &.{ "powershell", "pwsh" })) return powershellCommand(arena, words, depth);
-    if (is(program, &.{ "eval", "watch" })) return classifyText(arena, try joined(arena, skipOptions(args, &.{ "-n", "-d" })), depth + 1);
-    if (is(program, &.{ "iex", "invoke-expression" })) return classifyText(arena, try joined(arena, args), depth + 1);
+    if (is(program, &.{ "powershell", "pwsh" })) return powershellCommand(arena, want, words, depth);
+    if (is(program, &.{ "eval", "watch" })) return classifyText(arena, want, try joined(arena, skipOptions(args, &.{ "-n", "-d" })), depth + 1);
+    if (is(program, &.{ "iex", "invoke-expression" })) return classifyText(arena, want, try joined(arena, args), depth + 1);
     if (is(program, &.{"su"})) {
         for (args, 0..) |arg, k| {
-            if ((std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--command")) and k + 1 < args.len) return classifyText(arena, args[k + 1], depth + 1);
+            if ((std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--command")) and k + 1 < args.len) return classifyText(arena, want, args[k + 1], depth + 1);
         }
         return null;
     }
     if (is(program, &.{ "ssh", "plink" })) {
         const rest = skipOptions(args, &.{ "-b", "-c", "-D", "-E", "-e", "-F", "-I", "-i", "-J", "-L", "-l", "-m", "-O", "-o", "-p", "-P", "-Q", "-R", "-S", "-W", "-w", "-B", "-pw" });
         if (rest.len < 2) return null;
-        return classifyText(arena, try joined(arena, rest[1..]), depth + 1);
+        return classifyText(arena, want, try joined(arena, rest[1..]), depth + 1);
     }
     return null;
 }
@@ -568,19 +590,19 @@ fn shellScript(args: []const []const u8) ?[]const u8 {
     return null;
 }
 
-fn powershellCommand(arena: Allocator, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
+fn powershellCommand(arena: Allocator, want: ?[]const u8, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
     const args = words[1..];
     for (args, 0..) |arg, k| {
-        if (arg.len < 2 or (arg[0] != '-' and arg[0] != '/')) return classifyText(arena, try joined(arena, args[k..]), depth + 1);
+        if (arg.len < 2 or (arg[0] != '-' and arg[0] != '/')) return classifyText(arena, want, try joined(arena, args[k..]), depth + 1);
         const flag = arg[1..];
         if (std.ascii.startsWithIgnoreCase("encodedcommand", flag) or std.ascii.eqlIgnoreCase(flag, "ec") or std.ascii.eqlIgnoreCase(flag, "e")) return .{ .reason = R.encoded, .fragment = try fragmentOf(arena, words) };
-        if (std.ascii.startsWithIgnoreCase("command", flag)) return classifyText(arena, try joined(arena, args[k + 1 ..]), depth + 1);
+        if (std.ascii.startsWithIgnoreCase("command", flag)) return classifyText(arena, want, try joined(arena, args[k + 1 ..]), depth + 1);
         if (std.ascii.startsWithIgnoreCase("file", flag) and flag.len >= 1) return null;
     }
     return null;
 }
 
-fn findCommand(arena: Allocator, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
+fn findCommand(arena: Allocator, want: ?[]const u8, words: []const []const u8, depth: usize) Allocator.Error!?Finding {
     var k: usize = 1;
     while (k < words.len) : (k += 1) {
         const word = words[k];
@@ -589,7 +611,7 @@ fn findCommand(arena: Allocator, words: []const []const u8, depth: usize) Alloca
         var end = k + 1;
         while (end < words.len and !std.mem.eql(u8, words[end], ";") and !std.mem.eql(u8, words[end], "+")) end += 1;
         const inner = words[k + 1 .. end];
-        if (try classifyWords(arena, inner, unwrap(inner), depth + 1)) |found| return found;
+        if (try classifyWords(arena, want, inner, unwrap(inner), depth + 1)) |found| return found;
         k = end;
     }
     return null;
@@ -823,6 +845,18 @@ test "command danger: a commit outside the gate asks, and says why; merges and p
     const found = (try classify(arena.allocator(), "git add -A && git commit -m weaken")).?;
     try testing.expectEqualStrings(R.commit, found.reason);
     try testing.expectEqualStrings("git commit -m weaken", found.fragment);
+}
+
+test "command danger: a rule change is found in any part of a command, and a rule list or a mention is not one" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_][]const u8{ "emetgate rule add \"no TODO\" no_literal TODO", "npm test && emetgate.exe rule forget d1", "bash -c 'emetgate rule supersede d1 x'" }) |command| {
+        try std.testing.expect(try changesRules(arena, command));
+    }
+    for ([_][]const u8{ "emetgate rule list", "echo emetgate rule add x", "git commit -m 'emetgate rule add'", "npm test" }) |command| {
+        try std.testing.expect(!try changesRules(arena, command));
+    }
 }
 
 test "command danger: everyday commands are not flagged" {

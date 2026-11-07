@@ -116,6 +116,7 @@ pub const runner = src.runner;
 pub const run_command = src.run_command;
 pub const open_shell = src.open_shell;
 pub const command_danger = src.command_danger;
+pub const gate_config = src.gate_config;
 pub const commit_guard = src.commit_guard;
 pub const run_audit = src.run_audit;
 pub const toolchain = src.toolchain;
