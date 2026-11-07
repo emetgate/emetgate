@@ -118,6 +118,7 @@ pub const open_shell = @import("platform/open_shell.zig");
 pub const commit_guard = @import("platform/commit_guard.zig");
 pub const run_audit = @import("platform/run_audit.zig");
 pub const command_danger = @import("platform/command_danger.zig");
+pub const gate_config = @import("platform/gate_config.zig");
 pub const bounded_run = @import("platform/bounded_run.zig");
 pub const toolchain = @import("platform/toolchain.zig");
 pub const console_text = @import("platform/console_text.zig");

@@ -98,6 +98,7 @@ fn moveInto(gpa: Allocator, io: std.Io, runtime: *Runtime, a: Arguments, args: ?
         .test_command = test_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
+        .guard_config = policy.open_run,
         .shadow_root = policy.shadow_root,
         .gate_tree = policy.treeChoice(),
         .trace = &event.trace,

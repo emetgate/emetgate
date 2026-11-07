@@ -1,6 +1,7 @@
 const std = @import("std");
 const bounded_run = @import("bounded_run.zig");
 const exe_path = @import("exe_path.zig");
+const gate_config = @import("gate_config.zig");
 const rules = @import("rules.zig");
 const shadow = @import("shadow.zig");
 const where_mod = @import("where.zig");
@@ -13,6 +14,9 @@ const Map = std.StringArrayHashMapUnmanaged([]const u8);
 
 pub const hold_dir = "frozen-hold";
 const max_git_output = 256 * 1024 * 1024;
+const max_guard_bytes = 64 * 1024 * 1024;
+const max_guard_files = 4096;
+const max_guard_depth = 8;
 const op_files = [_][]const u8{ "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD" };
 const op_dirs = [_][]const u8{ "rebase-merge", "rebase-apply" };
 
@@ -85,7 +89,7 @@ pub fn absorb(gpa: Allocator, into: *Report, label: []const u8, other: Report) !
 
 const Scope = struct { id: []const u8, where: ?where_mod.Where };
 const Seen = union(enum) { absent, other, file: Digest };
-const Held = struct { seen: Seen = .absent, copy: []const u8 = "", index: []const u8 = "" };
+const Held = struct { seen: Seen = .absent, copy: []const u8 = "", bytes: ?[]const u8 = null, index: []const u8 = "" };
 const Touched = struct { path: []const u8, pre: Held, seen: Seen, index: []const u8, work_changed: bool, index_changed: bool };
 const Work = enum { keep, pre, head, delete };
 const Plan = struct {
@@ -97,6 +101,8 @@ const Plan = struct {
     failed: bool = false,
 };
 
+pub const Options = struct { guard_config: bool = false, ledger_open: bool = false };
+
 pub const Hold = struct {
     io: std.Io,
     root_abs: []const u8,
@@ -104,7 +110,14 @@ pub const Hold = struct {
     git_exe: []const u8 = "",
     prefix: []const u8 = "",
     git_dir: []const u8 = "",
+    common_dir: []const u8 = "",
+    no_git: bool = false,
     parent_abs: []const u8 = "",
+    dir_abs: []const u8 = "",
+    dir_made: bool = false,
+    ledger_open: bool = false,
+    guard_config: bool = false,
+    kept_dirs: std.StringArrayHashMapUnmanaged(void) = .empty,
     scopes: []const Scope = &.{},
     head: ?[]const u8 = null,
     refs: []const u8 = "",
@@ -154,7 +167,13 @@ pub const Hold = struct {
         return self.git(&.{ "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads" }, null);
     }
 
+    fn guarded(self: *Hold, path: []const u8) bool {
+        if (!self.guard_config or !gate_config.covers(path)) return false;
+        return !(self.ledger_open and gate_config.isLedger(path));
+    }
+
     fn covers(self: *Hold, path: []const u8) bool {
+        if (self.guarded(path)) return true;
         for (self.scopes) |scope| {
             const where = scope.where orelse return true;
             if (where.coversFile(path)) return true;
@@ -164,6 +183,7 @@ pub const Hold = struct {
 
     fn rulesOf(self: *Hold, path: []const u8) ![]const []const u8 {
         var ids: std.ArrayList([]const u8) = .empty;
+        if (self.guarded(path)) try ids.append(self.arena(), gate_config.rule_id);
         for (self.scopes) |scope| {
             if (scope.where) |where| {
                 if (!where.coversFile(path)) continue;
@@ -174,8 +194,11 @@ pub const Hold = struct {
     }
 
     fn listIndex(self: *Hold) !Map {
-        const text = try self.git(&.{ "ls-files", "-s", "-z", "--", ".", ":(exclude,icase)" ++ shadow.workspace_dir }, null);
         var entries: Map = .empty;
+        if (self.no_git) return entries;
+        const everything = [_][]const u8{ "ls-files", "-s", "-z", "--", ".", ":(exclude,icase)" ++ shadow.workspace_dir };
+        const guards = [_][]const u8{ "ls-files", "-s", "-z", "--" } ++ guard_specs;
+        const text = try self.git(if (self.scopes.len != 0) &everything else &guards, null);
         var records = std.mem.tokenizeScalar(u8, text, 0);
         while (records.next()) |record| {
             const tab = std.mem.indexOfScalar(u8, record, '\t') orelse continue;
@@ -207,6 +230,7 @@ pub const Hold = struct {
 
     fn readOp(self: *Hold) ![]const u8 {
         var out: std.ArrayList(u8) = .empty;
+        if (self.no_git) return out.items;
         for (op_files) |name| {
             const path = try std.fmt.allocPrint(self.arena(), "{s}\\{s}", .{ self.git_dir, name });
             const bytes = Dir.cwd().readFileAlloc(self.io, path, self.arena(), .limited(4096)) catch continue;
@@ -221,6 +245,11 @@ pub const Hold = struct {
     }
 
     fn abs(self: *Hold, rel: []const u8) ![]u8 {
+        if (gate_config.inGitDir(rel)) |inside| {
+            const path = if (inside.len == 0) try self.arena().dupe(u8, self.common_dir) else try std.fmt.allocPrint(self.arena(), "{s}\\{s}", .{ self.common_dir, inside });
+            std.mem.replaceScalar(u8, path, '/', '\\');
+            return path;
+        }
         const path = try std.fmt.allocPrint(self.arena(), "{s}\\{s}", .{ self.root_abs, rel });
         std.mem.replaceScalar(u8, path, '/', '\\');
         return path;
@@ -236,16 +265,91 @@ pub const Hold = struct {
         return .{ .file = try hashFile(self.io, path) };
     }
 
-    fn keepCopies(self: *Hold, dir_abs: []const u8) !void {
+    fn working(self: *Hold) ![]const []const u8 {
+        var found: std.ArrayList([]const u8) = .empty;
+        if (self.scopes.len != 0) {
+            for (try shadow.workingFiles(self.arena(), self.io, self.root_abs)) |path| {
+                if (self.covers(path)) try found.append(self.arena(), path);
+            }
+        }
+        if (!self.guard_config) return found.items;
+        for (gate_config.files) |path| {
+            if (try self.seenAt(path) != .absent) try found.append(self.arena(), path);
+        }
+        for (gate_config.dirs) |dir| try self.walkGuard(&found, dir, 0);
+        if (self.ledger_open) return found.items;
+        var dir = Dir.cwd().openDir(self.io, try self.abs(gate_config.ledger_dir), .{ .iterate = true, .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return found.items,
+            else => |e| return e,
+        };
+        defer dir.close(self.io);
+        var it = dir.iterate();
+        while (try it.next(self.io)) |entry| {
+            if (entry.kind == .directory or !gate_config.isLedgerName(entry.name)) continue;
+            try found.append(self.arena(), try std.fmt.allocPrint(self.arena(), "{s}/{s}", .{ gate_config.ledger_dir, entry.name }));
+        }
+        return found.items;
+    }
+
+    fn walkGuard(self: *Hold, found: *std.ArrayList([]const u8), rel: []const u8, depth: usize) !void {
+        if (depth > max_guard_depth) return error.GateConfigTooDeep;
+        var dir = Dir.cwd().openDir(self.io, try self.abs(rel), .{ .iterate = true, .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return,
+            else => |e| return e,
+        };
+        defer dir.close(self.io);
+        try self.keepDir(rel);
+        var it = dir.iterate();
+        while (try it.next(self.io)) |entry| {
+            const child = try std.fmt.allocPrint(self.arena(), "{s}/{s}", .{ rel, entry.name });
+            if (entry.kind == .directory) {
+                try self.walkGuard(found, child, depth + 1);
+                continue;
+            }
+            if (found.items.len >= max_guard_files) return error.GateConfigTooLarge;
+            try found.append(self.arena(), child);
+        }
+    }
+
+    fn copyDir(self: *Hold) ![]const u8 {
+        if (self.dir_made) return self.dir_abs;
+        try Dir.cwd().createDirPath(self.io, self.dir_abs);
+        try Dir.cwd().writeFile(self.io, .{ .sub_path = try std.fmt.allocPrint(self.arena(), "{s}\\.gitignore", .{self.parent_abs}), .data = "*\n" });
+        self.dir_made = true;
+        return self.dir_abs;
+    }
+
+    fn dirKey(self: *Hold, rel: []const u8) ![]const u8 {
+        const key = try std.ascii.allocLowerString(self.arena(), rel);
+        std.mem.replaceScalar(u8, key, '\\', '/');
+        return key;
+    }
+
+    fn keepDir(self: *Hold, rel: []const u8) !void {
+        var dir = rel;
+        while (true) {
+            try self.kept_dirs.put(self.arena(), try self.dirKey(dir), {});
+            dir = dir[0 .. std.mem.lastIndexOfAny(u8, dir, "/\\") orelse return];
+        }
+    }
+
+    fn keepCopies(self: *Hold) !void {
         const entries = try self.listIndex();
         for (entries.keys(), entries.values()) |path, lines| try self.files.put(self.arena(), path, .{ .index = lines });
-        for (try shadow.workingFiles(self.arena(), self.io, self.root_abs)) |path| {
-            if (self.covers(path)) _ = try self.files.getOrPutValue(self.arena(), path, .{});
+        for (try self.working()) |path| _ = try self.files.getOrPutValue(self.arena(), path, .{});
+        for (self.files.keys()) |path| {
+            if (std.mem.lastIndexOfAny(u8, path, "/\\")) |slash| try self.keepDir(path[0..slash]);
         }
         for (self.files.keys(), self.files.values(), 0..) |path, *file, n| {
             file.seen = try self.seenAt(path);
             if (file.seen != .file) continue;
-            const copy = try std.fmt.allocPrint(self.arena(), "{s}\\{d}", .{ dir_abs, n });
+            if (self.guarded(path)) {
+                const bytes = try Dir.cwd().readFileAlloc(self.io, try self.abs(path), self.arena(), .limited(max_guard_bytes));
+                file.bytes = bytes;
+                file.seen = .{ .file = digestOf(bytes) };
+                continue;
+            }
+            const copy = try std.fmt.allocPrint(self.arena(), "{s}\\{d}", .{ try self.copyDir(), n });
             try Dir.cwd().copyFile(try self.abs(path), Dir.cwd(), copy, self.io, .{});
             file.copy = copy;
             file.seen = .{ .file = try hashFile(self.io, copy) };
@@ -260,8 +364,9 @@ pub const Hold = struct {
         };
         if (stat.kind == .directory) try Dir.cwd().deleteDir(self.io, path) else try Dir.cwd().deleteFile(self.io, path);
         var parent = rel;
-        while (std.mem.lastIndexOfScalar(u8, parent, '/')) |slash| {
+        while (std.mem.lastIndexOfAny(u8, parent, "/\\")) |slash| {
             parent = parent[0..slash];
+            if (self.kept_dirs.contains(try self.dirKey(parent))) break;
             Dir.cwd().deleteDir(self.io, try self.abs(parent)) catch break;
         }
     }
@@ -271,14 +376,29 @@ pub const Hold = struct {
             .file => |d| d,
             else => return error.NothingHeld,
         };
-        const copied = try hashFile(self.io, file.copy);
-        if (!std.mem.eql(u8, &digest, &copied)) return error.HeldCopyChanged;
+        if (file.bytes == null) {
+            const copied = try hashFile(self.io, file.copy);
+            if (!std.mem.eql(u8, &digest, &copied)) return error.HeldCopyChanged;
+        }
         const path = try self.abs(rel);
         if (Dir.cwd().statFile(self.io, path, .{ .follow_symlinks = false })) |stat| {
             if (stat.kind == .directory) try Dir.cwd().deleteDir(self.io, path);
+            if (stat.kind == .sym_link) try Dir.cwd().deleteFile(self.io, path);
         } else |_| {}
         if (std.fs.path.dirname(path)) |parent| try Dir.cwd().createDirPath(self.io, parent);
+        if (file.bytes) |bytes| return Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = bytes });
         try Dir.cwd().copyFile(file.copy, Dir.cwd(), path, self.io, .{});
+    }
+
+    fn keepsConfig(self: *Hold, item: Touched) bool {
+        if (self.no_git or !gate_config.isGitConfig(item.path) or item.seen != .file) return false;
+        const before = item.pre.bytes orelse return false;
+        const was = std.fmt.allocPrint(self.arena(), "{s}\\config", .{self.copyDir() catch return false}) catch return false;
+        Dir.cwd().writeFile(self.io, .{ .sub_path = was, .data = before }) catch return false;
+        const now = self.abs(item.path) catch return false;
+        const old = self.git(&.{ "config", "--file", was, "--list", "-z" }, null) catch return false;
+        const new = self.git(&.{ "config", "--file", now, "--list", "-z" }, null) catch return false;
+        return sameGuardedConfig(old, new);
     }
 
     fn workingOids(self: *Hold, touched: []const Touched) !Map {
@@ -286,7 +406,7 @@ pub const Hold = struct {
         var input: std.ArrayList(u8) = .empty;
         var asked: std.ArrayList([]const u8) = .empty;
         for (touched) |item| {
-            if (item.seen != .file) continue;
+            if (item.seen != .file or self.guarded(item.path)) continue;
             try input.print(self.arena(), "{s}\n", .{item.path});
             try asked.append(self.arena(), item.path);
         }
@@ -368,14 +488,19 @@ pub const Hold = struct {
         var now_refs = self.refs;
         var now_op = self.op;
         var index: Map = .empty;
-        var listed: []const []u8 = &.{};
+        var listed: []const []const u8 = &.{};
         read: {
+            if (self.no_git) {
+                git_ok = false;
+                listed = try self.working();
+                break :read;
+            }
             const problem: anyerror = found: {
                 now_head = self.headOid() catch |err| break :found err;
                 now_refs = self.listRefs() catch |err| break :found err;
                 now_op = self.readOp() catch |err| break :found err;
                 index = self.listIndex() catch |err| break :found err;
-                listed = shadow.workingFiles(a, self.io, self.root_abs) catch |err| break :found err;
+                listed = self.working() catch |err| break :found err;
                 break :read;
             };
             git_ok = false;
@@ -388,9 +513,7 @@ pub const Hold = struct {
         var paths: std.StringArrayHashMapUnmanaged(void) = .empty;
         for (self.files.keys()) |path| try paths.put(a, path, {});
         for (index.keys()) |path| try paths.put(a, path, {});
-        for (listed) |path| {
-            if (self.covers(path)) try paths.put(a, path, {});
-        }
+        for (listed) |path| try paths.put(a, path, {});
 
         var touched: std.ArrayList(Touched) = .empty;
         for (paths.keys()) |path| {
@@ -433,6 +556,18 @@ pub const Hold = struct {
         if (compared) for (touched.items) |item| {
             const oid = oids.get(item.path);
             const conflicted = item.index.len != 0 and std.mem.indexOf(u8, item.index, " 0\n") == null;
+            if (self.guarded(item.path)) {
+                var plan: Plan = .{ .path = item.path, .pre = item.pre };
+                if (item.work_changed and !self.keepsConfig(item)) plan.work = restoreKind(item.pre);
+                if (in_op and conflicted) {
+                    try in_merge.append(a, item.path);
+                } else if (item.index_changed) {
+                    plan.index = item.pre.index;
+                    plan.oid_len = oidLen(item.index, item.pre.index, "");
+                }
+                if (plan.work != .keep or plan.index != null) try plans.append(a, plan);
+                continue;
+            }
             if (in_op and (conflicted or matchesEntry(item.seen, oid, item.index))) {
                 try in_merge.append(a, item.path);
                 continue;
@@ -505,6 +640,22 @@ pub const Hold = struct {
         }
     }
 
+    fn knowGit(self: *Hold) !void {
+        const a = self.arena();
+        self.git_exe = try exe_path.git(a, self.root_abs);
+        self.prefix = std.mem.trim(u8, try self.git(&.{ "rev-parse", "--show-prefix" }, null), "\r\n");
+        var dirs = std.mem.tokenizeAny(u8, try self.git(&.{ "rev-parse", "--absolute-git-dir", "--path-format=absolute", "--git-common-dir" }, null), "\r\n");
+        const git_dir = try a.dupe(u8, std.mem.trim(u8, dirs.next() orelse return error.GitFailed, " "));
+        std.mem.replaceScalar(u8, git_dir, '/', '\\');
+        const common_dir = try a.dupe(u8, std.mem.trim(u8, dirs.next() orelse return error.GitFailed, " "));
+        std.mem.replaceScalar(u8, common_dir, '/', '\\');
+        self.git_dir = git_dir;
+        self.common_dir = common_dir;
+        self.head = try self.headOid();
+        self.refs = try self.listRefs();
+        self.op = try self.readOp();
+    }
+
     pub fn finish(self: *Hold) Report {
         var report: Report = .{ .state = self.state };
         self.settle(&report) catch |err| {
@@ -563,6 +714,40 @@ fn matchesEntry(seen: Seen, oid: ?[]const u8, entry: []const u8) bool {
     };
 }
 
+const guard_specs = blk: {
+    const paths = gate_config.tracked_files ++ gate_config.tracked_dirs;
+    var specs: [paths.len][]const u8 = undefined;
+    for (paths, &specs) |path, *slot| slot.* = ":(icase)" ++ path;
+    break :blk specs;
+};
+
+fn digestOf(bytes: []const u8) Digest {
+    var digest: Digest = undefined;
+    Blake3.hash(bytes, &digest, .{});
+    return digest;
+}
+
+fn sameGuardedConfig(old: []const u8, new: []const u8) bool {
+    var left = std.mem.tokenizeScalar(u8, old, 0);
+    var right = std.mem.tokenizeScalar(u8, new, 0);
+    while (true) {
+        const was = nextGuardedEntry(&left);
+        const now = nextGuardedEntry(&right);
+        if (was == null or now == null) return was == null and now == null;
+        if (!std.mem.eql(u8, was.?, now.?)) return false;
+    }
+}
+
+fn nextGuardedEntry(entries: *std.mem.TokenIterator(u8, .scalar)) ?[]const u8 {
+    while (entries.next()) |entry| {
+        const split = std.mem.indexOfScalar(u8, entry, '\n');
+        const key = entry[0 .. split orelse entry.len];
+        const value = if (split) |at| entry[at + 1 ..] else "";
+        if (!gate_config.safeConfigEntry(key, value)) return entry;
+    }
+    return null;
+}
+
 fn hashFile(io: std.Io, path: []const u8) !Digest {
     const file = try Dir.cwd().openFile(io, path, .{});
     defer file.close(io);
@@ -580,12 +765,14 @@ fn hashFile(io: std.Io, path: []const u8) !Digest {
     return digest;
 }
 
-pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8) !?*Hold {
+pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Options) !?*Hold {
     const enforced = try rules.peek(gpa, io, root_abs);
     defer enforced.deinit();
-    for (enforced.rules) |rule| {
-        if (rules.isFrozen(rule)) break;
-    } else return null;
+    if (!options.guard_config) {
+        for (enforced.rules) |rule| {
+            if (rules.isFrozen(rule)) break;
+        } else return null;
+    }
 
     const state = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(state);
@@ -594,7 +781,7 @@ pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8) !?*Hold {
     const a = state.allocator();
 
     const hold = try a.create(Hold);
-    hold.* = .{ .io = io, .root_abs = root_abs, .state = state };
+    hold.* = .{ .io = io, .root_abs = root_abs, .state = state, .ledger_open = options.ledger_open, .guard_config = options.guard_config };
     var scopes: std.ArrayList(Scope) = .empty;
     for (enforced.rules) |rule| {
         if (!rules.isFrozen(rule)) continue;
@@ -602,23 +789,21 @@ pub fn begin(gpa: Allocator, io: std.Io, root_abs: []const u8) !?*Hold {
         try scopes.append(a, .{ .id = try a.dupe(u8, rule.id), .where = where });
     }
     hold.scopes = scopes.items;
-    hold.git_exe = try exe_path.git(a, root_abs);
-    hold.prefix = std.mem.trim(u8, try hold.git(&.{ "rev-parse", "--show-prefix" }, null), "\r\n");
-    const git_dir = try a.dupe(u8, std.mem.trim(u8, try hold.git(&.{ "rev-parse", "--absolute-git-dir" }, null), " \r\n"));
-    std.mem.replaceScalar(u8, git_dir, '/', '\\');
-    hold.git_dir = git_dir;
-    hold.head = try hold.headOid();
-    hold.refs = try hold.listRefs();
-    hold.op = try hold.readOp();
+    hold.common_dir = try std.fmt.allocPrint(a, "{s}\\{s}", .{ root_abs, gate_config.git_dir });
+    hold.knowGit() catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            if (hold.scopes.len != 0) return err;
+            hold.no_git = true;
+        },
+    };
 
     const now_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
     hold.started_s = @intCast(@divFloor(now_ns, std.time.ns_per_s));
     hold.parent_abs = try std.fmt.allocPrint(a, "{s}\\{s}\\{s}", .{ root_abs, shadow.workspace_dir, hold_dir });
     Dir.cwd().deleteTree(io, hold.parent_abs) catch {};
-    const dir_abs = try std.fmt.allocPrint(a, "{s}\\{d}", .{ hold.parent_abs, now_ns });
-    try Dir.cwd().createDirPath(io, dir_abs);
+    hold.dir_abs = try std.fmt.allocPrint(a, "{s}\\{d}", .{ hold.parent_abs, now_ns });
     errdefer Dir.cwd().deleteTree(io, hold.parent_abs) catch {};
-    try Dir.cwd().writeFile(io, .{ .sub_path = try std.fmt.allocPrint(a, "{s}\\.gitignore", .{hold.parent_abs}), .data = "*\n" });
-    try hold.keepCopies(dir_abs);
+    try hold.keepCopies();
     return hold;
 }

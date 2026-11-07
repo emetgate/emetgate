@@ -9,6 +9,7 @@ const test_command = @import("test_command.zig");
 const toolchain = @import("toolchain.zig");
 const receipts = @import("receipts.zig");
 const frozen_hold = @import("frozen_hold.zig");
+const command_danger = @import("command_danger.zig");
 const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
@@ -353,6 +354,7 @@ pub const OpenPlace = struct {
     cwd: ?[]const u8 = null,
     also_hold: []const []const u8 = &.{},
     env: []const sandbox.EnvVar = &.{},
+    guard_config: bool = false,
 };
 
 pub fn runOpenInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, shell: open_shell.Shell, command: []const u8, limits: sandbox.Limits, version: []const u8, place: OpenPlace) !RepoRun {
@@ -373,7 +375,11 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const before = try snapshot(arena, gpa, io, root_abs);
-    const hold = frozen_hold.begin(gpa, io, root_abs) catch |err| switch (err) {
+    const options: frozen_hold.Options = switch (spawn) {
+        .toolchain => .{},
+        .open => |open| .{ .guard_config = open.place.guard_config, .ledger_open = try command_danger.changesRules(arena, open.command) },
+    };
+    const hold = frozen_hold.begin(gpa, io, root_abs, options) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.FrozenHoldFailed,
     };
@@ -383,7 +389,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
     };
     var nested: std.ArrayList(NestedHold) = .empty;
     for (others) |other| {
-        const held_other = frozen_hold.begin(gpa, io, other) catch |err| {
+        const held_other = frozen_hold.begin(gpa, io, other, options) catch |err| {
             if (hold) |held| held.finish().deinit(gpa);
             for (nested.items) |item| item.hold.finish().deinit(gpa);
             return if (err == error.OutOfMemory) error.OutOfMemory else error.FrozenHoldFailed;

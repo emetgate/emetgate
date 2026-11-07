@@ -23,7 +23,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 
-pub const description = "Runs any shell command in the session folder (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
+pub const description = "Runs any shell command in the session folder (Git Bash if installed, else cmd) and replies with the shell, the exit code and the output. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule, and with no rule emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config), comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
 
 pub const command_desc = "the shell command, as you would type it";
 pub const raw_desc = "return the output uncut, up to 64 KiB";
@@ -35,7 +35,7 @@ pub const max_timeout_s: u64 = 600;
 pub const max_output_bytes = 16 * 1024 * 1024;
 pub const timeout_fix = "the command ran past its time; pass timeout_s (at most 600), or run it in parts";
 
-pub const frozen_fix = "fix the code instead; a frozen path is changed by hand by the user";
+pub const frozen_fix = "fix the code instead; a frozen path and emetgate's own configuration are changed by hand by the user";
 pub const frozen_failed_fix = "a frozen path could not be put back; frozen_failed names each one and why: restore it by hand before going on";
 pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; emetgate_commit still checks them";
 pub const rules_fix = "the command left what the rule_violations name, and nothing was undone; change what each rule names, and for a commit amend it or follow it with one that fixes it";
@@ -96,7 +96,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     var audit: run_audit.Audit = undefined;
     try audit.begin(gpa, io, runtime, root_abs, policy.nested_roots, policy.allow_repo_memory);
     defer audit.deinit();
-    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env }) catch |err| switch (err) {
+    const ran = run_command.runOpenInRepo(gpa, io, root_abs, shell, request.command, limits, receipt_note.version, .{ .cwd = policy.session_dir, .also_hold = policy.nested_roots, .env = guard.env, .guard_config = policy.open_run }) catch |err| switch (err) {
         error.SandboxUnavailable, error.SandboxBusy, error.FrozenHoldFailed => {
             event.fail(@errorName(err));
             try writeNotRun(w, request.command, shell.kind, err);

@@ -40,6 +40,7 @@ pub const BatchOptions = struct {
     linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
     allow_repo_memory: bool = false,
+    guard_config: bool = false,
     shadow_root: ?[]const u8 = null,
     gate_tree: shadow.Choice = .{},
     trace: ?*Trace = null,
@@ -240,7 +241,7 @@ fn openCommit(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const Pr
         if (p.source_rel) |from| try rels.append(arena, from);
     }
     for (options.doc_edits) |edit| try rels.append(arena, try relativeUnder(arena, root, edit.file_abs));
-    return commit_plan.Session.open(gpa, io, root, options.commit, rels.items);
+    return commit_plan.Session.open(gpa, io, root, options.guard_config, options.commit, rels.items);
 }
 
 fn commitChanges(gpa: Allocator, prepared: []const Prepared, doc_prepared: []const Prepared) ![]commit_plan.Change {

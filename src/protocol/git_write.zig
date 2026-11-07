@@ -503,7 +503,7 @@ fn checkoutTargets(args: []const []const u8) struct { refs: [2]?[]const u8 = .{ 
     return out;
 }
 
-pub fn callGitWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
+pub fn callGitWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8, guard_config: bool) !ToolResult {
     event.label = "git_write";
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -513,7 +513,7 @@ pub fn callGitWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = render(arena, io, root, argv, force, &buffer.writer, event) catch |err| {
+    const is_error = render(arena, io, root, argv, force, guard_config, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return tool_result.failure(gpa, &buffer, err, event);
     };
@@ -720,7 +720,7 @@ fn writeOutcome(js: *std.json.Stringify, ran: Ran) !void {
     };
 }
 
-fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const u8, force: bool, w: *Writer, event: *telemetry.Event) !bool {
+fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const u8, force: bool, guard_config: bool, w: *Writer, event: *telemetry.Event) !bool {
     const root_abs = try repo.servedRoot(arena, io, root);
     const git = try exe_path.git(arena, root_abs);
     var ok = switch (check(args)) {
@@ -748,7 +748,7 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
 
-    if (std.mem.eql(u8, ok.spec.sub, "commit") and !ok.dry_run and try refuseFrozen(arena, io, git, root_abs, &ok, w, event)) return true;
+    if (std.mem.eql(u8, ok.spec.sub, "commit") and !ok.dry_run and try refuseFrozen(arena, io, git, root_abs, &ok, guard_config, w, event)) return true;
 
     const before = try headOid(arena, io, git, root_abs);
     const ran = try runGit(arena, io, root_abs, try fullArgv(arena, git, &prefix, &ok, args), ok.spec.network);
@@ -795,13 +795,13 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     return failed;
 }
 
-fn refuseFrozen(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, w: *Writer, event: *telemetry.Event) !bool {
+fn refuseFrozen(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, guard_config: bool, w: *Writer, event: *telemetry.Event) !bool {
     var paths: std.ArrayList([]const u8) = .empty;
     const named = ok.positionals();
     try appendDiffed(arena, io, git, root_abs, &.{"--cached"}, if (ok.commit_include) &.{} else named, &paths);
     if (ok.commit_all or named.len != 0) try appendDiffed(arena, io, git, root_abs, &.{}, named, &paths);
     if (paths.items.len == 0) return false;
-    switch (try rules.frozenGate(arena, io, root_abs, paths.items)) {
+    switch (try rules.frozenGate(arena, io, root_abs, paths.items, guard_config)) {
         .ok => return false,
         .violated => |report| {
             event.fail("RuleViolation");
