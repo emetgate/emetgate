@@ -3,20 +3,10 @@ const builtin = @import("builtin");
 const disk = @import("emetgate").disk;
 const mt = @import("move_tool.zig");
 const git_fixture = @import("git_fixture.zig");
+const Snapshots = @import("crash_snapshot.zig").Snapshots;
 
 const testing = std.testing;
 const Case = mt.Case;
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const State = enum { old, new };
 
@@ -46,30 +36,29 @@ fn stateOf(case: *Case) !State {
 
 test "move crash: a three-file move to a new file cut after every commit step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try mt.initMath(&case, mt.math_src, mt.app_src, &.{}, true);
+    defer case.deinit();
+    try mt.plan(&case, &mt.area_refs);
+    var snapshots = try Snapshots.init(case.repo.root_abs);
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    const outcome = try mt.move(&case, "src/math.ts", "area", "src/shapes.ts", .{ .step = &step });
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try testing.expectEqual(State.new, try stateOf(&case));
+    const steps = try snapshots.taken();
+    try testing.expect(steps >= 6);
+    case.session.deinit();
     var seen_new = false;
-    var crashes: usize = 0;
-    var stop: usize = 1;
-    while (true) : (stop += 1) {
+    for (1..steps + 1) |stop| {
         errdefer std.debug.print("crash after step {d}\n", .{stop});
-        var case: Case = undefined;
-        try mt.initMath(&case, mt.math_src, mt.app_src, &.{}, true);
-        defer case.deinit();
-        try mt.plan(&case, &mt.area_refs);
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-        if (mt.move(&case, "src/math.ts", "area", "src/shapes.ts", .{ .step = &step })) |outcome| {
-            defer outcome.deinit(testing.allocator);
-            try testing.expect(outcome.result == .committed);
-            try testing.expectEqual(State.new, try stateOf(&case));
-            break;
-        } else |err| try testing.expectEqual(error.Crashed, err);
-        crashes += 1;
+        try snapshots.restore(stop);
         const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
         try testing.expectEqual(@as(usize, 0), report.failed);
         const state = try stateOf(&case);
         if (state == .new) seen_new = true;
         if (seen_new) try testing.expectEqual(State.new, state);
     }
-    try testing.expect(crashes >= 6);
     try testing.expect(seen_new);
 }

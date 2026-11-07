@@ -2,20 +2,10 @@ const std = @import("std");
 const builtin = @import("builtin");
 const disk = @import("emetgate").disk;
 const mf = @import("move_file_tool.zig");
+const Snapshots = @import("crash_snapshot.zig").Snapshots;
 
 const testing = std.testing;
 const Case = mf.Case;
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 fn isOld(case: *Case) bool {
     mf.expectOld(case) catch return false;
@@ -29,24 +19,24 @@ fn isNew(case: *Case) bool {
 
 test "move file crash: the tool's move into new directories with two users cut after every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try mf.initFiles(&case, &.{}, true);
+    defer case.deinit();
+    try mf.plan(&case, &mf.changes);
+    var snapshots = try Snapshots.init(case.repo.root_abs);
+    defer snapshots.deinit();
+    const step = snapshots.step();
+    const outcome = try mf.moveFile(&case, .{ .step = &step });
+    defer outcome.deinit(testing.allocator);
+    try testing.expect(outcome.result == .committed);
+    try mf.expectNew(&case);
+    const steps = try snapshots.taken();
+    try testing.expect(steps >= 8);
+    case.session.deinit();
     var seen_new = false;
-    var crashes: usize = 0;
-    var stop: usize = 1;
-    while (true) : (stop += 1) {
+    for (1..steps + 1) |stop| {
         errdefer std.debug.print("crash after step {d}\n", .{stop});
-        var case: Case = undefined;
-        try mf.initFiles(&case, &.{}, true);
-        defer case.deinit();
-        try mf.plan(&case, &mf.changes);
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
-        if (mf.moveFile(&case, .{ .step = &step })) |outcome| {
-            defer outcome.deinit(testing.allocator);
-            try testing.expect(outcome.result == .committed);
-            try mf.expectNew(&case);
-            break;
-        } else |err| try testing.expectEqual(error.Crashed, err);
-        crashes += 1;
+        try snapshots.restore(stop);
         const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
         try testing.expectEqual(@as(usize, 0), report.failed);
         const old = isOld(&case);
@@ -55,6 +45,5 @@ test "move file crash: the tool's move into new directories with two users cut a
         if (new) seen_new = true;
         if (seen_new) try testing.expect(new);
     }
-    try testing.expect(crashes >= 8);
     try testing.expect(seen_new);
 }
