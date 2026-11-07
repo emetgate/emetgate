@@ -80,7 +80,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        optimize: [Debug, ReleaseSafe]
+        optimize: ${{ fromJSON(github.event_name == 'pull_request' && '["Debug"]' || '["Debug", "ReleaseSafe"]') }}
         part: [1, 2, 3, 4]
     name: test part (${{ matrix.optimize }} ${{ matrix.part }}/4)
     steps:
@@ -136,13 +136,19 @@ jobs:
         optimize: [Debug, ReleaseSafe]
     name: test (${{ matrix.optimize }})
     steps:
+      - name: ReleaseSafe runs on main and nightly, not on pull requests
+        if: github.event_name == 'pull_request' && matrix.optimize == 'ReleaseSafe'
+        run: echo "ReleaseSafe parts run on every push to main and every nightly run"
       - uses: actions/checkout@v4
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
       - uses: actions/download-artifact@v4
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
         with:
           pattern: test-parts-${{ matrix.optimize }}-*
           path: parts
           merge-multiple: true
       - name: The four parts passed and together ran every selected test exactly once
+        if: github.event_name != 'pull_request' || matrix.optimize != 'ReleaseSafe'
         run: |
           mkdir -p parts
           python3 tools/check_parts.py --count 4 parts

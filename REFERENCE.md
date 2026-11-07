@@ -1913,8 +1913,9 @@ selected test exactly once. `-Dtest-part=I/N` (`--part I/N`) runs only part I of
 tests are split by the times committed in `tests/test_times.tsv`, the slowest first, each to the
 part with the least time so far, so every machine computes the same split; the CLI end-to-end
 cases run in part 1. `-Dtest-manifest=PATH` (`--manifest=PATH`) writes every selected test and
-every test the part ran. CI runs each optimize mode in four parts on four machines, and the
-`test (Debug)` and `test (ReleaseSafe)` checks fail unless `tools/check_parts.py` finds that all
+every test the part ran. CI runs each optimize mode in four parts on four machines on every push to main and every nightly
+run; a pull request runs only the Debug parts, and its `test (ReleaseSafe)` check passes without
+running them. The `test (Debug)` and `test (ReleaseSafe)` checks fail unless `tools/check_parts.py` finds that all
 four parts passed, selected the same tests and together ran each of them exactly once. A test
 missing from `tests/test_times.tsv` counts as one second.
 `tests/suites.zig` fails the run if a test file under `tests/` is not imported exactly once by
