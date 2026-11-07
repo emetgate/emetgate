@@ -746,3 +746,152 @@ test "git objects: a delta is applied exactly and a malformed one is refused" {
     try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, base, &[_]u8{ base.len, 4, 0x91, 20, 5 }));
     try testing.expectError(error.BadDelta, git_objects.applyDelta(arena, base, &[_]u8{ base.len, 6, 0x91, 0, 5 }));
 }
+
+fn reversedRecords(arena: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    var records = std.mem.tokenizeScalar(u8, bytes, 0);
+    while (records.next()) |record| try list.append(arena, record);
+    std.mem.reverse([]const u8, list.items);
+    var out: std.ArrayList(u8) = .empty;
+    for (list.items) |record| {
+        try out.appendSlice(arena, record);
+        try out.append(arena, 0);
+    }
+    return out.items;
+}
+
+fn mtimeOf(path: []const u8) !i96 {
+    const seen = try std.Io.Dir.cwd().statFile(testing.io, path, .{});
+    return seen.mtime.nanoseconds;
+}
+
+fn expectTreesRebuilt(case: *ObjectsCase, commits: []const []const u8) !void {
+    const arena = case.arena_state.allocator();
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    for (commits) |commit| {
+        const want = try case.line(&.{ "rev-parse", try std.fmt.allocPrint(arena, "{s}^{{tree}}", .{commit}) });
+        const listed = try case.repo.out(&.{ "ls-tree", "-r", "-z", commit });
+        defer testing.allocator.free(listed);
+        try testing.expectEqualStrings(want, (try objects.writeTree(listed)) orelse return error.NotWritten);
+        try testing.expectEqualStrings(want, (try objects.writeTree(try reversedRecords(arena, listed))) orelse return error.NotWritten);
+    }
+}
+
+test "git objects: a tree written in process from a full listing is the tree git wrote, loose or packed" {
+    try skipOffWindows();
+    var case = try ObjectsCase.init();
+    defer case.deinit();
+    const arena = case.arena_state.allocator();
+    var commits: std.ArrayList([]const u8) = .empty;
+    try commits.append(arena, try case.head());
+    for ([_][]const u8{ "a-b", "a.b", "a0", "a/b-c/d", "a/b.c", "a/b/c", "A1", "z z/q", "deep/er/est/x.ts" }) |rel| try case.write(rel, rel);
+    try case.commitAll("names");
+    try commits.append(arena, try case.head());
+    const first = commits.items[0];
+    const a_blob = try case.line(&.{ "rev-parse", "HEAD:src/a.ts" });
+    try case.repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "120000,{s},src/link", .{a_blob}) });
+    try case.repo.git(&.{ "update-index", "--add", "--cacheinfo", try std.fmt.allocPrint(arena, "160000,{s},vendor/sub", .{first}) });
+    try case.repo.git(&.{ "update-index", "--chmod=+x", "src/b.ts" });
+    try case.repo.git(&.{ "commit", "-q", "-m", "modes" });
+    try commits.append(arena, try case.head());
+    try case.repo.git(&.{ "rm", "-q", "-r", "deep", "a" });
+    try case.commitAll("fewer");
+    try commits.append(arena, try case.head());
+
+    try expectTreesRebuilt(&case, commits.items);
+    const before = std.Io.Timestamp.now(testing.io, .real).nanoseconds;
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    const listed = try case.repo.out(&.{ "ls-tree", "-r", "-z", "HEAD" });
+    defer testing.allocator.free(listed);
+    const root = (try objects.writeTree(listed)) orelse return error.NotWritten;
+    try testing.expect(try mtimeOf(try std.fmt.allocPrint(arena, "{s}/objects/{s}/{s}", .{ case.git_dir, root[0..2], root[2..] })) >= before);
+
+    var moved: std.ArrayList(u8) = .empty;
+    try moved.appendSlice(arena, listed);
+    try moved.print(arena, "100644 blob {s}\tfresh/dir/moved.ts\x00", .{a_blob});
+    const fresh = (try objects.writeTree(moved.items)) orelse return error.NotWritten;
+    try testing.expect(!std.mem.eql(u8, fresh, root));
+    const back = try case.repo.out(&.{ "ls-tree", "-r", "-z", fresh });
+    defer testing.allocator.free(back);
+    const want = try sortedRecords(arena, moved.items);
+    const got = try sortedRecords(arena, back);
+    try testing.expectEqual(want.len, got.len);
+    for (want, got) |a, b| try testing.expectEqualStrings(a, b);
+    try case.repo.git(&.{ "fsck", "--strict", "--no-dangling", "--no-progress" });
+
+    try case.repo.git(&.{ "repack", "-a", "-d", "-q" });
+    try case.repo.git(&.{"prune-packed"});
+    try expectTreesRebuilt(&case, commits.items);
+    const packed_at = std.Io.Timestamp.now(testing.io, .real).nanoseconds;
+    var repacked = (try case.store()) orelse return error.StoreRefused;
+    try testing.expectEqualStrings(root, (try repacked.writeTree(listed)) orelse return error.NotWritten);
+    var pack_dir = try std.Io.Dir.openDirAbsolute(testing.io, try std.fs.path.join(arena, &.{ case.git_dir, "objects", "pack" }), .{ .iterate = true });
+    defer pack_dir.close(testing.io);
+    var entries = pack_dir.iterate();
+    var freshened = false;
+    while (try entries.next(testing.io)) |entry| {
+        if (!std.mem.endsWith(u8, entry.name, ".pack")) continue;
+        if (try mtimeOf(try std.fs.path.join(arena, &.{ case.git_dir, "objects", "pack", entry.name })) >= packed_at) freshened = true;
+    }
+    try testing.expect(freshened);
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(testing.io, try std.fmt.allocPrint(arena, "{s}/objects/{s}/{s}", .{ case.git_dir, root[0..2], root[2..] }), .{}));
+    try case.repo.git(&.{ "fsck", "--strict", "--no-dangling", "--no-progress" });
+}
+
+test "git objects: a listing git would reject, reshape or resolve by order is left to git" {
+    try skipOffWindows();
+    var case = try ObjectsCase.init();
+    defer case.deinit();
+    const arena = case.arena_state.allocator();
+    var objects = (try case.store()) orelse return error.StoreRefused;
+    const blob = try case.line(&.{ "rev-parse", "HEAD:src/a.ts" });
+    const ok = try std.fmt.allocPrint(arena, "100644 blob {s}\tsrc/a.ts\x00100644 blob {s}\t.gitignore\x00100644 blob {s}\tsub/.gitattributes\x00120000 blob {s}\tsub/link\x00", .{ blob, blob, blob, blob });
+    const written = (try objects.writeTree(ok)) orelse return error.NotWritten;
+    const back = try case.repo.out(&.{ "ls-tree", "-r", "-z", written });
+    defer testing.allocator.free(back);
+    try testing.expectEqual(@as(usize, 4), (try sortedRecords(arena, back)).len);
+    const refused = [_][]const u8{
+        "100644 blob {s}\tx\x00100644 blob {s}\tx/y\x00",
+        "100644 blob {s}\tx/y\x00100644 blob {s}\tx\x00",
+        "100644 blob {s}\tSrc/x\x00100644 blob {s}\tsrc/y\x00",
+        "100644 blob {s}\tx\x00100644 blob {s}\tx\x00",
+        "100644 blob {s}\tReadme\x00100644 blob {s}\treadme\x00",
+        "100644 blob {s}\t.git/x\x00",
+        "100644 blob {s}\tsub/.GIT\x00",
+        "120000 blob {s}\t.gitmodules\x00",
+        "120000 blob {s}\tsub/.gitignore\x00",
+        "100644 blob {s}\t.git. \x00",
+        "100644 blob {s}\ta/CON\x00",
+        "100644 blob {s}\tcon.txt\x00",
+        "100644 blob {s}\tx.\x00",
+        "100644 blob {s}\tx \x00",
+        "100644 blob {s}\tgit~1/x\x00",
+        "100644 blob {s}\ta\\b\x00",
+        "100644 blob {s}\ta:b\x00",
+        "100644 blob {s}\t\xc3\xbc.ts\x00",
+        "100644 blob {s}\ta//b\x00",
+        "100644 blob {s}\t./a\x00",
+        "100644 blob {s}\ta/..\x00",
+        "100644 blob {s}\t/a\x00",
+        "100644 blob {s}\ta/\x00",
+        "100664 blob {s}\ta\x00",
+        "040000 tree {s}\ta\x00",
+        "100644 commit {s}\ta\x00",
+        "160000 blob {s}\ta\x00",
+        "100644 blob {s}\ta\x00\x00",
+        "100644  blob {s}\ta\x00",
+    };
+    for (refused) |shape| {
+        errdefer std.debug.print("accepted: {s}\n", .{shape});
+        var text: std.ArrayList(u8) = .empty;
+        var parts = std.mem.splitSequence(u8, shape, "{s}");
+        try text.appendSlice(arena, parts.next().?);
+        while (parts.next()) |part| {
+            try text.appendSlice(arena, blob);
+            try text.appendSlice(arena, part);
+        }
+        try testing.expect((try objects.writeTree(text.items)) == null);
+    }
+    try testing.expect((try objects.writeTree("100644 blob 0123456789abcdef0123456789abcdef01234567\ta\x00")) == null);
+    try testing.expect((try objects.writeTree(try std.fmt.allocPrint(arena, "100644 blob {s}\ta\x00", .{try std.ascii.allocUpperString(arena, blob)}))) == null);
+}

@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sandbox = @import("sandbox.zig");
+const open_nowait = @import("open_nowait.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -322,7 +323,183 @@ pub const Store = struct {
         while (nextEntry(object.data, &pos) catch return null) |_| {}
         return object.data;
     }
+
+    pub fn writeTree(self: *Store, lines: []const u8) !?[]const u8 {
+        const root = self.buildRoot(lines) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        } orelse return null;
+        return try self.arena.dupe(u8, &std.fmt.bytesToHex(root, .lower));
+    }
+
+    fn buildRoot(self: *Store, lines: []const u8) !?Oid {
+        var items: std.ArrayList(Item) = .empty;
+        var records = std.mem.splitScalar(u8, lines, 0);
+        while (records.next()) |record| {
+            if (record.len == 0) {
+                if (records.peek() != null) return null;
+                break;
+            }
+            try items.append(self.arena, parseRecord(record) orelse return null);
+        }
+        if (!try sameNamesOnce(self.arena, items.items)) return null;
+        for (items.items) |item| {
+            if (item.mode == 0o160000) continue;
+            if (!try self.has(item.oid)) return null;
+        }
+        std.mem.sort(Item, items.items, {}, struct {
+            fn lessThan(_: void, a: Item, b: Item) bool {
+                return std.mem.lessThan(u8, a.path, b.path);
+            }
+        }.lessThan);
+        return try self.build(items.items, 0);
+    }
+
+    fn build(self: *Store, items: []const Item, base: usize) !Oid {
+        var body: std.ArrayList(u8) = .empty;
+        var i: usize = 0;
+        while (i < items.len) {
+            const rest = items[i].path[base..];
+            if (std.mem.indexOfScalar(u8, rest, '/')) |slash| {
+                const name = rest[0..slash];
+                var end = i + 1;
+                while (end < items.len and under(items[end].path, base, name)) end += 1;
+                const sub = try self.build(items[i..end], base + slash + 1);
+                try body.print(self.arena, "40000 {s}\x00", .{name});
+                try body.appendSlice(self.arena, &sub);
+                i = end;
+            } else {
+                try body.print(self.arena, "{o} {s}\x00", .{ items[i].mode, rest });
+                try body.appendSlice(self.arena, &items[i].oid);
+                i += 1;
+            }
+        }
+        return self.put(.tree, body.items);
+    }
+
+    fn has(self: *Store, oid: Oid) !bool {
+        const hex = std.fmt.bytesToHex(oid, .lower);
+        if (try present(self.arena, self.io, self.objects, &(hex[0..2].* ++ "\\".* ++ hex[2..].*))) return true;
+        for (try self.packList()) |stem| {
+            if (try self.lookup(stem, oid) != null) return true;
+        }
+        return false;
+    }
+
+    fn put(self: *Store, kind: Kind, data: []const u8) !Oid {
+        const oid = hashOf(.{ .kind = kind, .data = data });
+        if (try self.freshen(oid)) return oid;
+        const hex = std.fmt.bytesToHex(oid, .lower);
+        const dir = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ self.objects, hex[0..2] });
+        try Dir.cwd().createDirPath(self.io, dir);
+        var random: [8]u8 = undefined;
+        self.io.random(&random);
+        const temp = try std.fmt.allocPrint(self.arena, "{s}\\tmp_obj_{s}", .{ dir, std.fmt.bytesToHex(random, .lower) });
+        const final = try std.fmt.allocPrint(self.arena, "{s}\\{s}", .{ dir, hex[2..] });
+        const packed_bytes = try deflate(self.arena, kind, data);
+        {
+            const file = try Dir.cwd().createFile(self.io, temp, .{ .exclusive = true });
+            defer file.close(self.io);
+            errdefer Dir.cwd().deleteFile(self.io, temp) catch {};
+            try file.writeStreamingAll(self.io, packed_bytes);
+            try file.sync(self.io);
+        }
+        Dir.renamePreserve(Dir.cwd(), temp, Dir.cwd(), final, self.io) catch |err| {
+            Dir.cwd().deleteFile(self.io, temp) catch {};
+            if (err != error.PathAlreadyExists) return err;
+        };
+        return oid;
+    }
+
+    fn freshen(self: *Store, oid: Oid) !bool {
+        const hex = std.fmt.bytesToHex(oid, .lower);
+        for (try self.packList()) |stem| {
+            if (try self.lookup(stem, oid) == null) continue;
+            const pack = try std.fmt.allocPrint(self.arena, "{s}.pack", .{stem});
+            if (open_nowait.touch(pack)) |_| return true else |_| {}
+        }
+        const path = try std.fmt.allocPrint(self.arena, "{s}\\{s}\\{s}", .{ self.objects, hex[0..2], hex[2..] });
+        open_nowait.touch(path) catch return false;
+        return true;
+    }
 };
+
+const Item = struct {
+    path: []const u8,
+    mode: u32,
+    oid: Oid,
+};
+
+fn parseRecord(record: []const u8) ?Item {
+    const tab = std.mem.indexOfScalar(u8, record, '\t') orelse return null;
+    var fields = std.mem.splitScalar(u8, record[0..tab], ' ');
+    const mode_text = fields.next() orelse return null;
+    const kind = fields.next() orelse return null;
+    const hex = fields.next() orelse return null;
+    if (fields.next() != null) return null;
+    const mode: u32 = for ([_]u32{ 0o100644, 0o100755, 0o120000, 0o160000 }) |known| {
+        var buffer: [8]u8 = undefined;
+        if (std.mem.eql(u8, mode_text, std.fmt.bufPrint(&buffer, "{o}", .{known}) catch unreachable)) break known;
+    } else return null;
+    if (!std.mem.eql(u8, kind, kindOfMode(mode))) return null;
+    const path = record[tab + 1 ..];
+    if (!safePath(path, mode == 0o120000)) return null;
+    return .{ .path = path, .mode = mode, .oid = parseHex(hex) orelse return null };
+}
+
+const reserved_names = [_][]const u8{ "con", "prn", "aux", "nul", "conin$", "conout$", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9" };
+
+fn safePath(path: []const u8, link: bool) bool {
+    if (path.len == 0) return false;
+    var parts = std.mem.splitScalar(u8, path, '/');
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..")) return false;
+        for (part) |c| {
+            if (!std.ascii.isAlphanumeric(c) and std.mem.indexOfScalar(u8, "-_.+=,@#$%&()[]{}!' ^", c) == null) return false;
+        }
+        if (part[part.len - 1] == '.' or part[part.len - 1] == ' ') return false;
+        if (std.ascii.eqlIgnoreCase(part, ".git")) return false;
+        if (link and part[0] == '.') return false;
+        const stem = std.mem.trimEnd(u8, part[0 .. std.mem.indexOfScalar(u8, part, '.') orelse part.len], " ");
+        for (reserved_names) |name| {
+            if (std.ascii.eqlIgnoreCase(stem, name)) return false;
+        }
+    }
+    return true;
+}
+
+fn sameNamesOnce(arena: Allocator, items: []const Item) !bool {
+    var seen: std.StringHashMapUnmanaged(struct { exact: []const u8, dir: bool }) = .empty;
+    for (items) |item| {
+        var at: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, item.path, at, '/')) |slash| : (at = slash + 1) {
+            const dir = item.path[0..slash];
+            const key = try std.ascii.allocLowerString(arena, dir);
+            const slot = try seen.getOrPut(arena, key);
+            if (slot.found_existing) {
+                if (!slot.value_ptr.dir or !std.mem.eql(u8, slot.value_ptr.exact, dir)) return false;
+            } else slot.value_ptr.* = .{ .exact = dir, .dir = true };
+        }
+        const slot = try seen.getOrPut(arena, try std.ascii.allocLowerString(arena, item.path));
+        if (slot.found_existing) return false;
+        slot.value_ptr.* = .{ .exact = item.path, .dir = false };
+    }
+    return true;
+}
+
+fn under(path: []const u8, base: usize, name: []const u8) bool {
+    return path.len > base + name.len and std.mem.eql(u8, path[base..][0..name.len], name) and path[base + name.len] == '/';
+}
+
+fn deflate(arena: Allocator, kind: Kind, data: []const u8) ![]u8 {
+    var out = try std.Io.Writer.Allocating.initCapacity(arena, data.len / 2 + 64);
+    const window = try arena.alloc(u8, flate.max_window_len);
+    var compress = try flate.Compress.init(&out.writer, window, .zlib, .default);
+    try compress.writer.print("{s} {d}\x00", .{ @tagName(kind), data.len });
+    try compress.writer.writeAll(data);
+    try compress.finish();
+    return out.written();
+}
 
 pub const Entry = struct {
     mode: u32,

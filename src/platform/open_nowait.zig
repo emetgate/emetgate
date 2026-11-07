@@ -23,6 +23,15 @@ pub fn openAttributes(path: []const u8, follow_links: bool) Error!windows.HANDLE
     return open(try toWide(&wide, path), win.file_read_attributes, flags);
 }
 
+pub fn touch(path: []const u8) Error!void {
+    var wide: WidePath = undefined;
+    const handle = try open(try toWide(&wide, path), win.file_write_attributes, win.file_attribute_normal);
+    defer windows.CloseHandle(handle);
+    var now: i64 = undefined;
+    win.GetSystemTimeAsFileTime(&now);
+    if (win.SetFileTime(handle, null, &now, &now) == .FALSE) return queryError(win.GetLastError());
+}
+
 pub fn stat(path: []const u8) Error!Stat {
     const handle = try openAttributes(path, false);
     defer windows.CloseHandle(handle);
@@ -158,6 +167,7 @@ const long_from: usize = 240;
 const win = struct {
     const generic_read: windows.DWORD = 0x80000000;
     const file_read_attributes: windows.DWORD = 0x0080;
+    const file_write_attributes: windows.DWORD = 0x0100;
     const file_share_all: windows.DWORD = 0x00000007;
     const open_existing: windows.DWORD = 3;
     const file_attribute_normal: windows.DWORD = 0x80;
@@ -207,6 +217,8 @@ const win = struct {
     extern "kernel32" fn GetFileAttributesW(name: [*:0]const u16) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetFinalPathNameByHandleW(file: windows.HANDLE, buffer: [*]u16, size: windows.DWORD, flags: windows.DWORD) callconv(.winapi) windows.DWORD;
     extern "kernel32" fn GetLastError() callconv(.winapi) windows.DWORD;
+    extern "kernel32" fn GetSystemTimeAsFileTime(time: *i64) callconv(.winapi) void;
+    extern "kernel32" fn SetFileTime(file: windows.HANDLE, creation: ?*const i64, access: ?*const i64, write: ?*const i64) callconv(.winapi) windows.BOOL;
 };
 
 const testing = std.testing;

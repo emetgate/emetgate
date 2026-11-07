@@ -1015,16 +1015,10 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: 
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const git = try Git.init(arena, io, root);
+    var git = try Git.init(arena, io, root);
+    git.git_dir = if (head.git_dir.len == 0) null else head.git_dir;
 
-    const work = try Work.open(arena, io, root);
-    defer work.done();
-    const dir = work.dir;
-
-    var private = try git.withIndex(try std.fs.path.join(arena, &.{ dir, "index" }));
-    private.hex = head.oid.len;
-    _ = (try private.feed(&.{ "update-index", "-z", "--index-info" }, lines)) orelse return error.GitFailed;
-    const tree = try private.need(&.{"write-tree"});
+    const tree = (try writtenTree(git, head, lines)) orelse try indexedTree(git, head, lines);
     if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCommit;
 
     const entries = try gpa.alloc(Entry, derived.len);
@@ -1050,6 +1044,21 @@ pub fn prepare(gpa: Allocator, io: std.Io, root: []const u8, head: Head, lines: 
         try git.fed(&.{ "-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p", head.oid, "-F", "-" }, stored));
     keepListing(tree, lines);
     return .{ .commit = commit, .entries = entries };
+}
+
+fn writtenTree(git: Git, head: Head, lines: []const u8) !?[]const u8 {
+    if (head.oid.len != 40) return null;
+    var objects = (try git.store()) orelse return null;
+    return objects.writeTree(lines);
+}
+
+fn indexedTree(git: Git, head: Head, lines: []const u8) ![]const u8 {
+    const work = try Work.open(git.arena, git.io, git.root);
+    defer work.done();
+    var private = try git.withIndex(try std.fs.path.join(git.arena, &.{ work.dir, "index" }));
+    private.hex = head.oid.len;
+    _ = (try private.feed(&.{ "update-index", "-z", "--index-info" }, lines)) orelse return error.GitFailed;
+    return private.need(&.{"write-tree"});
 }
 
 pub fn applyEntries(git: Git, entries: []const Entry) !void {
