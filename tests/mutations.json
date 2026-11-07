@@ -7739,7 +7739,7 @@
       "id": "TQ1-regex-budget-overrun-read-as-no-match",
       "file": "src/engine/text_query.zig",
       "from": "            error.BudgetExceeded => {\n                most_steps.* = line_budget;\n                return .over_budget;\n            },",
-      "to": "            error.BudgetExceeded => return .none,",
+      "to": "            error.BudgetExceeded => {\n                _ = most_steps;\n                return .none;\n            },",
       "kills": [
         "a line that exhausts the regex step budget is reported, never read as no match",
         "search answers: a line that runs out of regex steps makes the answer partial and names the file"
