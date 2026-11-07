@@ -99,6 +99,21 @@ pub const Node = struct {
         return c.ts_node_has_error(self.raw);
     }
 
+    pub fn firstError(self: Node) Node {
+        var node = self;
+        descend: while (true) {
+            var index: u32 = 0;
+            while (index < node.childCount()) : (index += 1) {
+                const kid = node.child(index) orelse continue;
+                if (kid.hasError()) {
+                    node = kid;
+                    continue :descend;
+                }
+            }
+            return node;
+        }
+    }
+
     pub fn childCount(self: Node) u32 {
         return c.ts_node_child_count(self.raw);
     }

@@ -210,10 +210,20 @@ pub fn dynamicHits(snapshot: *const Snapshot, name: []const u8, member: bool, ou
         if (std.mem.eql(u8, kind, g.subscript)) {
             const index = node.childByField(g.subscript_index_field) orelse continue;
             if (oneOf(index.kind(), g.literal_index_kinds) or cannotSpell(snapshot.source, g.constructed_index_kinds, index, name)) continue;
-            if ((member or oneOf(index.kind(), g.constructed_index_kinds)) and record(out, &found, .computed_member, node)) return found;
+            if ((member or (oneOf(index.kind(), g.constructed_index_kinds) and holdsString(snapshot, g, index))) and record(out, &found, .computed_member, node)) return found;
         }
     }
     return found;
+}
+
+fn holdsString(snapshot: *const Snapshot, g: *const Rename, index: ts.Node) bool {
+    var walker = traversal.Walker.init(index);
+    defer walker.deinit();
+    while (walker.next()) |entry| {
+        const kind = entry.node.kind();
+        if (oneOf(kind, snapshot.profile.strings) or std.mem.eql(u8, kind, g.template_fragment)) return true;
+    }
+    return false;
 }
 
 const numeric_operators = [_][]const u8{ "-", "/", "//", "<<", ">>", ">>>", "&", "|", "^", "**", "==", "!=", "===", "!==", "<", ">", "<=", ">=", "instanceof", "in" };
@@ -490,21 +500,30 @@ fn checkSurvivors(gpa: Allocator, next: *Snapshot, old: []const u8) Error!void {
 }
 
 pub fn freeOccurrence(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, untouched: bool) Error!bool {
+    return (try freeOccurrenceAt(gpa, snapshot, name, untouched)) != null;
+}
+
+pub fn freeOccurrenceAt(gpa: Allocator, snapshot: *const Snapshot, name: []const u8, untouched: bool) Error!?u32 {
     const resolution = scope.resolveName(gpa, snapshot, name) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.UnsupportedLanguage => return error.UnsupportedLanguage,
     };
     defer resolution.deinit(gpa);
     if (untouched) {
-        if (resolution.externals.len != 0) return true;
+        if (resolution.externals.len != 0) return resolution.externals[0].start;
         for (resolution.binders) |b| {
-            if (b.import) return true;
+            if (b.import) return b.span.start;
         }
     }
     for (resolution.uses) |use| {
-        if (use.binder == null) return true;
+        if (use.binder == null) return use.span.start;
     }
-    return false;
+    return null;
+}
+
+pub fn isKeyAt(snapshot: *const Snapshot, span: Span) bool {
+    const node = leafAt(snapshot.tree.root(), span) orelse return false;
+    return scope.isKey(grammarOf(snapshot), node);
 }
 
 const Mapping = struct {
@@ -841,6 +860,9 @@ test "rename: a string that is exactly the name, eval, computed requires and con
         .{ .source = "function add() { return 1; }\nconst m = require(\"./\" + \"x\");\n", .member = false, .expected = .computed_module },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[\"a\" + \"dd\"];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"x\";\nconst v = o[k];\n", .member = true, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = 1;\nconst v = o[pick()] + o[(k)] + o[k ? j : l];\n", .member = false, .expected = null },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[pick()];\n", .member = true, .expected = .computed_member },
+        .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst v = o[pick(\"a\")];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = 1;\nconst v = o[k - 1] + o[k >> 1] + o[`es${k}`] + o[`${k}_x`];\n", .member = true, .expected = null },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[`a${k}d`];\n", .member = false, .expected = .computed_member },
         .{ .source = "function add() { return 1; }\nconst o: any = {};\nconst k = \"d\";\nconst v = o[k + \"d\"];\n", .member = true, .expected = .computed_member },

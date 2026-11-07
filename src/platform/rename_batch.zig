@@ -13,6 +13,7 @@ const disk = @import("disk.zig");
 const runner = @import("runner.zig");
 const rename_graph = @import("rename_graph.zig");
 const rename_require = @import("rename_require.zig");
+const Profile = @import("../engine/lang/profile.zig").Profile;
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -38,8 +39,20 @@ pub const DynamicSites = struct {
     buf: [480]u8 = undefined,
     len: usize = 0,
 
+    left_buf: [260]u8 = undefined,
+    left_len: usize = 0,
+
     pub fn list(self: *const DynamicSites) []const u8 {
         return self.buf[0..self.len];
+    }
+
+    pub fn left(self: *const DynamicSites) []const u8 {
+        return self.left_buf[0..self.left_len];
+    }
+
+    fn addLeft(self: *DynamicSites, rel: []const u8, line: usize) void {
+        const written = std.fmt.bufPrint(&self.left_buf, "{s}:{d}", .{ rel, line }) catch return;
+        self.left_len = written.len;
     }
 
     fn add(self: *DynamicSites, rel: []const u8, line: usize, kind: rename.Dynamic) void {
@@ -199,7 +212,7 @@ pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, req
     const interface_change = locations.files.items.len > 1 or try rename.exportedName(gpa, base, top_name) or (resolver == .facts and visibleAt(base, offset, old)) or try collapsesShorthand(gpa, io, runtime, &locations, old);
     if (interface_change and !request.interface_change) return error.InterfaceChangeNeedsApproval;
     if (!member) try addNameLists(gpa, io, runtime, &locations, old);
-    try refuseDynamic(gpa, io, runtime, root, &locations, old, member, request.dynamic);
+    try refuseDynamic(gpa, io, runtime, root, base.profile, &locations, old, member, request.dynamic);
 
     var new_ref = ref;
     new_ref.name = request.new_name;
@@ -497,7 +510,7 @@ fn addNameLists(gpa: Allocator, io: std.Io, runtime: *Runtime, locations: *Locat
     }
 }
 
-fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, locations: *const Locations, old: []const u8, member: bool, given: ?*DynamicSites) !void {
+fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, family: *const Profile, locations: *const Locations, old: []const u8, member: bool, given: ?*DynamicSites) !void {
     var local: DynamicSites = .{};
     const sites = given orelse &local;
     for (locations.files.items) |located| try refuseDynamicIn(gpa, runtime, io, root, located.abs, old, member, located.spans.items, sites);
@@ -506,7 +519,7 @@ fn refuseDynamic(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8
     var files = std.mem.tokenizeScalar(u8, listing, 0);
     while (files.next()) |rel| {
         const profile = registry.forPath(rel) orelse continue;
-        if (!rename.supports(profile)) continue;
+        if (!rename.supports(profile) or profile.rename != family.rename) continue;
         const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ root, rel });
         defer gpa.free(abs);
         if (locations.find(abs) != null) continue;
@@ -525,10 +538,13 @@ fn renamedAt(spans: ?[]const Span, start: u32) bool {
 fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, root: []const u8, abs: []const u8, old: []const u8, member: bool, renamed: ?[]const Span, sites: *DynamicSites) !void {
     const snapshot = try Snapshot.load(runtime, io, .cwd(), abs);
     defer snapshot.destroy();
-    if (snapshot.tree.root().hasError()) return error.SourceHasErrors;
+    const rel = if (abs.len > root.len + 1 and std.ascii.startsWithIgnoreCase(abs, root)) abs[root.len + 1 ..] else abs;
+    if (snapshot.tree.root().hasError()) {
+        sites.addLeft(rel, lineAt(snapshot.source, snapshot.tree.root().firstError().startByte()));
+        return error.SourceHasErrors;
+    }
     var hits: [8]rename.Hit = undefined;
     const found = rename.dynamicHits(snapshot, old, member, &hits);
-    const rel = if (abs.len > root.len + 1 and std.ascii.startsWithIgnoreCase(abs, root)) abs[root.len + 1 ..] else abs;
     var refused: usize = 0;
     for (hits[0..found]) |hit| {
         if (hit.kind == .name_list and found < hits.len and renamedAt(renamed, hit.start)) continue;
@@ -536,7 +552,10 @@ fn refuseDynamicIn(gpa: Allocator, runtime: *Runtime, io: std.Io, root: []const 
         refused += 1;
     }
     if (refused != 0 and !sites.allow) return;
-    if (renamed == null and try rename.freeOccurrence(gpa, snapshot, old, true)) return error.IncompleteRename;
+    if (renamed != null) return;
+    const left = (try rename.freeOccurrenceAt(gpa, snapshot, old, true)) orelse return;
+    sites.addLeft(rel, lineAt(snapshot.source, left));
+    return error.IncompleteRename;
 }
 
 pub const Outcome = struct {
