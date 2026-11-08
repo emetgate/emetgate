@@ -555,10 +555,10 @@ fn expectDeepLedgerRuleRefused(comptime levels: usize) !void {
     defer repo.deinit();
     try repo.putLedger("{\"id\":\"mq\",\"scope\":\"project\",\"text\":\"no calls\",\"enforce\":true,\"check\":\"q:(call_expression) @violation\",\"status\":\"active\",\"supersedes\":null,\"ts\":1}\n");
 
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     const outcome = try runScan(&repo, &.{});
     defer outcome.deinit();
-    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds() < 60_000);
     try testing.expectEqual(@as(u8, 38), outcome.code);
     try testing.expect(outcome.has("error: src/deep.ts: rule mq (q:(call_expression) @violation) could not run: query_depth_exceeded typescript\n"));
     try testing.expect(outcome.has("src/flat.ts:1:18: mq (q:(call_expression) @violation): f(a)\n"));
