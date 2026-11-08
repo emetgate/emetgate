@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const git_fixture = @import("git_fixture.zig");
 const symbol = @import("emetgate").symbol;
 const disk = @import("emetgate").disk;
@@ -9,17 +10,6 @@ const testing = std.testing;
 const max_files = 3;
 
 const Kind = enum { modify, create, delete };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const old = [max_files][]const u8{
     "export const a = 1;\n",
@@ -186,8 +176,8 @@ fn crashAtEveryStep(kinds: []const Kind) !void {
         var pendings: [max_files]disk.Pending = undefined;
         try repo.prepareAll(pendings[0..kinds.len]);
 
-        var at: StopAt = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+        var at: crash_steps.StopAt = .{ .target = stop };
+        const step = at.step();
         disk.commitBatch(pendings[0..kinds.len], null, null, &batch, &step) catch |err| {
             errdefer std.debug.print("crash after step {d} of {d}\n", .{ stop, steps });
             try testing.expectEqual(error.Crashed, err);
@@ -222,8 +212,8 @@ test "batch delete crash: a file deleted by a batch stays on disk until the comm
     const batch = repo.batch();
     var pendings: [2]disk.Pending = undefined;
     try repo.prepareAll(&pendings);
-    var at: StopAt = .{ .target = 1 + 3 * 1 };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = 1 + 3 * 1 };
+    const step = at.step();
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
     try repo.expectFile(0, old[0]);
 }
@@ -235,8 +225,8 @@ test "batch delete crash: recover leaves a file alone when it changed after the 
     const batch = repo.batch();
     var pendings: [2]disk.Pending = undefined;
     try repo.prepareAll(&pendings);
-    var at: StopAt = .{ .target = 1 + 3 * 1 + 1 };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = 1 + 3 * 1 + 1 };
+    const step = at.step();
     try testing.expectError(error.Crashed, disk.commitBatch(&pendings, null, null, &batch, &step));
 
     const edited = "export const b = 'edited after the commit';\n";

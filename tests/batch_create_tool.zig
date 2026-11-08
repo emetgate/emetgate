@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const diagnostics = @import("diagnostics.zig");
 const runner = @import("emetgate").runner;
 const shadow = @import("emetgate").shadow;
@@ -20,17 +21,6 @@ const calling_body = "{ return helper(a) + b; }";
 
 const swap_steps = 7;
 const later_steps = [_]usize{ 8, 9, 10, 11 };
-
-const StopAt = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *StopAt = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Fixture = struct {
     repo: TwoFile,
@@ -95,8 +85,8 @@ fn crashThenRecover(stop: usize) !void {
     try f.init();
     defer f.deinit();
 
-    var at: StopAt = .{ .target = stop };
-    const step: disk.Step = .{ .context = &at, .reached = StopAt.reached };
+    var at: crash_steps.StopAt = .{ .target = stop };
+    const step = at.step();
     if (f.run("{ return a - b; }", &step)) |result| {
         defer result.deinit(testing.allocator);
         diagnostics.printResult(result);
