@@ -265,10 +265,10 @@ test "redteam ledger: a q: rule in a committed ledger never runs without --allow
     try adoptQueryRule(&clone, "q:((statement_block" ++ " (_) @violation ." ** 7 ++ " (_) @violation) (#eq? @violation \"never\"))");
     try clone.commitLedger();
 
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     try testing.expectError(error.UntrustedRepoMemory, clone.propose(runtime, query_cases.wide_body, false));
-    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
-    try testing.expect(elapsed_ms < 10_000);
+    const cpu_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds();
+    try testing.expect(cpu_ms < 10_000);
     try clone.expectPristine();
     try testing.expectError(error.UntrustedRepoMemory, clone.proposeBatch(runtime, false));
     try clone.expectPristine();
