@@ -9,7 +9,7 @@ const fixture = @import("ts_fixture.zig");
 const rename_case = @import("rename_tool.zig");
 const move_file_case = @import("move_file_tool.zig");
 const common = @import("commit_batch.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
 const Env = common.Env;
@@ -30,9 +30,13 @@ const World = struct {
     plain: common.Plain = undefined,
     served: rename_case.Case = undefined,
     env: Env = undefined,
+    before: []const u8 = "",
+    root: [1][]const u8 = undefined,
 
-    fn init(self: *World, kind: Kind) !void {
-        self.kind = kind;
+    pub const Params = Kind;
+
+    pub fn init(self: *World, kind: Kind) !void {
+        self.* = .{ .kind = kind };
         switch (kind) {
             .batch => {
                 try self.plain.init(&.{ .{ .rel = "src/a.ts", .text = a_src }, .{ .rel = "src/old.ts", .text = old_src }, .{ .rel = "notes.md", .text = notes_src }, hand, common.ignore });
@@ -45,9 +49,37 @@ const World = struct {
             },
         }
         try self.env.repo.write("src/hand.ts", hand_edited);
+        self.before = try self.env.head();
+        self.root = .{self.env.repo.root_abs};
     }
 
-    fn deinit(self: *World) void {
+    pub fn label(self: *World) []const u8 {
+        return @tagName(self.kind);
+    }
+
+    pub fn roots(self: *World) []const []const u8 {
+        return &self.root;
+    }
+
+    pub fn write(self: *World, step: *const disk.Step) !bool {
+        var request: commit_plan.Request = .{ .message = common.message };
+        defer request.deinit(testing.allocator);
+        if (try self.run(step, &request)) return true;
+        try testing.expectEqualStrings(request.oid.?, try self.env.head());
+        return false;
+    }
+
+    pub fn recovered(self: *World) !bool {
+        const report = try disk.recover(testing.allocator, testing.io, self.env.repo.root_abs);
+        errdefer std.debug.print("{t}: the invariants break after recover; status:\n{s}\nhead moved: {}\n", .{ self.kind, self.env.git(&.{ "status", "--porcelain", "--untracked-files=all" }) catch "?", !std.mem.eql(u8, self.before, self.env.head() catch "?") });
+        return expectInvariants(&self.env, self.before, report);
+    }
+
+    pub fn settled(self: *World) !bool {
+        return expectInvariants(&self.env, self.before, null);
+    }
+
+    pub fn deinit(self: *World) void {
         self.env.deinit();
         switch (self.kind) {
             .batch => self.plain.deinit(),
@@ -55,7 +87,7 @@ const World = struct {
         }
     }
 
-    fn settle(self: *World) void {
+    pub fn settle(self: *World) void {
         if (self.kind == .move_file) self.served.session.deinit();
     }
 
@@ -116,42 +148,22 @@ fn expectInvariants(env: *Env, before: []const u8, report: ?disk.RecoverReport) 
     return moved;
 }
 
-fn crashAtEverySnapshot(kind: Kind) !void {
-    var world: World = .{ .kind = kind };
-    try world.init(kind);
-    defer world.deinit();
-    const env = &world.env;
-    const before = try env.head();
-    var snapshots = try Snapshots.init(env.repo.root_abs);
-    defer snapshots.deinit();
-    const step = snapshots.step();
-    var request: commit_plan.Request = .{ .message = common.message };
-    defer request.deinit(testing.allocator);
-    try testing.expect(!try world.run(&step, &request));
-    const steps = try snapshots.taken();
-    try testing.expect(try expectInvariants(env, before, null));
-    try testing.expectEqualStrings(request.oid.?, try env.head());
-    world.settle();
-    var broken: usize = 0;
-    for (1..steps + 1) |stop| {
-        try snapshots.restore(stop);
-        const report = try disk.recover(testing.allocator, testing.io, env.repo.root_abs);
-        const moved = expectInvariants(env, before, report) catch |err| {
-            broken += 1;
-            std.debug.print("{t}: a crash after step {d} breaks the invariants ({t}); status after recover:\n{s}\nhead moved: {}\n", .{ kind, stop, err, try env.git(&.{ "status", "--porcelain", "--untracked-files=all" }), !std.mem.eql(u8, before, try env.head()) });
-            continue;
-        };
-        std.debug.print("{t}: a crash after step {d} recovers to {s}\n", .{ kind, stop, if (moved) "the commit" else "the old tree" });
-    }
-    try testing.expectEqual(@as(usize, 0), broken);
-}
-
 test "commit batch crash: a crash after any step of a committing try_batch recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEverySnapshot(.batch);
+    try crash_steps.expectEveryStep(World, .batch, 1);
 }
 
 test "commit batch crash: a crash after any step of a committing file move recovers to no write or to the whole commit" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    try crashAtEverySnapshot(.move_file);
+    try crash_steps.expectEveryStep(World, .move_file, 1);
+}
+
+test "commit batch crash: a try_batch cut for real at every step recovers to no write or to the whole commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try crash_steps.expectEveryCut(World, .batch, 1);
+}
+
+test "commit batch crash: a file move cut for real at every step recovers to no write or to the whole commit" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try crash_steps.expectEveryCut(World, .move_file, 1);
 }

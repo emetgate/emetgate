@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2908**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2921**
 - Mutations declared in `tests/mutations.json`: **2008**
   - killed: **1958**
   - equivalent: **9**
@@ -16,12 +16,12 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **3**
   - survives, not yet classified: **19** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
-- Red-team suites: **16** files, **194** tests total
+- Red-team suites: **16** files, **197** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
-  - `tests/redteam_commit.zig`: 49
-  - `tests/redteam_commit2.zig`: 30
+  - `tests/redteam_commit.zig`: 50
+  - `tests/redteam_commit2.zig`: 32
   - `tests/redteam_gate_tree.zig`: 9
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
