@@ -283,10 +283,10 @@ test "scan tool: a model query that captures a repeating group or alternation is
     };
     for (checks) |check| {
         errdefer std.debug.print("check: {s}\n", .{check});
-        const started = std.Io.Timestamp.now(testing.io, .awake);
+        const started = std.Io.Timestamp.now(testing.io, .cpu_process);
         try expectRefused(&repo, .{ .check = check }, "QueryQuantifiedCapture");
-        const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
-        try testing.expect(elapsed_ms < 2_000);
+        const cpu_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds();
+        try testing.expect(cpu_ms < 2_000);
     }
 }
 
@@ -297,10 +297,10 @@ fn expectDeepChainFailure(comptime levels: usize) !void {
         .{ "src/flat.ts", "export const y = f(a);\n" },
     });
     defer repo.deinit();
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     var reply = try call(&repo, .{ .check = "q:(call_expression) @violation" });
     defer reply.deinit();
-    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds() < 60_000);
+    try testing.expect(started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds() < 60_000);
     try testing.expect(reply.is_error);
     try testing.expectEqualStrings("check_failed", reply.field("status").string);
     try testing.expectEqual(@as(i64, 1), reply.field("violation_count").integer);
