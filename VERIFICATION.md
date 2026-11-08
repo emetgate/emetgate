@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2896**
-- Mutations declared in `tests/mutations.json`: **1999**
-  - killed: **1949**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2899**
+- Mutations declared in `tests/mutations.json`: **2003**
+  - killed: **1953**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1336 mutation(s).
+1340 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2102,6 +2102,10 @@ python tools/verification_page.py --check
 | `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: powershell and git start at low integrity through cmd | killed |
 | `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | lockdown run: an MSYS program that cannot start at low integrity is named in th... | killed |
 | `LR10-fix-missing` | `src/platform/low_run.zig` | `error.LowRootOnNetwork => "the command did not run: the reposit...` -> `error.LowRootOnNetwork => "the repository is on a network drive` | lockdown run: each failure to prepare the sandbox has its own fix that offers a... | killed |
+| `MC1-explore-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &addr...` -> `return out.written();` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
+| `MC2-evidence-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &none...` -> `_ = &none;` | map tools: evidence ends with a closure of the definitions its code calls | killed |
+| `MC3-closure-lists-shown` | `src/protocol/map_tools.zig` | `if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), fi...` -> `_ = ft;` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
+| `MC4-closure-every-word` | `src/protocol/map_tools.zig` | `if (opensCall(text, i) or afterNew(text, start) or isConstantNa...` -> `try names.put(arena, word, {});` | map tools: the closure takes call sites, constructed classes and constant names... | killed |
 
 ## What this system does not prove
 
