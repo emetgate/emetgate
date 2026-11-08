@@ -502,6 +502,62 @@ test "map tools: explore adds a small definition of the same file that the sent 
     try expectLacks(text, "packages/core/limits/grace.ts:1 graceMs\n1 export const graceMs = 5;");
 }
 
+test "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show" {
+    var f = try Fixture.open();
+    defer f.close();
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const text = try f.session.answer(arena_state.allocator(), "how is an instance loaded", &.{"Injector.loadInstance"});
+
+    try expectHas(text, "packages/core/injector/injector.ts:8 Injector.loadInstance\n");
+    const at = std.mem.indexOf(u8, text, "-- closure\nWhole above: ") orelse {
+        std.debug.print("--- reply ---\n{s}\n", .{text});
+        return error.TestExpectedEqual;
+    };
+    const tail = text[at..];
+    try expectHas(tail, "Named in the code above and defined in this repository, not shown (signature only):\n");
+    try expectHas(tail, "  Logger.log  packages/common/services/logger.ts:14  ");
+    try expectLacks(tail, "Injector.loadInstance  ");
+    try expectHas(tail, map_tools.closure_footer ++ "\n");
+    try testing.expect(std.mem.endsWith(u8, text, map_tools.closure_footer ++ "\n"));
+    try expectLacks(text, "emetgate_");
+}
+
+test "map tools: evidence ends with a closure of the definitions its code calls" {
+    var f = try Fixture.open();
+    defer f.close();
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, "{\"names\":[\"Injector.loadInstance\"]}", .{});
+    defer parsed.deinit();
+    const result = try f.session.evidenceTool(testing.allocator, parsed.value);
+    defer testing.allocator.free(result.text);
+
+    try testing.expect(!result.is_error);
+    try expectHas(result.text, "public async loadInstance(wrapper: InstanceWrapper");
+    try expectHas(result.text, "-- closure\nWhole above: 1 functions. By address above: 0.\n");
+    try expectHas(result.text, "  Logger.log  packages/common/services/logger.ts:14  ");
+    try testing.expect(std.mem.endsWith(u8, result.text, map_tools.closure_footer));
+}
+
+test "map tools: the closure takes call sites, constructed classes and constant names, and leaves plain words and keywords out" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var names: std.StringArrayHashMapUnmanaged(void) = .empty;
+    try map_tools.closureNames(arena, &names, "if (ready) return this.loadAll<Item>(list, MAX_ITEMS) + new TopologyTree(root) + renewal + pick (x) + Foo");
+
+    try testing.expect(names.contains("loadAll"));
+    try testing.expect(names.contains("MAX_ITEMS"));
+    try testing.expect(names.contains("TopologyTree"));
+    try testing.expect(names.contains("pick"));
+    try testing.expect(!names.contains("if"));
+    try testing.expect(!names.contains("return"));
+    try testing.expect(!names.contains("ready"));
+    try testing.expect(!names.contains("list"));
+    try testing.expect(!names.contains("root"));
+    try testing.expect(!names.contains("renewal"));
+    try testing.expect(!names.contains("Foo"));
+}
+
 test "map tools: evidence returns every definition of a name and names the symbols it does not know" {
     var f = try Fixture.open();
     defer f.close();

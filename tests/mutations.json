@@ -19165,6 +19165,46 @@
         "lockdown run: each failure to prepare the sandbox has its own fix that offers as_user"
       ],
       "note": "a network repository would not say the command did not run"
+    },
+    {
+      "id": "MC1-explore-closure-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);\n        return out.written();",
+      "to": "        return out.written();",
+      "kills": [
+        "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
+      ],
+      "note": "explore would end without saying what it left out, and the model would keep asking to be sure"
+    },
+    {
+      "id": "MC2-evidence-closure-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &none);\n",
+      "to": "        _ = &none;\n",
+      "kills": [
+        "map tools: evidence ends with a closure of the definitions its code calls"
+      ],
+      "note": "an evidence reply would leave the names its code calls unaccounted for"
+    },
+    {
+      "id": "MC3-closure-lists-shown",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), first))) continue;\n",
+      "to": "",
+      "kills": [
+        "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
+      ],
+      "note": "the closure would list again functions the reply already shows whole"
+    },
+    {
+      "id": "MC4-closure-every-word",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (opensCall(text, i) or afterNew(text, start) or isConstantName(word)) try names.put(arena, word, {});",
+      "to": "        try names.put(arena, word, {});",
+      "kills": [
+        "map tools: the closure takes call sites, constructed classes and constant names, and leaves plain words and keywords out"
+      ],
+      "note": "every local variable that shares a name with a definition would fill the closure"
     }
   ]
 }
