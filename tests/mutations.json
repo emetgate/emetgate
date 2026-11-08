@@ -19190,7 +19190,7 @@
       "id": "MC3-closure-lists-shown",
       "file": "src/protocol/map_tools.zig",
       "from": "                if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), first))) continue;\n",
-      "to": "",
+      "to": "                _ = ft;\n",
       "kills": [
         "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
       ],
