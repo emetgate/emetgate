@@ -55,6 +55,7 @@ pub const Policy = struct {
     shadow_private_len: usize = 0,
     cache: cache_gc.Flags = .{},
     tool_prefix: []const u8 = "",
+    legacy_tools: bool = false,
 
     pub fn invalidate(self: *const Policy) void {
         if (self.find_session) |session| session.invalidate();
@@ -138,6 +139,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--search-internals")) {
             if (policy.search_internals) return null;
             policy.search_internals = true;
+        } else if (std.mem.eql(u8, arg, "--legacy-tools")) {
+            if (policy.legacy_tools) return null;
+            policy.legacy_tools = true;
         } else if (std.mem.eql(u8, arg, "--mirror") or std.mem.eql(u8, arg, "--no-mirror")) {
             if (mirror_flag) return null;
             mirror_flag = true;

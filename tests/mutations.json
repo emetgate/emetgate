@@ -16325,7 +16325,7 @@
     {
       "id": "RS1-rename-service-failure-not-named",
       "file": "src/protocol/rename_tool.zig",
-      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym, tool_names.prefix() });",
+      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_change old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym, tool_names.prefix() });",
       "to": "",
       "kills": [
         "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
@@ -19205,6 +19205,66 @@
         "map tools: the closure takes call sites, constructed classes and constant names, and leaves plain words and keywords out"
       ],
       "note": "every local variable that shares a name with a definition would fill the closure"
+    },
+    {
+      "id": "MCH1-change-new-file-needs-hash",
+      "file": "src/protocol/handlers.zig",
+      "from": "        try copy.put(arena, \"hash\", .{ .string = \"absent\" });\n",
+      "to": "",
+      "kills": [
+        "emetgate_change writes an exact replacement and a new file in one gated call and reports them applied"
+      ],
+      "note": "a new file in emetgate_change would need the model to know and send hash absent, one more turn per created file"
+    },
+    {
+      "id": "MCH2-change-commit-leaves-outside-files",
+      "file": "src/protocol/handlers.zig",
+      "from": "        const made = try commitReply(gpa, io, runtime, text, policy, event, true);",
+      "to": "        const made = try commitReply(gpa, io, runtime, text, policy, event, false);",
+      "kills": [
+        "emetgate_change commits a gated edit and a file written outside the gate in one commit with one receipt"
+      ],
+      "note": "a commit from emetgate_change would leave package.json and other files written by commands uncommitted"
+    },
+    {
+      "id": "MCH3-commit-takes-own-workspace",
+      "file": "src/platform/commit_group.zig",
+      "from": "        if (ownWorkspace(rel)) continue;\n",
+      "to": "",
+      "kills": [
+        "emetgate_change with only a commit message commits the work tree as it is"
+      ],
+      "note": "emetgate's own .emetgate folder could land in the user's commit when its ignore file is missing"
+    },
+    {
+      "id": "MCH4-change-probes-any-name",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (!plainPath(abs)) {\n            try out.append(item);\n            continue;\n        }\n",
+      "to": "",
+      "kills": [
+        "emetgate_change answers a file name Windows cannot hold with an error and writes nothing"
+      ],
+      "note": "a file name Windows cannot hold would reach the file system and stop the server"
+    },
+    {
+      "id": "MCH5-tools-list-serves-legacy",
+      "file": "src/protocol/server.zig",
+      "from": "        if (!legacy and isLegacy(listed.name)) continue;\n",
+      "to": "",
+      "kills": [
+        "tools/list hides the tools emetgate_change replaces and serves them again with --legacy-tools"
+      ],
+      "note": "the replaced write tools would be offered again and the model would split one change into many calls"
+    },
+    {
+      "id": "MCH6-change-reports-committed",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (status.* == .string and std.mem.eql(u8, status.string, wire.committed_status)) status.* = .{ .string = \"applied\" };",
+      "to": "            _ = status;",
+      "kills": [
+        "emetgate_change commits a gated edit and a file written outside the gate in one commit with one receipt"
+      ],
+      "note": "the change reply would say committed for a write and lead the model to think a git commit was made"
     }
   ]
 }

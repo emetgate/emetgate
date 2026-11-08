@@ -938,7 +938,7 @@ test "purple C7: tools/list never offers the model a test command or a repo opt-
         \\{"jsonrpc":"2.0","id":1,"method":"tools/list"}
     );
     defer testing.allocator.free(response);
-    try testing.expect(std.mem.indexOf(u8, response, "emetgate_try_batch") != null);
+    try testing.expect(std.mem.indexOf(u8, response, "emetgate_change") != null);
     try testing.expect(std.mem.indexOf(u8, response, "\"test_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"typecheck_cmd\"") == null);
     try testing.expect(std.mem.indexOf(u8, response, "\"allow_repo_config\"") == null);

@@ -193,7 +193,7 @@ test "recovery hints: tools/list stays under 9000 characters and initialize says
     defer reply.deinit();
     const instructions = reply.value.object.get("result").?.object.get("instructions").?.string;
     try testing.expectEqualStrings(server.instructions, instructions);
-    inline for (.{ "emetgate_read_symbol", "emetgate_search", "emetgate_try" }) |tool| try expectContains(instructions, tool);
+    inline for (.{ "emetgate_read_symbol", "emetgate_search", "emetgate_change" }) |tool| try expectContains(instructions, tool);
 }
 
 test "recovery hints: a body that closes more braces than it opens is named with the surplus" {
@@ -260,13 +260,13 @@ test "recovery hints: with a tool prefix every tool named in instructions and de
     const init = try rpcResult("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}");
     defer init.deinit();
     const instructions = init.value.object.get("result").?.object.get("instructions").?.string;
-    try expectContains(instructions, "mcp__emetgate__emetgate_try_batch");
+    try expectContains(instructions, "mcp__emetgate__emetgate_change");
     try expectNoBareToolName(instructions);
 
     const list = try rpcResult("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
     defer list.deinit();
     const tools = list.value.object.get("result").?.object.get("tools").?.array.items;
-    try testing.expectEqual(tool_names.all.len, tools.len);
+    try testing.expectEqual(tool_names.all.len - server.legacy_tools.len, tools.len);
     for (tools) |tool| {
         const name = tool.object.get("name").?.string;
         var listed = false;

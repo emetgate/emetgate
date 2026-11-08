@@ -205,6 +205,7 @@ test "ordinary claude args pass through the lock" {
 }
 
 const gated_tools = [_][]const u8{
+    "emetgate_change",
     "emetgate_try",
     "emetgate_try_batch",
     "emetgate_write_doc",

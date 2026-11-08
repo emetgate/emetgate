@@ -290,6 +290,7 @@ test {
     _ = @import("tests/dir_flush_crash.zig");
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/edit_tool.zig");
+    _ = @import("tests/change_tool.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/verify_branch.zig");

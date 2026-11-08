@@ -138,6 +138,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_commit")) return callCommit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_try_batch")) return callTryBatch(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_change")) return callChange(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
@@ -737,10 +738,13 @@ const commit_message = @import("../platform/commit_message.zig");
 fn callCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     event.label = "commit";
     event.mutating = true;
-    const message = try requireString(args, "message");
+    return commitReply(gpa, io, runtime, try requireString(args, "message"), policy, event, false);
+}
+
+fn commitReply(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, event: *telemetry.Event, outside: bool) !ToolResult {
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = commitInto(gpa, io, runtime, message, policy, &buffer.writer, event) catch |err| blk: {
+    const is_error = commitInto(gpa, io, runtime, message, policy, &buffer.writer, event, outside) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
@@ -753,13 +757,13 @@ fn callCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
 
 fn stagedFix() void {
     const prefix = tool_names.prefix();
-    const named = commit_refusal.peek() orelse return wire.setFix("the git index holds staged changes no emetgate write made on a file this commit carries; see them with {s}emetgate_git sub \"status\", unstage each with {s}emetgate_git_write args [\"restore\",\"--staged\",\"--\",\"<path>\"] (the file on disk stays), then call {s}emetgate_commit again", .{ prefix, prefix, prefix });
+    const named = commit_refusal.peek() orelse return wire.setFix("the git index holds staged changes no emetgate write made on a file this commit carries; see them with {s}emetgate_git sub \"status\", unstage each with {s}emetgate_git_write args [\"restore\",\"--staged\",\"--\",\"<path>\"] (the file on disk stays), then commit again with {s}emetgate_change", .{ prefix, prefix, prefix });
     var paths = named.paths();
     const path = paths.next() orelse "";
-    wire.setFix("the git index holds a staged copy of {s} that no emetgate write made; run {s}emetgate_git_write with args [\"restore\",\"--staged\",\"--\",\"{s}\"] (the file on disk stays as it is), then call {s}emetgate_commit again", .{ path, prefix, path, prefix });
+    wire.setFix("the git index holds a staged copy of {s} that no emetgate write made; run {s}emetgate_git_write with args [\"restore\",\"--staged\",\"--\",\"{s}\"] (the file on disk stays as it is), then commit again with {s}emetgate_change", .{ path, prefix, path, prefix });
 }
 
-fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event, outside: bool) !bool {
     try commit_message.check(message);
     const root = try repo.servedRoot(gpa, io, policy.root);
     defer gpa.free(root);
@@ -770,6 +774,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .runtime = runtime,
         .guard_config = policy.open_run,
         .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = policy.typecheck_command orelse "", .allow_repo_config = policy.allow_repo_config },
+        .outside = outside,
     });
     defer result.deinit(gpa);
     var js: std.json.Stringify = .{ .writer = w };
@@ -852,7 +857,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
     }
 }
 
-pub const commit_tests_fix = "these tests passed or did not exist when this session started and fail now; make them pass with emetgate_try, then call emetgate_commit again";
+pub const commit_tests_fix = "these tests passed or did not exist when this session started and fail now; make them pass with emetgate_change, then commit again with emetgate_change";
 
 fn commitShortstat(gpa: Allocator, io: std.Io, root: []const u8, base: []const u8, oid: []const u8) !?[]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
@@ -1033,6 +1038,118 @@ fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may
         }
         return .{ .root = served, .abs = abs, .rel = rel, .creates = true };
     };
+}
+
+pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new or whole file; they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them.";
+
+pub const change_missing = "edits, commit or branch";
+
+fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    const arguments = args orelse return tool_result.missing(change_missing, .{});
+    const edits: ?Value = if (getField(arguments, "edits")) |given| switch (given) {
+        .array => |list| if (list.items.len == 0) null else given,
+        else => return tool_result.missing("edits (array of {{file, old_string, new_string}} or {{file, content}})", .{}),
+    } else null;
+    const message = getString(arguments, "commit");
+    const branch = getString(arguments, "branch");
+    if (edits == null and message == null and branch == null) return tool_result.missing(change_missing, .{});
+    event.label = "change";
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    var failed: ?[]const u8 = null;
+    if (branch) |name| {
+        const reply = try git_write.callGitWrite(gpa, io, try gitArgs(arena, &.{ "switch", "-c", name }), event, policy.root, policy.open_run);
+        defer gpa.free(reply.text);
+        try changeStep(arena, &js, "branch", reply.text);
+        if (reply.is_error) failed = "branch";
+    }
+    if (failed == null) if (edits) |list| {
+        var batch: std.json.ObjectMap = .empty;
+        try batch.put(arena, "edits", try changeItems(arena, io, policy.root, list));
+        if (policy.commit) if (getString(arguments, "message") orelse message) |text| try batch.put(arena, "message", .{ .string = text });
+        const forgiven = try forgive.normalize(arena, "emetgate_try_batch", .{ .object = batch });
+        const reply = try callTryBatch(gpa, io, runtime, forgiven.args, event, policy);
+        defer gpa.free(reply.text);
+        try changeStep(arena, &js, "edits", reply.text);
+        if (reply.is_error) failed = "edits";
+    };
+    const committed_with_edits = policy.commit and edits != null;
+    if (failed == null and !committed_with_edits) if (message) |text| {
+        const made = try commitReply(gpa, io, runtime, text, policy, event, true);
+        defer gpa.free(made.text);
+        try changeStep(arena, &js, "commit", made.text);
+        if (made.is_error) failed = "commit";
+    };
+    try js.objectField("status");
+    try js.write(if (failed == null) "applied" else "stopped");
+    if (failed) |step| {
+        try js.objectField("stopped_at");
+        try js.write(step);
+    }
+    try js.endObject();
+    return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+fn changeItems(arena: Allocator, io: std.Io, root: ?[]const u8, list: Value) !Value {
+    var out = std.json.Array.init(arena);
+    for (list.array.items) |item| {
+        if (item != .object or getString(item, "old_string") != null or getField(item, "hash") != null or getString(item, "content") == null) {
+            try out.append(item);
+            continue;
+        }
+        const file = getString(item, "file") orelse {
+            try out.append(item);
+            continue;
+        };
+        const abs = try std.fs.path.resolve(arena, &.{ root orelse ".", file });
+        if (!plainPath(abs)) {
+            try out.append(item);
+            continue;
+        }
+        const exists = if (std.Io.Dir.cwd().access(io, abs, .{})) true else |_| false;
+        if (exists) {
+            try out.append(item);
+            continue;
+        }
+        var copy = try item.object.clone(arena);
+        try copy.put(arena, "hash", .{ .string = "absent" });
+        try out.append(.{ .object = copy });
+    }
+    return .{ .array = out };
+}
+
+pub fn plainPath(abs: []const u8) bool {
+    const start: usize = if (abs.len >= 2 and std.ascii.isAlphabetic(abs[0]) and abs[1] == ':') 2 else 0;
+    if (abs.len == start) return false;
+    for (abs[start..]) |c| {
+        if (c < 0x20 or std.mem.indexOfScalar(u8, "<>:\"|?*", c) != null) return false;
+    }
+    return true;
+}
+
+fn gitArgs(arena: Allocator, words: []const []const u8) !Value {
+    var list = std.json.Array.init(arena);
+    for (words) |word| try list.append(.{ .string = word });
+    var object: std.json.ObjectMap = .empty;
+    try object.put(arena, "args", .{ .array = list });
+    return .{ .object = object };
+}
+
+fn changeStep(arena: Allocator, js: *std.json.Stringify, field: []const u8, text: []const u8) !void {
+    try js.objectField(field);
+    const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    var value = std.json.parseFromSliceLeaky(Value, arena, text[0..end], .{}) catch return js.write(text);
+    if (value == .object) {
+        if (value.object.getPtr("status")) |status| {
+            if (status.* == .string and std.mem.eql(u8, status.string, wire.committed_status)) status.* = .{ .string = "applied" };
+        }
+        if (end < text.len) try value.object.put(arena, "note", .{ .string = std.mem.trim(u8, text[end..], " \t\r\n") });
+    }
+    try js.write(value);
 }
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {

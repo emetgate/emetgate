@@ -40,7 +40,7 @@ pub const timeout_fix = "the command ran past its time; pass timeout_s (at most 
 
 pub const frozen_fix = "fix the code instead; a frozen path and emetgate's own configuration are changed by hand by the user";
 pub const frozen_failed_fix = "a frozen path could not be put back; frozen_failed names each one and why: restore it by hand before going on";
-pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; emetgate_commit still checks them";
+pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; a commit through emetgate_change still checks them";
 pub const rules_fix = "the command left what the rule_violations name, and nothing was undone; change what each rule names, and for a commit amend it or follow it with one that fixes it";
 pub const hold_fix = "the command did not run: emetgate could not keep a copy of the frozen paths; emetgate doctor says why";
 
