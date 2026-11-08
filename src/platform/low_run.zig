@@ -82,7 +82,7 @@ pub fn prepare(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u
 }
 
 const denial_markers = [_][]const u8{ "permission denied", "access is denied", "access denied", "eacces", "eperm", "unauthorizedaccess" };
-const msys_markers = [_][]const u8{ "NtCreateDirectoryObject", "msys-2.0" };
+const msys_markers = [_][]const u8{ "*** fatal error - ", "msys-2.0" };
 
 fn mentions(report: sandbox.Report, markers: []const []const u8) bool {
     for (markers) |marker| {
@@ -119,3 +119,17 @@ const format_from_system: u32 = 0x1000;
 const format_ignore_inserts: u32 = 0x200;
 extern "kernel32" fn GetDriveTypeW(root: [*:0]const u16) callconv(.winapi) c_uint;
 extern "kernel32" fn FormatMessageW(flags: u32, source: ?*const anyopaque, message_id: u32, language_id: u32, buffer: [*]u16, size: u32, arguments: ?*anyopaque) callconv(.winapi) u32;
+
+fn noteFor(outcome: sandbox.Outcome, stderr: []const u8) ?[]const u8 {
+    var err_buf: [512]u8 = undefined;
+    @memcpy(err_buf[0..stderr.len], stderr);
+    return note(.{ .outcome = outcome, .duration_ns = 0, .stdout = &.{}, .stderr = err_buf[0..stderr.len], .truncated = false, .killed_leftovers = false });
+}
+
+test "low run: a fatal start of the MSYS runtime is named as an MSYS program, other fatal errors are not" {
+    const msys = "      1 [main] bash (5400) C:\\Program Files\\Git\\bin\\..\\usr\\bin\\bash.exe: *** fatal error - CreateFileMapping shared.5, Win32 error 5.  Terminating.\n";
+    try std.testing.expectEqualStrings(msys_note, noteFor(.{ .crashed = 0xC0000142 }, msys).?);
+    try std.testing.expectEqualStrings(msys_note, noteFor(.{ .exited = 1 }, msys).?);
+    try std.testing.expectEqual(@as(?[]const u8, null), noteFor(.{ .exited = 0 }, msys));
+    try std.testing.expectEqual(@as(?[]const u8, null), noteFor(.{ .exited = 1 }, "fatal error: missing.h: No such file or directory\n"));
+}
