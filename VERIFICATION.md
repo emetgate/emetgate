@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2896**
-- Mutations declared in `tests/mutations.json`: **1999**
-  - killed: **1949**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2908**
+- Mutations declared in `tests/mutations.json`: **2008**
+  - killed: **1958**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1336 mutation(s).
+1345 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2102,6 +2102,15 @@ python tools/verification_page.py --check
 | `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: powershell and git start at low integrity through cmd | killed |
 | `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | lockdown run: an MSYS program that cannot start at low integrity is named in th... | killed |
 | `LR10-fix-missing` | `src/platform/low_run.zig` | `error.LowRootOnNetwork => "the command did not run: the reposit...` -> `error.LowRootOnNetwork => "the repository is on a network drive` | lockdown run: each failure to prepare the sandbox has its own fix that offers a... | killed |
+| `UPD1-check-every-start` | `src/update/update.zig` | `return now - seen >= check_interval_s;` -> `return now - seen >= 0;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
+| `UPD2-stamp-not-written` | `src/update/update.zig` | `updater.system.write(stamp, text) catch return null;` -> `_ = text;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
+| `UPD3-same-version-reinstalled` | `src/update/update.zig` | `if (version.order(current) != .gt) return .{ .up_to_date = vers...` -> `if (version.order(current) == .lt) return .{ .up_to_date = vers...` | self update: versions compare as X.Y.Z numbers and only a strictly newer releas... | killed |
+| `UPD4-signature-not-checked` | `src/update/update.zig` | `verify(key, exe, signature) catch return .{ .bad_signature = ve...` -> `_ = .{ key, signature };` | self update: a signature from another key, over other bytes or not base64 insta... | killed |
+| `UPD5-rollback-restores-nothing` | `src/update/update.zig` | `system.rename(old, exe) catch {` -> `system.rename(old, old) catch {` | self update: a failed swap puts the old exe back, and a failed rollback says ho... | killed |
+| `UPD6-ci-not-an-opt-out` | `src/update/update.zig` | `if (env.get(ci_variable) != null) return true;` -> `` | self update: CI or EMETGATE_NO_UPDATE turns the automatic check off, and emetga... | killed |
+| `UPD7-draft-installed` | `src/update/update.zig` | `parsed.value.draft or parsed.value.prerelease or` -> `parsed.value.prerelease or` | self update: a prerelease or a draft is skipped without a download | killed |
+| `UPD8-version-not-checked` | `src/update/update.zig` | `if (!self.reports(new, version)) {` -> `if (false) {` | self update: a downloaded exe that does not report the release version is not i... | killed |
+| `UPD9-no-key-still-downloads` | `src/update/update.zig` | `const key = self.key orelse return .no_release_key;` -> `const key = self.key orelse [_]u8{0} ** 32;` | self update: a build without a release key never downloads, and the placeholder... | killed |
 
 ## What this system does not prove
 

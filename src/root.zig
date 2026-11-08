@@ -191,6 +191,7 @@ pub const read_cache = @import("protocol/read_cache.zig");
 pub const raw_reply = @import("protocol/raw_reply.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
 pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
+pub const self_update = @import("update/update.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

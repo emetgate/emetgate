@@ -141,13 +141,13 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 처음이신가요? [docs/QUICKSTART.md](../docs/QUICKSTART.md)를 따르세요: 설치하고, `emetgate doctor`를 실행한 뒤, `emetgate lockdown`을 실행합니다.
 
-[최신 릴리스](https://github.com/emetgate/emetgate/releases/latest)에서 Windows 바이너리를 내려받고 그 폴더를 `PATH`에 넣으세요 (PowerShell; 이후 새 터미널을 여세요):
+PowerShell에서 [최신 릴리스](https://github.com/emetgate/emetgate/releases/latest)의 Windows 바이너리를 설치한 뒤 새 터미널을 여세요:
 
 ```
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
+
+설치 스크립트는 `emetgate.exe`의 SHA256을 확인하고, `%LOCALAPPDATA%\Programs\emetgate`에 넣은 뒤, 그 폴더가 사용자 `PATH`에 없으면 추가합니다. 그 후 `emetgate doctor`와 `emetgate lockdown`은 24시간에 최대 한 번 새 릴리스를 찾고 (최대 2초, 오프라인이면 아무것도 출력하지 않음), Ed25519 서명이 emetgate에 내장된 키와 맞을 때만 설치합니다. `emetgate update`는 같은 일을 바로 합니다. 매일 하는 확인을 끄려면 `EMETGATE_NO_UPDATE=1`을 설정하세요; `CI`가 설정되어 있으면 항상 꺼져 있습니다.
 
 그다음 프로젝트 폴더에서:
 

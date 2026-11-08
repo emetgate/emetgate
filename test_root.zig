@@ -181,6 +181,7 @@ pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
+pub const self_update = src.self_update;
 pub const rules_tui = src.rules_tui;
 pub const rules_command = src.rules_command;
 pub const console_raw = src.console_raw;
@@ -204,6 +205,7 @@ comptime {
 
 test {
     _ = @import("tests/runner.zig");
+    _ = @import("tests/self_update.zig");
     _ = @import("tests/runner_rules.zig");
     _ = @import("tests/scan.zig");
     _ = @import("tests/change_watch.zig");
