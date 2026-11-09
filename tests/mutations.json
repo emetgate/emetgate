@@ -14662,7 +14662,7 @@
     {
       "id": "TC5-toolchain-not-routed",
       "file": "src/protocol/run_tool.zig",
-      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
+      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event, policy.known_files);\n",
       "to": "",
       "kills": [
         "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
