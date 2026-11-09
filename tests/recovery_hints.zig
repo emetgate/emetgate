@@ -184,6 +184,7 @@ test "recovery hints: tools/list stays under 9000 characters and initialize says
     try std.json.Stringify.value(parsed.value.object.get("result").?.object.get("tools").?, .{}, &tools.writer);
     errdefer std.debug.print("tools/list is {d} characters\n", .{tools.written().len});
     try testing.expect(tools.written().len < 9000);
+    try testing.expect(std.mem.indexOf(u8, tools.written(), "\"description\":\"\"") == null);
     try testing.expect(std.mem.indexOf(u8, tools.written(), "another git repository below") == null);
 
     var init: std.Io.Writer.Allocating = .init(testing.allocator);
