@@ -1069,7 +1069,7 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     if (failed == null) if (edits) |list| {
         var batch: std.json.ObjectMap = .empty;
-        try batch.put(arena, "edits", try changeItems(arena, io, policy.root, list));
+        try batch.put(arena, "edits", list);
         if (policy.commit) if (getString(arguments, "message") orelse message) |text| try batch.put(arena, "message", .{ .string = text });
         const forgiven = try forgive.normalize(arena, "emetgate_try_batch", .{ .object = batch });
         const reply = try callTryBatch(gpa, io, runtime, forgiven.args, event, policy);
@@ -1092,43 +1092,6 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
-}
-
-fn changeItems(arena: Allocator, io: std.Io, root: ?[]const u8, list: Value) !Value {
-    var out = std.json.Array.init(arena);
-    for (list.array.items) |item| {
-        if (item != .object or getString(item, "old_string") != null or getField(item, "hash") != null or getString(item, "content") == null) {
-            try out.append(item);
-            continue;
-        }
-        const file = getString(item, "file") orelse {
-            try out.append(item);
-            continue;
-        };
-        const abs = try std.fs.path.resolve(arena, &.{ root orelse ".", file });
-        if (!plainPath(abs)) {
-            try out.append(item);
-            continue;
-        }
-        const exists = if (std.Io.Dir.cwd().access(io, abs, .{})) true else |_| false;
-        if (exists) {
-            try out.append(item);
-            continue;
-        }
-        var copy = try item.object.clone(arena);
-        try copy.put(arena, "hash", .{ .string = "absent" });
-        try out.append(.{ .object = copy });
-    }
-    return .{ .array = out };
-}
-
-pub fn plainPath(abs: []const u8) bool {
-    const start: usize = if (abs.len >= 2 and std.ascii.isAlphabetic(abs[0]) and abs[1] == ':') 2 else 0;
-    if (abs.len == start) return false;
-    for (abs[start..]) |c| {
-        if (c < 0x20 or std.mem.indexOfScalar(u8, "<>:\"|?*", c) != null) return false;
-    }
-    return true;
 }
 
 fn gitArgs(arena: Allocator, words: []const []const u8) !Value {

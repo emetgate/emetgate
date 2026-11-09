@@ -19207,16 +19207,6 @@
       "note": "every local variable that shares a name with a definition would fill the closure"
     },
     {
-      "id": "MCH1-change-new-file-needs-hash",
-      "file": "src/protocol/handlers.zig",
-      "from": "        try copy.put(arena, \"hash\", .{ .string = \"absent\" });\n",
-      "to": "",
-      "kills": [
-        "emetgate_change writes an exact replacement and a new file in one gated call and reports them applied"
-      ],
-      "note": "a new file in emetgate_change would need the model to know and send hash absent, one more turn per created file"
-    },
-    {
       "id": "MCH2-change-commit-leaves-outside-files",
       "file": "src/protocol/handlers.zig",
       "from": "        const made = try commitReply(gpa, io, runtime, text, policy, event, true);",
@@ -19235,16 +19225,6 @@
         "emetgate_change with only a commit message commits the work tree as it is"
       ],
       "note": "emetgate's own .emetgate folder could land in the user's commit when its ignore file is missing"
-    },
-    {
-      "id": "MCH4-change-probes-any-name",
-      "file": "src/protocol/handlers.zig",
-      "from": "        if (!plainPath(abs)) {\n            try out.append(item);\n            continue;\n        }\n",
-      "to": "",
-      "kills": [
-        "emetgate_change answers a file name Windows cannot hold with an error and writes nothing"
-      ],
-      "note": "a file name Windows cannot hold would reach the file system and stop the server"
     },
     {
       "id": "MCH5-tools-list-serves-legacy",
