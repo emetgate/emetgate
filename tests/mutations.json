@@ -19280,7 +19280,7 @@
       "id": "MCH9-change-sends-no-op-edits",
       "file": "src/protocol/handlers.zig",
       "from": "        if (old != null and new != null and old.?.len != 0 and std.mem.eql(u8, old.?, new.?)) continue;\n",
-      "to": "",
+      "to": "        _ = .{ old, new };\n",
       "kills": [
         "emetgate_change skips an edit whose old_string equals its new_string and writes the others"
       ],
@@ -19302,7 +19302,7 @@
       "from": "        if (line[0] == '?') return false;\n",
       "to": "",
       "kills": [
-        "emetgate_git_write commit -m with a change left unstaged is run by git and commits only what is staged"
+        "emetgate_git_write commit -a -m with an untracked file is run by git and leaves that file out"
       ],
       "note": "git commit -m would sweep in an untracked file the user did not stage"
     },
@@ -19312,7 +19312,7 @@
       "from": "            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and std.mem.eql(u8, index_entry.oid, try storedOid(git, plain, path, bytes))) {\n",
       "to": "            if (false) {\n",
       "kills": [
-        "emetgate_git_write commit -m after git add -A is made by the gated commit, with the gated write's receipt"
+        "emetgate_git_write commit -m commits a tracked file changed outside the gate once git add staged it as it is on disk"
       ],
       "note": "after git add -A the gated commit would refuse a staged copy that is the very content it commits"
     }

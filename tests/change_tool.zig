@@ -357,3 +357,30 @@ test "emetgate_git_write commit -m with a change left unstaged is run by git and
     try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "staged.txt");
     try repo.expectGit(&.{ "status", "--porcelain" }, "?? notes.txt");
 }
+
+test "emetgate_git_write commit -m commits a tracked file changed outside the gate once git add staged it as it is on disk" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = "export const total = (a, b) => b + a;\n" });
+    gpa.free(try run(repo.root_abs, &.{ "add", "-A" }));
+    var reply = try repo.callAs("emetgate_git_write", .{ .args = .{ "commit", "-m", "Edit outside" } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "Edit outside");
+    try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "src/app.js");
+    try repo.expectGit(&.{ "status", "--porcelain" }, "");
+}
+
+test "emetgate_git_write commit -a -m with an untracked file is run by git and leaves that file out" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = "export const total = (a, b) => b + a;\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = "left out\n" });
+    var reply = try repo.callAs("emetgate_git_write", .{ .args = .{ "commit", "-a", "-m", "Only tracked" } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "src/app.js");
+    try repo.expectGit(&.{ "status", "--porcelain" }, "?? notes.txt");
+}
