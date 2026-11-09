@@ -152,7 +152,10 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, runtime, args, event, policy.root, policy.read_budget);
-    if (std.mem.eql(u8, name, "emetgate_git_write")) return git_write.callGitWrite(gpa, io, args, event, policy.root, policy.open_run);
+    if (std.mem.eql(u8, name, "emetgate_git_write")) {
+        if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) |made| return made;
+        return git_write.callGitWrite(gpa, io, args, event, policy.root, policy.open_run);
+    }
     if (std.mem.eql(u8, name, "emetgate_run")) {
         const result = try run_tool.callRun(gpa, io, runtime, args, event, policy);
         return if (policy.open_run) rawCode(gpa, policy, result) else result;
@@ -1047,17 +1050,17 @@ pub const change_missing = "edits, commit or branch";
 
 fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return tool_result.missing(change_missing, .{});
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
     const edits: ?Value = if (getField(arguments, "edits")) |given| switch (given) {
-        .array => |list| if (list.items.len == 0) null else given,
+        .array => |list| try withoutNoOps(arena, list),
         else => return tool_result.missing("edits (array of {{file, old_string, new_string}} or {{file, content}})", .{}),
     } else null;
     const message = getString(arguments, "commit");
     const branch = getString(arguments, "branch");
     if (edits == null and message == null and branch == null) return tool_result.missing(change_missing, .{});
     event.label = "change";
-    var arena_state = std.heap.ArenaAllocator.init(gpa);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
     var out: std.Io.Writer.Allocating = .init(arena);
     var js: std.json.Stringify = .{ .writer = &out.writer };
     try js.beginObject();
@@ -1094,6 +1097,65 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+fn withoutNoOps(arena: Allocator, list: std.json.Array) !?Value {
+    var kept = std.json.Array.init(arena);
+    for (list.items) |item| {
+        const old = getString(item, "old_string");
+        const new = getString(item, "new_string");
+        if (old != null and new != null and old.?.len != 0 and std.mem.eql(u8, old.?, new.?)) continue;
+        try kept.append(item);
+    }
+    return if (kept.items.len == 0) null else .{ .array = kept };
+}
+
+fn gatedGitCommit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !?ToolResult {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const plain = (try git_write.plainCommit(arena_state.allocator(), args)) orelse return null;
+    const root = try repo.servedRoot(gpa, io, policy.root);
+    defer gpa.free(root);
+    const ready = git_commit.readyToCommit(gpa, io, root, plain.all) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+    if (!ready) return null;
+    event.label = "git_write";
+    const made = try commitReply(gpa, io, runtime, plain.message, policy, event, true);
+    if (made.is_error) return made;
+    defer gpa.free(made.text);
+    return .{ .text = try asGitWrite(gpa, io, arena_state.allocator(), made.text, root), .is_error = false };
+}
+
+fn asGitWrite(gpa: Allocator, io: std.Io, arena: Allocator, text: []const u8, root: []const u8) ![]u8 {
+    const end = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    const reply = std.json.parseFromSliceLeaky(Value, arena, text[0..end], .{}) catch return gpa.dupe(u8, text);
+    if (reply != .object) return gpa.dupe(u8, text);
+    var out: std.Io.Writer.Allocating = .init(arena);
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try js.objectField("status");
+    try js.write("ok");
+    if (reply.object.get("commit")) |commit| {
+        try js.objectField("head");
+        try js.write(commit);
+    }
+    if (git_commit.headState(gpa, io, root)) |state| {
+        defer state.deinit(gpa);
+        if (state.branch) |name| {
+            try js.objectField("branch");
+            try js.write(name);
+        }
+        try js.objectField("clean");
+        try js.write(state.clean);
+    } else |err| if (err == error.OutOfMemory) return err;
+    inline for (.{ "shortstat", "files", "receipts" }) |field| if (reply.object.get(field)) |value| {
+        try js.objectField(field);
+        try js.write(value);
+    };
+    try js.endObject();
+    return gpa.dupe(u8, out.written());
 }
 
 fn writeAfter(gpa: Allocator, io: std.Io, js: *std.json.Stringify, policy: Policy) !void {

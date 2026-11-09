@@ -506,6 +506,10 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
                 try keep(gpa, out, path, symbol.hashOf(bytes), in_head, index_entry.oid);
                 continue;
             }
+            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and std.mem.eql(u8, index_entry.oid, try storedOid(git, plain, path, bytes))) {
+                try keep(gpa, out, path, symbol.hashOf(bytes), in_head, index_entry.oid);
+                continue;
+            }
             if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode)) return error.TargetHasUncommittedChanges;
             // `pre_written` callers (emetgate commit) commit content a gate already
             // wrote into the working tree, so the working-tree copy is expected to
@@ -694,6 +698,23 @@ pub fn headState(gpa: Allocator, io: std.Io, root: []const u8) !HeadState {
     const ref: ?[]const u8 = branchOf(git) catch null;
     const branch: ?[]u8 = if (ref) |full| try gpa.dupe(u8, full[branch_prefix.len..]) else null;
     return .{ .branch = branch, .clean = onlyWorkspace(status) };
+}
+
+pub fn readyToCommit(gpa: Allocator, io: std.Io, root: []const u8, all: bool) !bool {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const git = try Git.init(arena_state.allocator(), io, root);
+    const status = (try git.raw(&.{ "status", "--porcelain=v1", "--untracked-files=normal" })) orelse return error.GitFailed;
+    var lines = std.mem.tokenizeAny(u8, status, "\r\n");
+    var any = false;
+    while (lines.next()) |line| {
+        if (line.len < 4) continue;
+        if (ownWorkspace(std.mem.trim(u8, line[3..], "\""))) continue;
+        if (line[0] == '?') return false;
+        if (line[1] != ' ' and !all) return false;
+        any = true;
+    }
+    return any;
 }
 
 fn onlyWorkspace(status: []const u8) bool {

@@ -19275,6 +19275,46 @@
         "open run: a command that writes files reports files_changed with a receipt"
       ],
       "note": "without the names and file_hash of the files a command wrote, the model reads each one again before it can overwrite it"
+    },
+    {
+      "id": "MCH9-change-sends-no-op-edits",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (old != null and new != null and old.?.len != 0 and std.mem.eql(u8, old.?, new.?)) continue;\n",
+      "to": "",
+      "kills": [
+        "emetgate_change skips an edit whose old_string equals its new_string and writes the others"
+      ],
+      "note": "an edit that changes nothing would refuse the whole call and cost the model a turn to drop it"
+    },
+    {
+      "id": "GW1-git-write-commit-skips-the-gate",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) |made| return made;\n",
+      "to": "",
+      "kills": [
+        "emetgate_git_write commit -m after git add -A is made by the gated commit, with the gated write's receipt"
+      ],
+      "note": "a commit made with git_write would carry no receipt and leave the gated writes pending"
+    },
+    {
+      "id": "GW2-git-write-commit-takes-untracked",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (line[0] == '?') return false;\n",
+      "to": "",
+      "kills": [
+        "emetgate_git_write commit -m with a change left unstaged is run by git and commits only what is staged"
+      ],
+      "note": "git commit -m would sweep in an untracked file the user did not stage"
+    },
+    {
+      "id": "GC1-staged-copy-equal-to-work-tree-refused",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and std.mem.eql(u8, index_entry.oid, try storedOid(git, plain, path, bytes))) {\n",
+      "to": "            if (false) {\n",
+      "kills": [
+        "emetgate_git_write commit -m after git add -A is made by the gated commit, with the gated write's receipt"
+      ],
+      "note": "after git add -A the gated commit would refuse a staged copy that is the very content it commits"
     }
   ]
 }

@@ -113,7 +113,11 @@ const Repo = struct {
     }
 
     fn call(self: *Repo, args: anytype, test_command: []const u8) !Reply {
-        const text = try self.raw(args, test_command);
+        return self.callAs("emetgate_change", args, test_command);
+    }
+
+    fn callAs(self: *Repo, tool: []const u8, args: anytype, test_command: []const u8) !Reply {
+        const text = try self.rawAs(tool, args, test_command);
         defer gpa.free(text);
         const parsed = try std.json.parseFromSlice(Value, gpa, text, .{ .allocate = .alloc_always });
         errdefer parsed.deinit();
@@ -297,4 +301,59 @@ test "emetgate_change leaves after out when it only writes edits" {
     errdefer std.debug.print("reply: {s}\n", .{reply.text});
     try testing.expect(!reply.is_error);
     try testing.expect(std.mem.indexOf(u8, reply.text, "\"after\"") == null);
+}
+
+test "emetgate_change skips an edit whose old_string equals its new_string and writes the others" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const add = try repo.path("src\\add.js");
+    defer gpa.free(add);
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return a + b;" },
+        .{ .file = add, .content = "export const add = (a, b) => a + b;\n" },
+    } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try reply.expectStatus("applied");
+    try repo.expectFile("src/app.js", app_js);
+    try repo.expectFile("src/add.js", "export const add = (a, b) => a + b;\n");
+}
+
+test "emetgate_git_write commit -m after git add -A is made by the gated commit, with the gated write's receipt" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    var edited = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    } }, "cmd /c exit 0");
+    defer edited.deinit();
+    try testing.expect(!edited.is_error);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = "made outside\n" });
+    gpa.free(try run(repo.root_abs, &.{ "add", "-A" }));
+    var reply = try repo.callAs("emetgate_git_write", .{ .args = .{ "commit", "-m", "Initial book API" } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"receipts\":1") != null);
+    try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "Initial book API");
+    try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "notes.txt\nsrc/app.js");
+    try repo.expectGit(&.{ "status", "--porcelain" }, "");
+}
+
+test "emetgate_git_write commit -m with a change left unstaged is run by git and commits only what is staged" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/staged.txt", .data = "staged\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = "left out\n" });
+    gpa.free(try run(repo.root_abs, &.{ "add", "staged.txt" }));
+    var reply = try repo.callAs("emetgate_git_write", .{ .args = .{ "commit", "-m", "Only staged" } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "staged.txt");
+    try repo.expectGit(&.{ "status", "--porcelain" }, "?? notes.txt");
 }

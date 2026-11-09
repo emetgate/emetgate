@@ -14,7 +14,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
-pub const description = "Runs git, args as for git, e.g. [\"switch\",\"-c\",\"x\"]; force:true for work-losing forms.";
+pub const description = "Runs git, args as for git, e.g. [\"switch\",\"-c\",\"x\"]; force:true for work-losing forms. commit -m with every change staged (or -a with none untracked) is made by the gated commit, with receipts.";
 
 pub const max_args = 32;
 const max_output_lines = 40;
@@ -518,6 +518,37 @@ pub fn callGitWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.
         return tool_result.failure(gpa, &buffer, err, event);
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
+}
+
+pub const PlainCommit = struct {
+    message: []const u8,
+    all: bool,
+};
+
+pub fn plainCommit(arena: Allocator, args: ?Value) !?PlainCommit {
+    const argv = gitArgs(arena, args, null) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return null,
+    };
+    if (argv.len < 2 or !std.mem.eql(u8, argv[0], "commit")) return null;
+    var message: ?[]const u8 = null;
+    var all = false;
+    var i: usize = 1;
+    while (i < argv.len) : (i += 1) {
+        const word = argv[i];
+        if (std.mem.eql(u8, word, "-a") or std.mem.eql(u8, word, "--all")) {
+            all = true;
+        } else if (std.mem.eql(u8, word, "-m") or std.mem.eql(u8, word, "--message") or std.mem.eql(u8, word, "-am")) {
+            if (message != null or i + 1 == argv.len) return null;
+            if (std.mem.eql(u8, word, "-am")) all = true;
+            i += 1;
+            message = argv[i];
+        } else if (std.mem.startsWith(u8, word, "--message=")) {
+            if (message != null) return null;
+            message = word["--message=".len..];
+        } else return null;
+    }
+    return .{ .message = message orelse return null, .all = all };
 }
 
 pub fn wantsRead(sub: []const u8, args: ?Value) bool {
