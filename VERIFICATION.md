@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2918**
-- Mutations declared in `tests/mutations.json`: **2016**
-  - killed: **1966**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2943**
+- Mutations declared in `tests/mutations.json`: **2026**
+  - killed: **1976**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -16,12 +16,12 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **3**
   - survives, not yet classified: **19** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
-- Red-team suites: **16** files, **194** tests total
+- Red-team suites: **16** files, **197** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
-  - `tests/redteam_commit.zig`: 49
-  - `tests/redteam_commit2.zig`: 30
+  - `tests/redteam_commit.zig`: 50
+  - `tests/redteam_commit2.zig`: 32
   - `tests/redteam_gate_tree.zig`: 9
   - `tests/redteam_git.zig`: 3
   - `tests/redteam_ledger.zig`: 11
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1353 mutation(s).
+1363 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2117,8 +2117,18 @@ python tools/verification_page.py --check
 | `GW1-git-write-commit-skips-the-gate` | `src/protocol/handlers.zig` | `if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) ...` -> `` | emetgate_git_write commit -m after git add -A is made by the gated commit, with... | killed |
 | `GW2-git-write-commit-takes-untracked` | `src/platform/git_commit.zig` | `if (line[0] == '?') return false;` -> `` | emetgate_git_write commit -a -m with an untracked file is run by git and leaves... | killed |
 | `KF1-change-ignores-known-files` | `src/protocol/handlers.zig` | `try batch.put(arena, "edits", if (policy.known_files) \|known\|...` -> `try batch.put(arena, "edits", list);` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
-| `KF2-known-hash-not-compared-with-disk` | `src/protocol/handlers.zig` | `if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) ret...` -> `` | emetgate_change still asks for the hash of a file that changed on disk after th... | killed |
+| `KF2-known-hash-not-compared-with-disk` | `src/protocol/handlers.zig` | `if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) ret...` -> `_ = bytes;` | emetgate_change still asks for the hash of a file that changed on disk after th... | killed |
 | `KF3-written-files-not-noted` | `src/protocol/handlers.zig` | `if (!reply.is_error) if (policy.known_files) \|known\| try note...` -> `` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
+| `UPD1-check-every-start` | `src/update/update.zig` | `return now - seen >= check_interval_s;` -> `return now - seen >= 0;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
+| `UPD2-stamp-not-written` | `src/update/update.zig` | `updater.system.write(stamp, text) catch return null;` -> `_ = text;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
+| `UPD3-same-version-reinstalled` | `src/update/update.zig` | `if (version.order(current) != .gt) return .{ .up_to_date = vers...` -> `if (version.order(current) == .lt) return .{ .up_to_date = vers...` | self update: versions compare as X.Y.Z numbers and only a strictly newer releas... | killed |
+| `UPD4-signature-not-checked` | `src/update/update.zig` | `verify(key, exe, signature) catch return .{ .bad_signature = ve...` -> `_ = .{ key, signature };` | self update: a signature from another key, over other bytes or not base64 insta... | killed |
+| `UPD5-rollback-restores-nothing` | `src/update/update.zig` | `system.rename(old, exe) catch {` -> `system.rename(old, old) catch {` | self update: a failed swap puts the old exe back, and a failed rollback says ho... | killed |
+| `UPD6-ci-not-an-opt-out` | `src/update/update.zig` | `if (env.get(ci_variable) != null) return true;` -> `` | self update: CI or EMETGATE_NO_UPDATE turns the automatic check off, and emetga... | killed |
+| `UPD7-draft-installed` | `src/update/update.zig` | `parsed.value.draft or parsed.value.prerelease or` -> `parsed.value.prerelease or` | self update: a prerelease or a draft is skipped without a download | killed |
+| `UPD8-version-not-checked` | `src/update/update.zig` | `if (!self.reports(new, version)) {` -> `if (false) {` | self update: a downloaded exe that does not report the release version is not i... | killed |
+| `UPD9-no-key-still-downloads` | `src/update/update.zig` | `const key = self.key orelse return .no_release_key;` -> `const key = self.key orelse [_]u8{0} ** 32;` | self update: a build without a release key never downloads, and the placeholder... | killed |
+| `UPD10-download-not-announced` | `src/update/update.zig` | `if (self.on_download) \|announce\| announce(version);` -> `` | self update: a release signed by the release key replaces the exe and keeps the... | killed |
 
 ## What this system does not prove
 

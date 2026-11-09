@@ -4,12 +4,15 @@ From download to a locked Claude Code session in five steps. Windows 10/11 only.
 
 ## 1. Get emetgate
 
-**Release binary (recommended).** Download `emetgate.exe` and `emetgate.exe.sha256` from the [latest release](https://github.com/emetgate/emetgate/releases/latest) into `%USERPROFILE%\emetgate`, then check it:
+**Release binary (recommended).** In PowerShell:
 
 ```powershell
-(Get-FileHash $env:USERPROFILE\emetgate\emetgate.exe -Algorithm SHA256).Hash.ToLower()
-Get-Content $env:USERPROFILE\emetgate\emetgate.exe.sha256
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
+
+It downloads `emetgate.exe` and `emetgate.exe.sha256` from the [latest release](https://github.com/emetgate/emetgate/releases/latest), stops with an error and installs nothing when the SHA256 does not match, and puts `emetgate.exe` in `%LOCALAPPDATA%\Programs\emetgate`.
+
+From then on `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours and install it only when its Ed25519 signature matches the key built into emetgate; the line `emetgate 0.8.0 → 0.9.0 updated` says it happened. Run `emetgate update` to do it now. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
 
 **Or build from source.** You need Zig **0.16.0** ([download](https://ziglang.org/download/#release-0.16.0)); another Zig version fails to build it, often with errors inside `build.zig` that do not mention the version, so check `zig version` first:
 
@@ -17,14 +20,18 @@ Get-Content $env:USERPROFILE\emetgate\emetgate.exe.sha256
 git clone https://github.com/emetgate/emetgate
 cd emetgate
 zig build -Doptimize=ReleaseSafe
-New-Item -ItemType Directory -Force $env:USERPROFILE\emetgate | Out-Null
-Copy-Item zig-out\bin\emetgate.exe $env:USERPROFILE\emetgate\
+New-Item -ItemType Directory -Force $env:LOCALAPPDATA\Programs\emetgate | Out-Null
+Copy-Item zig-out\bin\emetgate.exe $env:LOCALAPPDATA\Programs\emetgate\
 ```
+
+A `zig build` without `-Doptimize` is a Debug build and never updates itself; a release-mode build checks like the release binary.
 
 ## 2. Put it on PATH
 
+The installer adds `%LOCALAPPDATA%\Programs\emetgate` to your user `PATH` when it is missing. After a build from source, add it yourself:
+
 ```powershell
-[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$env:USERPROFILE\emetgate", 'User')
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ";$env:LOCALAPPDATA\Programs\emetgate", 'User')
 ```
 
 Open a **new** terminal, then `emetgate --version` should print the version.
@@ -50,7 +57,7 @@ emetgate doctor
 One line per check, each `ok`, `warn` or `FAIL`, and every `FAIL` ends with the command that fixes it:
 
 ```
-ok    emetgate  0.8.0 at C:\Users\you\emetgate\emetgate.exe
+ok    emetgate  0.8.0 at C:\Users\you\AppData\Local\Programs\emetgate\emetgate.exe
 ok    claude    2.1.311 (Claude Code) at C:\Users\you\AppData\Roaming\npm\claude.cmd
 ok    login     signed in
 ok    git       C:\Program Files\Git\cmd\git.exe

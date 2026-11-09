@@ -157,6 +157,17 @@ pub fn build(b: *std.Build) void {
     const install_fuzz = b.addInstallArtifact(fuzz_tool, .{});
     b.step("fuzz-tool", "Build the time-boxed random mutation fuzzer into zig-out/bin/emetgate-fuzz").dependOn(&install_fuzz.step);
 
+    const sign_tool = b.addExecutable(.{
+        .name = "emetgate-sign",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/sign_release.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_sign = b.addInstallArtifact(sign_tool, .{});
+    b.step("sign-tool", "Build the release signer (keygen, sign, verify) into zig-out/bin/emetgate-sign").dependOn(&install_sign.step);
+
     const lockdown_check = b.addExecutable(.{
         .name = "lockdown-check",
         .root_module = b.createModule(.{

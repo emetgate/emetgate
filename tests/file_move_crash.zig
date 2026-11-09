@@ -4,7 +4,7 @@ const disk = @import("emetgate").disk;
 const symbol = @import("emetgate").symbol;
 const fixture = @import("ts_fixture.zig");
 const git_fixture = @import("git_fixture.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -118,31 +118,62 @@ fn recoverTwice(setup: *Setup, crash_in_recovery: bool) !void {
     try testing.expectEqual(@as(usize, 0), report.not_indexed);
 }
 
+const FileMove = struct {
+    setup: Setup,
+    crash_in_recovery: bool,
+    root: [1][]const u8,
+
+    pub const Params = bool;
+
+    pub fn init(self: *FileMove, crash_in_recovery: bool) !void {
+        self.crash_in_recovery = crash_in_recovery;
+        self.setup = try Setup.init();
+        self.root = .{self.setup.repo.root_abs};
+    }
+
+    pub fn deinit(self: *FileMove) void {
+        self.setup.deinit();
+    }
+
+    pub fn label(self: *FileMove) []const u8 {
+        return if (self.crash_in_recovery) "crash in recovery" else "plain recovery";
+    }
+
+    pub fn roots(self: *FileMove) []const []const u8 {
+        return &self.root;
+    }
+
+    pub fn write(self: *FileMove, step: *const disk.Step) !bool {
+        if (self.setup.run(step)) |_| return false else |err| {
+            try testing.expectEqual(error.Crashed, err);
+            return true;
+        }
+    }
+
+    pub fn recovered(self: *FileMove) !bool {
+        try recoverTwice(&self.setup, self.crash_in_recovery);
+        return self.settled();
+    }
+
+    pub fn settled(self: *FileMove) !bool {
+        const now = try self.setup.state();
+        try self.setup.noDebris();
+        return now == .new;
+    }
+};
+
 test "file move crash: a move into two new directories with two users cut after every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     for ([_]bool{ false, true }) |crash_in_recovery| {
-        var setup = try Setup.init();
-        defer setup.deinit();
-        var snapshots = try Snapshots.init(setup.repo.root_abs);
-        defer snapshots.deinit();
-        const step = snapshots.step();
-        try setup.run(&step);
-        try testing.expectEqual(.new, try setup.state());
-        try setup.noDebris();
-        const steps = try snapshots.taken();
-        try testing.expect(steps >= 8);
-        var seen_new = false;
-        for (1..steps + 1) |stop| {
-            errdefer std.debug.print("crash after step {d}, crash in recovery {}\n", .{ stop, crash_in_recovery });
-            try snapshots.restore(stop);
-            try recoverTwice(&setup, crash_in_recovery);
-            const now = try setup.state();
-            try setup.noDebris();
-            if (now == .new) seen_new = true;
-            if (seen_new) try testing.expectEqual(.new, now);
-        }
-        try testing.expect(seen_new);
+        const outcomes = try crash_steps.everyStepOutcomes(FileMove, crash_in_recovery, 8);
+        defer testing.allocator.free(outcomes);
+        try crash_steps.expectNoWayBack(outcomes);
     }
+}
+
+test "file move crash: a move cut for real at every step recovers to all old or all new" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    for ([_]bool{ false, true }) |crash_in_recovery| try crash_steps.expectCutsNoWayBack(FileMove, crash_in_recovery, 8);
 }
 
 test "file move crash: a rename whose directory entry was not made durable before the crash recovers to all old" {

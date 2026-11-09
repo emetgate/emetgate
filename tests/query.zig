@@ -261,12 +261,12 @@ test "redteam query: a q: rule that outruns its budget rejects the proposal and 
     try repo.adopt("q:((string_fragment) @violation (#match? @violation \"" ++ pattern ++ "\"))");
 
     const body = "{\n  const s = \"" ++ "a" ** 20_000 ++ "\";\n  return a + b + s.length;\n}";
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     const result = try repo.propose(runtime, "src/math.ts", body);
     defer result.deinit(testing.allocator);
-    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    const cpu_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds();
     try expectCheckFailed(result, "query_budget_exceeded", "typescript");
-    try testing.expect(elapsed_ms < 10_000);
+    try testing.expect(cpu_ms < 10_000);
     try repo.expectPristine();
 }
 
@@ -284,12 +284,12 @@ fn expectRefusedBeforeRunning(check: []const u8, body: []const u8) !void {
     defer runtime.destroy() catch @panic("live snapshots");
     try repo.adopt(check);
 
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     const result = try repo.propose(runtime, "src/math.ts", body);
     defer result.deinit(testing.allocator);
-    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    const cpu_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds();
     try expectCheckFailed(result, "query_malformed", "typescript");
-    try testing.expect(elapsed_ms < 10_000);
+    try testing.expect(cpu_ms < 10_000);
     try repo.expectPristine();
 }
 
@@ -302,12 +302,12 @@ test "redteam query: a body too deep for the rule's pattern rejects the proposal
     try repo.adopt("q:(_ (_ (_) @violation))");
 
     const body = "{\n  return " ++ "a + " ** 2_500 ++ "b;\n}";
-    const started = std.Io.Timestamp.now(testing.io, .awake);
+    const started = std.Io.Timestamp.now(testing.io, .cpu_process);
     const result = try repo.propose(runtime, "src/math.ts", body);
     defer result.deinit(testing.allocator);
-    const elapsed_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .awake)).toMilliseconds();
+    const cpu_ms = started.durationTo(std.Io.Timestamp.now(testing.io, .cpu_process)).toMilliseconds();
     try expectCheckFailed(result, "query_depth_exceeded", "typescript");
-    try testing.expect(elapsed_ms < 10_000);
+    try testing.expect(cpu_ms < 10_000);
     try repo.expectPristine();
 }
 

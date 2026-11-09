@@ -104,6 +104,7 @@ pub const search_v1 = src.search_v1;
 pub const search_text = src.search_text;
 pub const rg_search = src.rg_search;
 pub const disk = src.disk;
+pub const commit_record = src.commit_record;
 pub const durability_log = src.durability_log;
 pub const receipts = src.receipts;
 pub const verify_run = src.verify_run;
@@ -182,6 +183,7 @@ pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
+pub const self_update = src.self_update;
 pub const rules_tui = src.rules_tui;
 pub const rules_command = src.rules_command;
 pub const console_raw = src.console_raw;
@@ -205,6 +207,7 @@ comptime {
 
 test {
     _ = @import("tests/runner.zig");
+    _ = @import("tests/self_update.zig");
     _ = @import("tests/runner_rules.zig");
     _ = @import("tests/scan.zig");
     _ = @import("tests/change_watch.zig");
@@ -345,6 +348,7 @@ test {
     _ = @import("tests/nested_repos.zig");
     _ = @import("tests/commit_batch.zig");
     _ = @import("tests/commit_batch_crash.zig");
+    _ = @import("tests/crash_steps.zig");
     _ = @import("tests/commit_protocol.zig");
     _ = @import("tests/commit_on_write.zig");
     _ = @import("tests/commit_group.zig");

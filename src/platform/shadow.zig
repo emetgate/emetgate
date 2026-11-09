@@ -13,6 +13,7 @@ const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
 
 pub const workspace_dir = ".emetgate";
+pub const workspace_lock_name = ".lock";
 pub const dependency_dirs = [_][]const u8{ "node_modules", ".venv", "venv" };
 
 const max_git_listing = 64 * 1024 * 1024;
@@ -84,7 +85,7 @@ pub const Lock = struct {
         Dir.cwd().createDirPath(io, workspace) catch {};
         if (isReparsePoint(workspace) catch true) return error.WorkspaceIsLink;
         var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-        const lock_path = try std.fmt.bufPrint(&path_buf, "{s}\\.lock", .{workspace});
+        const lock_path = try std.fmt.bufPrint(&path_buf, "{s}\\{s}", .{ workspace, workspace_lock_name });
         var wide: [std.fs.max_path_bytes:0]u16 = undefined;
         const handle = win.CreateFileW(
             try toExtendedWide(&wide, lock_path),

@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const crash_steps = @import("crash_steps.zig");
 const emetgate = @import("emetgate");
 
 const disk = emetgate.disk;
@@ -10,17 +11,6 @@ const testing = std.testing;
 const base_text = "export const a = 1;\n";
 const new_text = "export const a = 2;\n";
 const user_text = "export const a = 3; // typed by the user after the crash\n";
-
-const Cut = struct {
-    target: usize,
-    seen: usize = 0,
-
-    fn reached(context: *anyopaque) bool {
-        const self: *Cut = @ptrCast(@alignCast(context));
-        self.seen += 1;
-        return self.seen == self.target;
-    }
-};
 
 const Tree = struct {
     tmp: testing.TmpDir,
@@ -54,8 +44,8 @@ const Tree = struct {
     }
 
     fn crashAt(self: *Tree, stop: usize) !bool {
-        var at: Cut = .{ .target = stop };
-        const step: disk.Step = .{ .context = &at, .reached = Cut.reached };
+        var at: crash_steps.StopAt = .{ .target = stop };
+        const step = at.step();
         disk.replaceReporting(testing.allocator, testing.io, self.file, new_text, symbol.hashOf(base_text), null, self.journal, &step) catch |err| switch (err) {
             error.Crashed => return true,
             else => |e| return e,

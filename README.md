@@ -139,13 +139,13 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 New here? Follow [docs/QUICKSTART.md](docs/QUICKSTART.md): install, run `emetgate doctor`, then `emetgate lockdown`.
 
-Download the Windows binary from the [latest release](https://github.com/emetgate/emetgate/releases/latest) and put its folder on your `PATH` (PowerShell; open a new terminal afterwards):
+Install the Windows binary from the [latest release](https://github.com/emetgate/emetgate/releases/latest) in PowerShell, then open a new terminal:
 
 ```
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
+
+The installer checks the SHA256 of `emetgate.exe`, puts it in `%LOCALAPPDATA%\Programs\emetgate` and adds that folder to your user `PATH` if it is not there yet. After that, `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours (2 seconds at most, silent when offline) and install it only if its Ed25519 signature matches the key built into emetgate. `emetgate update` does the same on demand. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
 
 Then, in the project folder:
 

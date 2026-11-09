@@ -19335,6 +19335,106 @@
         "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash"
       ],
       "note": "the session would forget what it wrote and ask for hashes it already knows"
+    },
+    {
+      "id": "UPD1-check-every-start",
+      "file": "src/update/update.zig",
+      "from": "    return now - seen >= check_interval_s;",
+      "to": "    return now - seen >= 0;",
+      "kills": [
+        "self update: the automatic check runs at most once per 24 hours and records the time before it reaches the network"
+      ],
+      "note": "the update check would reach the network on every start"
+    },
+    {
+      "id": "UPD2-stamp-not-written",
+      "file": "src/update/update.zig",
+      "from": "    updater.system.write(stamp, text) catch return null;\n",
+      "to": "    _ = text;\n",
+      "kills": [
+        "self update: the automatic check runs at most once per 24 hours and records the time before it reaches the network"
+      ],
+      "note": "a slow or failing check would be retried on every start"
+    },
+    {
+      "id": "UPD3-same-version-reinstalled",
+      "file": "src/update/update.zig",
+      "from": "        if (version.order(current) != .gt) return .{ .up_to_date = version };",
+      "to": "        if (version.order(current) == .lt) return .{ .up_to_date = version };",
+      "kills": [
+        "self update: versions compare as X.Y.Z numbers and only a strictly newer release is installed"
+      ],
+      "note": "the current release would be downloaded and installed again"
+    },
+    {
+      "id": "UPD4-signature-not-checked",
+      "file": "src/update/update.zig",
+      "from": "        verify(key, exe, signature) catch return .{ .bad_signature = version };",
+      "to": "        _ = .{ key, signature };",
+      "kills": [
+        "self update: a signature from another key, over other bytes or not base64 installs nothing"
+      ],
+      "note": "any downloaded exe would replace the installed one"
+    },
+    {
+      "id": "UPD5-rollback-restores-nothing",
+      "file": "src/update/update.zig",
+      "from": "        system.rename(old, exe) catch {",
+      "to": "        system.rename(old, old) catch {",
+      "kills": [
+        "self update: a failed swap puts the old exe back, and a failed rollback says how to fix it"
+      ],
+      "note": "a failed swap would leave no emetgate.exe behind"
+    },
+    {
+      "id": "UPD6-ci-not-an-opt-out",
+      "file": "src/update/update.zig",
+      "from": "    if (env.get(ci_variable) != null) return true;\n",
+      "to": "",
+      "kills": [
+        "self update: CI or EMETGATE_NO_UPDATE turns the automatic check off, and emetgate update still verifies and installs"
+      ],
+      "note": "CI runs would replace their emetgate.exe"
+    },
+    {
+      "id": "UPD7-draft-installed",
+      "file": "src/update/update.zig",
+      "from": "parsed.value.draft or parsed.value.prerelease or",
+      "to": "parsed.value.prerelease or",
+      "kills": [
+        "self update: a prerelease or a draft is skipped without a download"
+      ],
+      "note": "a draft release would be installed"
+    },
+    {
+      "id": "UPD8-version-not-checked",
+      "file": "src/update/update.zig",
+      "from": "        if (!self.reports(new, version)) {",
+      "to": "        if (false) {",
+      "kills": [
+        "self update: a downloaded exe that does not report the release version is not installed"
+      ],
+      "note": "an older signed exe served under a newer tag would be installed"
+    },
+    {
+      "id": "UPD9-no-key-still-downloads",
+      "file": "src/update/update.zig",
+      "from": "        const key = self.key orelse return .no_release_key;",
+      "to": "        const key = self.key orelse [_]u8{0} ** 32;",
+      "kills": [
+        "self update: a build without a release key never downloads, and the placeholder key file is no key"
+      ],
+      "note": "a build without the release key would reach the network"
+    },
+    {
+      "id": "UPD10-download-not-announced",
+      "file": "src/update/update.zig",
+      "from": "        if (self.on_download) |announce| announce(version);\n",
+      "to": "",
+      "kills": [
+        "self update: a release signed by the release key replaces the exe and keeps the old one as emetgate.old.exe"
+      ],
+      "note": "lockdown would wait for a 20 MB download without a word"
     }
   ]
 }

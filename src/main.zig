@@ -29,6 +29,7 @@ const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
 const find_command = emetgate.find_command;
+const self_update = emetgate.self_update;
 const verify_run = emetgate.verify_run;
 const verify_branch = emetgate.verify_branch;
 const commit_group = emetgate.commit_group;
@@ -57,6 +58,7 @@ const usage =
     \\       emetgate commit -m <message> [--shadow-root <dir>]
     \\       emetgate lockdown [--test <command>] [--no-marks] [<claude args>...]
     \\       emetgate doctor   (first run: checks claude, git, the test command and the sandbox; exit 1 if lockdown would not work)
+    \\       emetgate update   (install the latest signed release now; doctor and lockdown check once a day, off with EMETGATE_NO_UPDATE=1 or CI set)
     \\       emetgate --version | help
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
@@ -146,6 +148,7 @@ pub fn main(init: std.process.Init) !u8 {
 
     const runtime = try Runtime.create(init.gpa);
     defer runtime.destroy() catch |err| std.debug.panic("runtime closed with live allocations: {t}", .{err});
+    removeLeftoverUpdate(init, runtime);
 
     const status = dispatch(init, runtime, args, out) catch |err| return fail(err);
     out.flush() catch |err| return fail(err);
@@ -255,8 +258,13 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         try out.writeAll(usage);
         return 0;
     }
-    if (std.mem.eql(u8, command, "doctor") and args.len == 2) return doctorCmd(init, runtime, out);
+    if (std.mem.eql(u8, command, "update") and args.len == 2) return updateCmd(init, runtime, out);
+    if (std.mem.eql(u8, command, "doctor") and args.len == 2) {
+        autoUpdate(init, runtime);
+        return doctorCmd(init, runtime, out);
+    }
     if (std.mem.eql(u8, command, "lockdown")) {
+        autoUpdate(init, runtime);
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
         return lockdown.launch(runtime.gpa, init.io, init.environ_map, passthrough);
@@ -306,6 +314,60 @@ fn doctorCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8
         .version = server.server_version,
         .code_page = doctor.consoleCodePage(),
     }, out);
+}
+
+fn updaterFor(runtime: *Runtime, files: *self_update.Disk, exe_path: []const u8) self_update.Updater {
+    return .{
+        .gpa = runtime.gpa,
+        .fetch = self_update.network,
+        .system = files.system(),
+        .exe_path = exe_path,
+        .current = server.server_version,
+        .key = self_update.release_key,
+        .on_download = announceDownload,
+    };
+}
+
+fn announceDownload(latest: self_update.Version) void {
+    var buffer: [160]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    self_update.writeDownloading(&writer, server.server_version, latest, self_update.arrowFor(doctor.consoleCodePage())) catch {};
+    std.debug.print("{s}", .{writer.buffered()});
+}
+
+fn autoUpdate(init: std.process.Init, runtime: *Runtime) void {
+    if (self_update.autoDisabled(init.environ_map, self_update.auto_in_build)) return;
+    const gpa = runtime.gpa;
+    const exe_path = std.process.executablePathAlloc(init.io, gpa) catch return;
+    defer gpa.free(exe_path);
+    const data_dir = emetgate.cache_lease.defaultDataDir(gpa) catch return;
+    defer gpa.free(data_dir);
+    var files: self_update.Disk = .{ .io = init.io };
+    const now = std.Io.Timestamp.now(init.io, .real).toSeconds();
+    const outcome = self_update.autoCheck(updaterFor(runtime, &files, exe_path), init.environ_map, self_update.auto_in_build, data_dir, now) orelse return;
+    if (outcome.shownWhenAuto()) printOutcome(outcome);
+}
+
+fn printOutcome(outcome: self_update.Outcome) void {
+    var buffer: [512]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    outcome.write(&writer, server.server_version, self_update.arrowFor(doctor.consoleCodePage())) catch {};
+    std.debug.print("{s}", .{writer.buffered()});
+}
+
+fn updateCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
+    const exe_path = try std.process.executablePathAlloc(init.io, init.arena.allocator());
+    var files: self_update.Disk = .{ .io = init.io };
+    const outcome = updaterFor(runtime, &files, exe_path).run();
+    try outcome.write(out, server.server_version, self_update.arrowFor(doctor.consoleCodePage()));
+    return outcome.exitCode();
+}
+
+fn removeLeftoverUpdate(init: std.process.Init, runtime: *Runtime) void {
+    const exe_path = std.process.executablePathAlloc(init.io, runtime.gpa) catch return;
+    defer runtime.gpa.free(exe_path);
+    var files: self_update.Disk = .{ .io = init.io };
+    self_update.removeLeftover(runtime.gpa, files.system(), exe_path);
 }
 
 fn fail(err: anyerror) u8 {

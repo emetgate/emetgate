@@ -42,6 +42,18 @@ These are documented in the README and are not treated as reports:
 - **Unmediated edits.** Changes made by other tools bypass the gate entirely; that is what `emetgate lockdown` exists for.
 - **A trusted operator.** The person running Emetgate supplies the test command and the repository configuration and is trusted with them; the model is not.
 
+## Updates
+
+`emetgate doctor` and `emetgate lockdown` install a newer release by themselves at most once a day, and `emetgate update` does it on demand; [REFERENCE.md](REFERENCE.md#updating) has the steps. The trust model:
+
+- **What is trusted.** The Ed25519 public key in `src/update/release_key.pub`, compiled into the binary. Its private half lives only in the `EMETGATE_SIGNING_KEY` secret of this repository, and the release workflow signs `emetgate.exe` with it after the tests pass. `zig build sign-tool` builds the signer; `emetgate-sign sign` refuses a secret whose public key is not the one in `release_key.pub`.
+- **What is not trusted.** GitHub's API answer, the download, the network and any proxy on the way. A download replaces the installed exe only when its signature verifies against the built-in key, and when the downloaded exe itself reports `emetgate X.Y.Z` for the tag it came from. A tampered file, a file signed by another key, a missing or malformed signature, and an older signed binary served under a newer tag are all refused with a `warning:` line, and the installed exe stays.
+- **No downgrade.** Only a plain `vX.Y.Z` tag strictly newer than the running version is taken; drafts, prereleases and tags with `-` or `+` are skipped.
+- **Failure is safe.** No network, a timeout (2 seconds for the check) or a failed download prints nothing and changes nothing. A failed swap puts the old exe back; if even that fails, the warning names the rename that restores it.
+- **Opt-out.** `EMETGATE_NO_UPDATE=1` or any `CI` value turns the daily check off; Debug builds never check. A build whose `release_key.pub` holds no key never downloads.
+- **The installer.** `install.ps1` checks the SHA256 from `emetgate.exe.sha256`, which comes from the same release as the exe, so it catches a damaged download but not a release whose files were all replaced. PowerShell 5.1 cannot check Ed25519, so the signature is checked from the first update on, not at install. To check the install itself, compare the hash with the [build provenance attestation](https://github.com/emetgate/emetgate/attestations) of the release (`gh attestation verify emetgate.exe --repo emetgate/emetgate`).
+- **In scope.** An update that installs a binary not signed by the release key, installs an older version, or leaves no working `emetgate.exe` behind is a vulnerability; report it as above.
+
 ## How the guarantees are held
 
 Every guard is covered by tests that fail when the guard is removed, including red-team suites that attack the gate directly and fault injection for each step of building the sandbox token. If you find a guard whose removal breaks no test, that is worth reporting too.

@@ -1878,26 +1878,39 @@ The verification guarantees have the following limits:
 
 The published binary is built for the x86_64 baseline CPU (`-Dcpu=baseline`), so it runs on any 64-bit x86 processor rather than only on ones with the build machine's instruction set.
 
-Each release tag publishes a Windows binary and its SHA-256 checksum on the [releases page](https://github.com/emetgate/emetgate/releases). Download both into a fixed folder under your profile (this only downloads; nothing is run):
+Each release tag publishes `emetgate.exe`, its SHA-256 checksum `emetgate.exe.sha256`, its Ed25519 signature `emetgate.exe.sig` and the installer `install.ps1` on the [releases page](https://github.com/emetgate/emetgate/releases). Install with PowerShell 5.1 or later:
 
 ```powershell
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:USERPROFILE\emetgate\$f" }
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
 
-Check the binary against the published checksum before running it; this prints `True` when they match:
+The installer downloads the three files from `releases/latest/download` into a temporary folder, compares the SHA256 of `emetgate.exe` with the one in `emetgate.exe.sha256` and stops with `SHA256 mismatch: ...; nothing was installed` when they differ. It then moves the exe to `%LOCALAPPDATA%\Programs\emetgate\emetgate.exe` (a running copy is first moved aside to `emetgate.old.exe`, and put back if the move fails), runs `emetgate --version`, adds `%LOCALAPPDATA%\Programs\emetgate` to the user `PATH` only when no entry already names that folder, and prints the next steps: open a new terminal, `emetgate doctor`, `emetgate lockdown`. The signature is downloaded but not checked by the installer, since PowerShell 5.1 has no Ed25519; `emetgate update` and the daily check verify it.
+
+To check by hand instead, download both files and compare; this prints `True` when they match:
 
 ```powershell
-(Get-FileHash "$env:USERPROFILE\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:USERPROFILE\emetgate\emetgate.exe.sha256").Split(" ")[0]
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Programs\emetgate" | Out-Null
+foreach ($f in "emetgate.exe", "emetgate.exe.sha256") { Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/$f" -OutFile "$env:LOCALAPPDATA\Programs\emetgate\$f" }
+(Get-FileHash "$env:LOCALAPPDATA\Programs\emetgate\emetgate.exe" -Algorithm SHA256).Hash -eq (Get-Content "$env:LOCALAPPDATA\Programs\emetgate\emetgate.exe.sha256").Split(" ")[0]
 ```
 
 Register it with Claude Code by its absolute path, because Claude Code runs the stored command as written and a relative path does not resolve when Claude Code is started from another directory:
 
 ```powershell
-claude mcp add emetgate -- "$env:USERPROFILE\emetgate\emetgate.exe" mcp
+claude mcp add emetgate -- "$env:LOCALAPPDATA\Programs\emetgate\emetgate.exe" mcp
 ```
 
 The binary is not code-signed, so Windows SmartScreen warns on first run: it flags executables that carry no publisher signature and have little download history, not because it found anything in this one. The checksum above is how to confirm the file is the one the release built.
+
+### Updating
+
+`emetgate doctor` and `emetgate lockdown` check for a new release when they start, at most once every 24 hours. The time of the last check is written to `update\last-check` in emetgate's data folder before the request goes out, so a check that hangs or fails is not repeated on the next start. The request to `https://api.github.com/repos/emetgate/emetgate/releases/latest` gets 2 seconds; when it fails, times out or the network is down, nothing is printed and the command goes on. A release is taken only when its tag is a plain `vX.Y.Z` strictly newer than the running version: a draft, a prerelease, a tag with `-` or `+`, the same version and an older one are left alone, so emetgate never downgrades.
+
+For a newer release, emetgate first prints `emetgate X → Y: downloading the signed release` on stderr, so a lockdown that waits for the download says why, then downloads `emetgate.exe` and `emetgate.exe.sig` from that tag (60 seconds) and checks the signature against the Ed25519 public key built into the binary from `src/update/release_key.pub`. It then writes the download as `emetgate.new.exe` next to the running exe and runs it with `--version`; the output must be `emetgate X.Y.Z` for the release's version, so an older signed binary served under a newer tag is refused. The swap renames `emetgate.exe` to `emetgate.old.exe` (Windows lets a running exe be renamed, not deleted) and `emetgate.new.exe` to `emetgate.exe`; when the second rename fails, the first is undone. It prints `emetgate X → Y updated` on stderr (`->` when the console code page is not UTF-8), and the next start deletes `emetgate.old.exe` once no process runs it. A bad signature, a wrong version or a failed swap prints one `warning:` line and keeps the installed exe.
+
+`emetgate update` runs the same steps at once, without the 24-hour limit or the opt-outs, and prints what happened: `emetgate X is up to date`, `emetgate X → Y updated` or the reason nothing was installed. It exits 0 when emetgate is up to date, was updated or the latest release is a prerelease, and 1 otherwise.
+
+The daily check is off when `EMETGATE_NO_UPDATE` is set to anything but empty or `0`, when `CI` is set to any value, and in Debug builds. A binary built without a release key in `src/update/release_key.pub` never downloads anything and `emetgate update` says so. What the signature protects against, and what it does not, is in [SECURITY.md](SECURITY.md#updates).
 
 ## Building
 
@@ -1912,6 +1925,7 @@ zig build test-timing       # every test one by one, with the slowest tests and 
 zig build test-bin          # the test binary alone, zig-out/bin/test-all
 zig build bench             # session benchmarks at full size
 zig build mutate-tool       # mutation harness
+zig build sign-tool         # release signer: zig-out/bin/emetgate-sign keygen | sign | verify
 tools/accept.ps1 <ref>      # the tests three times, then the mutations on lines changed since <ref>
 ```
 

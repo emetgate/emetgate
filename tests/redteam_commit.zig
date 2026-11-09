@@ -14,7 +14,7 @@ const Runtime = emetgate.runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
 const git_fixture = @import("git_fixture.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
 const TsRepo = fixture.TsRepo;
@@ -471,59 +471,91 @@ test "redteam commit: a branch switch made while the tests run puts the commit o
     try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
 }
 
-test "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover" {
-    try skipOffWindows();
-    var case: Case = undefined;
-    try case.initDefault();
-    defer case.deinit();
-    case.deinit();
-    for ([_]bool{ false, true }) |creates| {
-        try case.initDefault();
-        const rel: []const u8 = if (creates) "src/fresh.ts" else "src/util.ts";
-        const mark: []const u8 = if (creates) "fresh" else model_mark;
-        const before = try case.git(&.{ "rev-parse", "HEAD" });
-        var snapshots = try Snapshots.init(case.repo.root_abs);
-        defer snapshots.deinit();
-        const step = snapshots.step();
+const Dies = struct {
+    case: Case,
+    creates: bool,
+    before: []const u8,
+    root: [1][]const u8,
+
+    pub const Params = bool;
+
+    pub fn init(self: *Dies, creates: bool) !void {
+        self.creates = creates;
+        try self.case.initDefault();
+        errdefer self.case.deinit();
+        self.before = try self.case.git(&.{ "rev-parse", "HEAD" });
+        self.root = .{self.case.repo.root_abs};
+    }
+
+    pub fn deinit(self: *Dies) void {
+        self.case.deinit();
+    }
+
+    pub fn label(self: *Dies) []const u8 {
+        return if (self.creates) "creates true" else "creates false";
+    }
+
+    pub fn roots(self: *Dies) []const []const u8 {
+        return &self.root;
+    }
+
+    fn rel(self: *Dies) []const u8 {
+        return if (self.creates) "src/fresh.ts" else "src/util.ts";
+    }
+
+    pub fn write(self: *Dies, step: *const emetgate.disk.Step) !bool {
+        const case = &self.case;
         var request: emetgate.commit_plan.Request = .{ .message = "fix: swap" };
         defer request.deinit(testing.allocator);
-        const result = try emetgate.runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
-            .file_abs = try case.repo.abs(case.arena(), rel),
-            .ref_text = if (creates) "fresh" else "add",
-            .expected_hash = if (creates) .absent else .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, try case.repo.abs(case.arena(), rel), "add") },
-            .new_body = if (creates) "export function fresh(): number {\n  return 1;\n}\n" else new_body,
+        const outcome = emetgate.runner.tryMutate(testing.allocator, testing.io, case.runtime, .{
+            .file_abs = try case.repo.abs(case.arena(), self.rel()),
+            .ref_text = if (self.creates) "fresh" else "add",
+            .expected_hash = if (self.creates) .absent else .{ .present = try support.hashOfRef(testing.allocator, testing.io, case.runtime, try case.repo.abs(case.arena(), self.rel()), "add") },
+            .new_body = if (self.creates) "export function fresh(): number {\n  return 1;\n}\n" else new_body,
             .test_command = green,
             .commit = &request,
-            .commit_step = &step,
+            .commit_step = step,
         });
-        result.deinit(testing.allocator);
-        const steps = try snapshots.taken();
-        try testing.expect(steps >= 6);
-        try expectLandedWhole(&case, rel, mark, before);
-        for (1..steps + 1) |stop| {
-            errdefer std.debug.print("creates {}, cut after step {d}\n", .{ creates, stop });
-            try snapshots.restore(stop);
-            const report = try emetgate.disk.recover(testing.allocator, testing.io, case.repo.root_abs);
-            try testing.expectEqual(@as(usize, 0), report.failed);
-            try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
-            try expectLandedWhole(&case, rel, mark, before);
+        if (outcome) |result| {
+            result.deinit(testing.allocator);
+            return false;
+        } else |err| switch (err) {
+            error.Crashed => return true,
+            else => |e| return e,
         }
-        case.deinit();
     }
-    try case.initDefault();
+
+    pub fn recovered(self: *Dies) !bool {
+        const report = try emetgate.disk.recover(testing.allocator, testing.io, self.case.repo.root_abs);
+        try testing.expectEqual(@as(usize, 0), report.failed);
+        try testing.expectEqual(@as(usize, 0), report.commits.pending + report.commits.failed + report.commits.left);
+        return self.settled();
+    }
+
+    pub fn settled(self: *Dies) !bool {
+        const case = &self.case;
+        const mark: []const u8 = if (self.creates) "fresh" else model_mark;
+        const written = case.repo.exists(self.rel()) and contains(try case.disk(self.rel()), mark);
+        const moved = !std.mem.eql(u8, try case.git(&.{ "rev-parse", "HEAD" }), self.before);
+        const committed = if (case.headBlob(self.rel())) |blob| contains(blob, mark) else |_| false;
+        try testing.expectEqual(written, committed);
+        try testing.expectEqual(moved, committed);
+        if (moved) try testing.expectEqualStrings(self.before, try case.git(&.{ "rev-parse", "HEAD^" }));
+        try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
+        try testing.expect(!case.repo.exists(".git/index.lock"));
+        try testing.expect(!case.repo.exists(".emetgate/intents"));
+        return moved;
+    }
+};
+
+test "redteam commit: a process that dies between the write and the branch move is rolled back or completed by recover" {
+    try skipOffWindows();
+    for ([_]bool{ false, true }) |creates| try crash_steps.expectEveryStep(Dies, creates, 6);
 }
 
-fn expectLandedWhole(case: *Case, rel: []const u8, mark: []const u8, before: []const u8) !void {
-    const written = case.repo.exists(rel) and contains(try case.disk(rel), mark);
-    const head = try case.git(&.{ "rev-parse", "HEAD" });
-    const moved = !std.mem.eql(u8, head, before);
-    const committed = if (case.headBlob(rel)) |blob| contains(blob, mark) else |_| false;
-    try testing.expectEqual(written, committed);
-    try testing.expectEqual(moved, committed);
-    if (moved) try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "HEAD^" }));
-    try testing.expectEqualStrings("", try case.git(&.{ "status", "--porcelain" }));
-    try testing.expect(!case.repo.exists(".git/index.lock"));
-    try testing.expect(!case.repo.exists(".emetgate/intents"));
+test "redteam commit: a process cut for real at every step between the write and the branch move is rolled back or completed by recover" {
+    try skipOffWindows();
+    for ([_]bool{ false, true }) |creates| try crash_steps.expectEveryCut(Dies, creates, 6);
 }
 
 test "redteam commit: a stale index lock does not leave the index behind the new commit" {

@@ -2,48 +2,82 @@ const std = @import("std");
 const builtin = @import("builtin");
 const disk = @import("emetgate").disk;
 const mf = @import("move_file_tool.zig");
-const Snapshots = @import("crash_snapshot.zig").Snapshots;
+const crash_steps = @import("crash_steps.zig");
 
 const testing = std.testing;
-const Case = mf.Case;
 
-fn isOld(case: *Case) bool {
+fn isOld(case: *mf.Case) bool {
     mf.expectOld(case) catch return false;
     return true;
 }
 
-fn isNew(case: *Case) bool {
+fn isNew(case: *mf.Case) bool {
     mf.expectNew(case) catch return false;
     return true;
 }
 
+const MoveFile = struct {
+    case: mf.Case,
+    root: [1][]const u8,
+
+    pub const Params = void;
+
+    pub fn init(self: *MoveFile, _: void) !void {
+        try mf.initFiles(&self.case, &.{}, true);
+        errdefer self.case.deinit();
+        try mf.plan(&self.case, &mf.changes);
+        self.root = .{self.case.repo.root_abs};
+    }
+
+    pub fn deinit(self: *MoveFile) void {
+        self.case.deinit();
+    }
+
+    pub fn settle(self: *MoveFile) void {
+        self.case.session.deinit();
+    }
+
+    pub fn label(_: *MoveFile) []const u8 {
+        return "move file";
+    }
+
+    pub fn roots(self: *MoveFile) []const []const u8 {
+        return &self.root;
+    }
+
+    pub fn write(self: *MoveFile, step: *const disk.Step) !bool {
+        if (mf.moveFile(&self.case, .{ .step = step })) |outcome| {
+            defer outcome.deinit(testing.allocator);
+            try testing.expect(outcome.result == .committed);
+            return false;
+        } else |err| {
+            try testing.expectEqual(error.Crashed, err);
+            return true;
+        }
+    }
+
+    pub fn recovered(self: *MoveFile) !bool {
+        const report = try disk.recover(testing.allocator, testing.io, self.case.repo.root_abs);
+        try testing.expectEqual(@as(usize, 0), report.failed);
+        return self.settled();
+    }
+
+    pub fn settled(self: *MoveFile) !bool {
+        const old = isOld(&self.case);
+        const new = isNew(&self.case);
+        try testing.expect(old != new);
+        return new;
+    }
+};
+
 test "move file crash: the tool's move into new directories with two users cut after every step recovers to all old or all new" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
-    var case: Case = undefined;
-    try mf.initFiles(&case, &.{}, true);
-    defer case.deinit();
-    try mf.plan(&case, &mf.changes);
-    var snapshots = try Snapshots.init(case.repo.root_abs);
-    defer snapshots.deinit();
-    const step = snapshots.step();
-    const outcome = try mf.moveFile(&case, .{ .step = &step });
-    defer outcome.deinit(testing.allocator);
-    try testing.expect(outcome.result == .committed);
-    try mf.expectNew(&case);
-    const steps = try snapshots.taken();
-    try testing.expect(steps >= 8);
-    case.session.deinit();
-    var seen_new = false;
-    for (1..steps + 1) |stop| {
-        errdefer std.debug.print("crash after step {d}\n", .{stop});
-        try snapshots.restore(stop);
-        const report = try disk.recover(testing.allocator, testing.io, case.repo.root_abs);
-        try testing.expectEqual(@as(usize, 0), report.failed);
-        const old = isOld(&case);
-        const new = isNew(&case);
-        try testing.expect(old != new);
-        if (new) seen_new = true;
-        if (seen_new) try testing.expect(new);
-    }
-    try testing.expect(seen_new);
+    const outcomes = try crash_steps.everyStepOutcomes(MoveFile, {}, 8);
+    defer testing.allocator.free(outcomes);
+    try crash_steps.expectNoWayBack(outcomes);
+}
+
+test "move file crash: the tool's move cut for real at every step recovers to all old or all new" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    try crash_steps.expectCutsNoWayBack(MoveFile, {}, 8);
 }
