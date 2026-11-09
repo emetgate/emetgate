@@ -44,6 +44,23 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr window, uint
         return $true
     }
 
+    function Find-OnNewPath([string] $name) {
+        $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+        foreach ($entry in ("$machine;$user" -split ';')) {
+            if ($entry -eq '') { continue }
+            foreach ($ext in @('.exe', '.cmd', '.bat')) {
+                try {
+                    $candidate = Join-Path ([Environment]::ExpandEnvironmentVariables($entry)) ($name + $ext)
+                    if (Test-Path -LiteralPath $candidate -PathType Leaf) { return [IO.Path]::GetFullPath($candidate) }
+                } catch {
+                    continue
+                }
+            }
+        }
+        return $null
+    }
+
     try {
         New-Item -ItemType Directory -Force -Path $stage | Out-Null
         foreach ($name in $assets) {
@@ -82,6 +99,12 @@ public static extern System.IntPtr SendMessageTimeout(System.IntPtr window, uint
 
         Write-Host "$version installed in $dir"
         if ($added) { Write-Host "Added $dir to your user PATH." } else { Write-Host "$dir is already on your user PATH." }
+        $first = Find-OnNewPath 'emetgate'
+        if ($first -and ($first -ine [IO.Path]::GetFullPath($exe))) {
+            Write-Host ''
+            Write-Host "Warning: a new terminal will run $first, not this install, because its folder comes first on PATH." -ForegroundColor Yellow
+            Write-Host "Remove $(Split-Path -Parent $first) from PATH, or delete that copy, to run $version." -ForegroundColor Yellow
+        }
         Write-Host ''
         Write-Host 'Next steps:'
         Write-Host '  1. Open a new terminal.'
