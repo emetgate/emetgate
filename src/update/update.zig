@@ -278,6 +278,10 @@ pub const Outcome = union(enum) {
     }
 };
 
+pub fn writeDownloading(writer: *std.Io.Writer, current: []const u8, latest: Version, arrow: []const u8) std.Io.Writer.Error!void {
+    try writer.print("emetgate {s} {s} {f}: downloading the signed release\n", .{ current, arrow, latest });
+}
+
 pub fn arrowFor(code_page: u32) []const u8 {
     return if (code_page == 0 or code_page == 65001) "\u{2192}" else "->";
 }
@@ -291,6 +295,7 @@ pub const Updater = struct {
     key: ?[32]u8,
     latest_url: []const u8 = latest_url,
     download_base: []const u8 = download_base,
+    on_download: ?*const fn (latest: Version) void = null,
 
     pub fn run(self: Updater) Outcome {
         const current = Version.parse(self.current) orelse return .not_a_release_build;
@@ -305,6 +310,7 @@ pub const Updater = struct {
         };
         if (version.order(current) != .gt) return .{ .up_to_date = version };
 
+        if (self.on_download) |announce| announce(version);
         const exe = self.download(version, exe_asset, max_exe_bytes) catch |err| return .{ .download_failed = err };
         defer self.gpa.free(exe);
         const signature = self.download(version, sig_asset, max_sig_bytes) catch |err| return .{ .download_failed = err };

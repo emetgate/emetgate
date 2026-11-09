@@ -324,7 +324,15 @@ fn updaterFor(runtime: *Runtime, files: *self_update.Disk, exe_path: []const u8)
         .exe_path = exe_path,
         .current = server.server_version,
         .key = self_update.release_key,
+        .on_download = announceDownload,
     };
+}
+
+fn announceDownload(latest: self_update.Version) void {
+    var buffer: [160]u8 = undefined;
+    var writer: std.Io.Writer = .fixed(&buffer);
+    self_update.writeDownloading(&writer, server.server_version, latest, self_update.arrowFor(doctor.consoleCodePage())) catch {};
+    std.debug.print("{s}", .{writer.buffered()});
 }
 
 fn autoUpdate(init: std.process.Init, runtime: *Runtime) void {

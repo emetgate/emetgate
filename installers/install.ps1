@@ -4,7 +4,7 @@
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
     $base = 'https://github.com/emetgate/emetgate/releases/latest/download'
-    $assets = @('emetgate.exe', 'emetgate.exe.sha256', 'emetgate.exe.sig')
+    $assets = @('emetgate.exe', 'emetgate.exe.sha256')
     $dir = Join-Path $env:LOCALAPPDATA 'Programs\emetgate'
     $exe = Join-Path $dir 'emetgate.exe'
     $old = Join-Path $dir 'emetgate.old.exe'

@@ -10,7 +10,7 @@ From download to a locked Claude Code session in five steps. Windows 10/11 only.
 irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
 
-It downloads `emetgate.exe`, `emetgate.exe.sha256` and `emetgate.exe.sig` from the [latest release](https://github.com/emetgate/emetgate/releases/latest), stops with an error and installs nothing when the SHA256 does not match, and puts `emetgate.exe` in `%LOCALAPPDATA%\Programs\emetgate`.
+It downloads `emetgate.exe` and `emetgate.exe.sha256` from the [latest release](https://github.com/emetgate/emetgate/releases/latest), stops with an error and installs nothing when the SHA256 does not match, and puts `emetgate.exe` in `%LOCALAPPDATA%\Programs\emetgate`.
 
 From then on `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours and install it only when its Ed25519 signature matches the key built into emetgate; the line `emetgate 0.8.0 → 0.9.0 updated` says it happened. Run `emetgate update` to do it now. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
 

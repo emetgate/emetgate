@@ -210,6 +210,12 @@ test "self update: the automatic check runs at most once per 24 hours and record
     try testing.expectEqual(@as(u32, 2_000), update.check_deadline_ms);
 }
 
+threadlocal var announced: ?update.Version = null;
+
+fn recordAnnounce(latest: update.Version) void {
+    announced = latest;
+}
+
 test "self update: a release signed by the release key replaces the exe and keeps the old one as emetgate.old.exe" {
     var folder = try Folder.init();
     defer folder.deinit();
@@ -217,8 +223,16 @@ test "self update: a release signed by the release key replaces the exe and keep
     const served = servedRelease(&signed.signature);
     var fetch: FakeFetch = .{ .served = &served };
     var faulty: Faulty = .{};
-    const outcome = folder.updater(&fetch, &faulty, signed.key).run();
+    announced = null;
+    var updater = folder.updater(&fetch, &faulty, signed.key);
+    updater.on_download = recordAnnounce;
+    const outcome = updater.run();
     try testing.expect(outcome == .updated);
+    try testing.expectEqual(std.math.Order.eq, announced.?.order(update.Version.parse("0.9.0").?));
+    var said: [128]u8 = undefined;
+    var said_writer: std.Io.Writer = .fixed(&said);
+    try update.writeDownloading(&said_writer, "0.8.0", announced.?, "->");
+    try testing.expectEqualStrings("emetgate 0.8.0 -> 0.9.0: downloading the signed release\n", said_writer.buffered());
     try testing.expectEqual(std.math.Order.eq, outcome.updated.order(update.Version.parse("0.9.0").?));
     try folder.expectContent("emetgate.exe", new_image);
     try folder.expectContent(update.old_name, old_image);
@@ -438,8 +452,12 @@ test "self update: a prerelease or a draft is skipped without a download" {
         const served = [_]Served{ .{ .suffix = "/releases/latest", .body = body }, .{ .suffix = "/emetgate.exe", .body = new_image }, .{ .suffix = "/emetgate.exe.sig", .body = &signed.signature } };
         var fetch: FakeFetch = .{ .served = &served };
         var faulty: Faulty = .{};
-        const outcome = folder.updater(&fetch, &faulty, signed.key).run();
+        announced = null;
+        var updater = folder.updater(&fetch, &faulty, signed.key);
+        updater.on_download = recordAnnounce;
+        const outcome = updater.run();
         try testing.expect(outcome == .prerelease);
+        try testing.expect(announced == null);
         try testing.expectEqual(@as(usize, 1), fetch.calls);
         try folder.expectContent("emetgate.exe", old_image);
     }

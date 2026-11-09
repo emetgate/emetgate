@@ -19255,6 +19255,16 @@
         "self update: a build without a release key never downloads, and the placeholder key file is no key"
       ],
       "note": "a build without the release key would reach the network"
+    },
+    {
+      "id": "UPD10-download-not-announced",
+      "file": "src/update/update.zig",
+      "from": "        if (self.on_download) |announce| announce(version);\n",
+      "to": "",
+      "kills": [
+        "self update: a release signed by the release key replaces the exe and keeps the old one as emetgate.old.exe"
+      ],
+      "note": "lockdown would wait for a 20 MB download without a word"
     }
   ]
 }
