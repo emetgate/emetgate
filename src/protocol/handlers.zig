@@ -43,6 +43,7 @@ const tool_names = @import("../engine/tool_names.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
 const git_commit = @import("../platform/git_commit.zig");
+const known_files = @import("known_files.zig");
 const file_edit = @import("../platform/file_edit.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
@@ -1044,7 +1045,7 @@ fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may
     };
 }
 
-pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new file ({file, hash, content} with its file_hash overwrites an existing one); they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them. After a branch or commit, after names the branch checked out and whether the work tree is clean.";
+pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new file or for a file this session wrote or a run reported, while it is unchanged ({file, hash, content} with its file_hash overwrites any other existing file); they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them. After a branch or commit, after names the branch checked out and whether the work tree is clean.";
 
 pub const change_missing = "edits, commit or branch";
 
@@ -1072,14 +1073,16 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         if (reply.is_error) failed = "branch";
     }
     if (failed == null) if (edits) |list| {
+        const root = policy.root orelse ".";
         var batch: std.json.ObjectMap = .empty;
-        try batch.put(arena, "edits", list);
+        try batch.put(arena, "edits", if (policy.known_files) |known| try withKnownHashes(arena, io, root, list, known) else list);
         if (policy.commit) if (getString(arguments, "message") orelse message) |text| try batch.put(arena, "message", .{ .string = text });
         const forgiven = try forgive.normalize(arena, "emetgate_try_batch", .{ .object = batch });
         const reply = try callTryBatch(gpa, io, runtime, forgiven.args, event, policy);
         defer gpa.free(reply.text);
         try changeStep(arena, &js, "edits", reply.text);
         if (reply.is_error) failed = "edits";
+        if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);
     };
     const committed_with_edits = policy.commit and edits != null;
     if (failed == null and !committed_with_edits) if (message) |text| {
@@ -1098,6 +1101,38 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
 }
+
+fn withKnownHashes(arena: Allocator, io: std.Io, root: []const u8, list: Value, known: *known_files.KnownFiles) !Value {
+    var out = std.json.Array.init(arena);
+    for (list.array.items) |item| {
+        try out.append(try withKnownHash(arena, io, root, item, known));
+    }
+    return .{ .array = out };
+}
+
+fn withKnownHash(arena: Allocator, io: std.Io, root: []const u8, item: Value, known: *known_files.KnownFiles) !Value {
+    if (item != .object or getField(item, "hash") != null or getString(item, "content") == null) return item;
+    const file = getString(item, "file") orelse return item;
+    const abs = try std.fs.path.resolve(arena, &.{ root, file });
+    const known_hash = known.get(abs) orelse return item;
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(max_known_bytes)) catch return item;
+    if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) return item;
+    var copy = try item.object.clone(arena);
+    const hex = symbol.formatHash(known_hash);
+    try copy.put(arena, "hash", .{ .string = try arena.dupe(u8, &hex) });
+    return .{ .object = copy };
+}
+
+fn noteWritten(arena: Allocator, io: std.Io, root: []const u8, list: Value, known: *known_files.KnownFiles) !void {
+    for (list.array.items) |item| {
+        const file = getString(item, "file") orelse continue;
+        const abs = try std.fs.path.resolve(arena, &.{ root, file });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(max_known_bytes)) catch continue;
+        try known.note(abs, symbol.fileHash(bytes));
+    }
+}
+
+const max_known_bytes = 64 << 20;
 
 fn withoutNoOps(arena: Allocator, list: std.json.Array) !?Value {
     var kept = std.json.Array.init(arena);

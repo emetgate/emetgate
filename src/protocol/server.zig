@@ -21,6 +21,7 @@ const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const known_files_mod = @import("known_files.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const batch_stage_mod = @import("batch_stage.zig");
@@ -307,6 +308,7 @@ pub const Served = struct {
     workspace: ?[]u8,
     observer: ?telemetry.Observer,
     mirror: mirror_mod.Mirror,
+    known_files: known_files_mod.KnownFiles,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
     search: search_session_mod.Session,
@@ -334,6 +336,7 @@ pub const Served = struct {
             .workspace = workspace,
             .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
             .mirror = .init(gpa, policy.mirror_enabled),
+            .known_files = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
@@ -346,6 +349,7 @@ pub const Served = struct {
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
+        self.policy.known_files = &self.known_files;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
         self.policy.search_session = &self.search;
@@ -380,6 +384,7 @@ pub const Served = struct {
         self.search.deinit();
         self.tree_cache.deinit();
         self.mirror.deinit();
+        self.known_files.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
         if (self.root) |r| self.gpa.free(r);

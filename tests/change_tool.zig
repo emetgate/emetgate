@@ -4,6 +4,7 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const telemetry = @import("emetgate").telemetry;
 const Runtime = @import("emetgate").runtime.Runtime;
+const KnownFiles = @import("emetgate").known_files.KnownFiles;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -72,6 +73,7 @@ const Repo = struct {
     root_abs: [:0]u8,
     workspace_abs: []u8,
     runtime: *Runtime,
+    known: KnownFiles,
 
     fn init() !Repo {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -86,10 +88,11 @@ const Repo = struct {
         try git(root_abs, &.{ "commit", "-q", "-m", "init" });
         const workspace_abs = try std.fmt.allocPrint(gpa, "{s}\\.emetgate", .{root_abs});
         errdefer gpa.free(workspace_abs);
-        return .{ .tmp = tmp, .root_abs = root_abs, .workspace_abs = workspace_abs, .runtime = try Runtime.create(gpa) };
+        return .{ .tmp = tmp, .root_abs = root_abs, .workspace_abs = workspace_abs, .runtime = try Runtime.create(gpa), .known = .init(gpa) };
     }
 
     fn deinit(self: *Repo) void {
+        self.known.deinit();
         self.runtime.destroy() catch @panic("live snapshots");
         gpa.free(self.workspace_abs);
         gpa.free(self.root_abs);
@@ -108,7 +111,7 @@ const Repo = struct {
         var out: std.Io.Writer.Allocating = .init(gpa);
         errdefer out.deinit();
         var observer: telemetry.Observer = .{ .workspace_abs = self.workspace_abs };
-        _ = try server.handleMessageObserved(gpa, testing.io, self.runtime, line.written(), &out.writer, &observer, .{ .root = self.root_abs, .test_command = test_command });
+        _ = try server.handleMessageObserved(gpa, testing.io, self.runtime, line.written(), &out.writer, &observer, .{ .root = self.root_abs, .test_command = test_command, .known_files = &self.known });
         return out.toOwnedSlice();
     }
 
@@ -383,4 +386,43 @@ test "emetgate_git_write commit -a -m with an untracked file is run by git and l
     try testing.expect(!reply.is_error);
     try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "src/app.js");
     try repo.expectGit(&.{ "status", "--porcelain" }, "?? notes.txt");
+}
+
+test "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const add = try repo.path("src\\add.js");
+    defer gpa.free(add);
+    var first = try repo.call(.{ .edits = .{.{ .file = add, .content = "export const add = (a, b) => a + b;\n" }} }, "cmd /c exit 0");
+    defer first.deinit();
+    try testing.expect(!first.is_error);
+    var second = try repo.call(.{ .edits = .{.{ .file = add, .content = "export const add = (a, b) => b + a;\n" }} }, "cmd /c exit 0");
+    defer second.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{second.text});
+    try testing.expect(!second.is_error);
+    try second.expectStatus("applied");
+    try repo.expectFile("src/add.js", "export const add = (a, b) => b + a;\n");
+}
+
+test "emetgate_change still asks for the hash of a file that changed on disk after the session wrote it, and of a file it never wrote" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const add = try repo.path("src\\add.js");
+    defer gpa.free(add);
+    var first = try repo.call(.{ .edits = .{.{ .file = add, .content = "export const add = (a, b) => a + b;\n" }} }, "cmd /c exit 0");
+    defer first.deinit();
+    try testing.expect(!first.is_error);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/add.js", .data = "changed by the user\n" });
+    var stale = try repo.call(.{ .edits = .{.{ .file = add, .content = "export const add = (a, b) => b + a;\n" }} }, "cmd /c exit 0");
+    defer stale.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{stale.text});
+    try testing.expect(stale.is_error);
+    try testing.expect(std.mem.indexOf(u8, stale.text, "FileExists") != null);
+    try repo.expectFile("src/add.js", "changed by the user\n");
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    var unseen = try repo.call(.{ .edits = .{.{ .file = app, .content = "export const total = 0;\n" }} }, "cmd /c exit 0");
+    defer unseen.deinit();
+    try testing.expect(unseen.is_error);
+    try repo.expectFile("src/app.js", app_js);
 }

@@ -6,6 +6,7 @@ const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
 const symbol = @import("../engine/symbol.zig");
+const known_files = @import("known_files.zig");
 const open_shell = @import("../platform/open_shell.zig");
 const commit_guard = @import("../platform/commit_guard.zig");
 const sandbox_env = @import("../platform/sandbox.zig");
@@ -178,6 +179,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
         try js.objectField("files_changed");
         try js.write(ran.changed);
         try writeChangedFiles(&js, ran.files);
+        if (policy.known_files) |files| try noteChangedFiles(gpa, root_abs, ran.files, files);
         if (ran.receipt) |id| {
             try js.objectField("receipt");
             try js.write(&id);
@@ -369,6 +371,15 @@ pub fn shapedOutput(gpa: Allocator, arena: Allocator, report: sandbox.Report, sh
     const gap: []const u8 = if (cut.text.len == 0 or cut.text[cut.text.len - 1] == '\n') "" else "\n";
     const text = try std.fmt.allocPrint(gpa, "{s}{s}[emetgate: {d} git noise lines dropped (line-ending warnings, hints, progress); {s}]", .{ cut.text, gap, dropped, run_trim.raw_hint });
     return .{ .text = text, .cut = true };
+}
+
+pub fn noteChangedFiles(gpa: Allocator, root_abs: []const u8, files: []const run_command.ChangedFile, known: *known_files.KnownFiles) !void {
+    for (files) |file| {
+        const hash = file.file_hash orelse continue;
+        const abs = try std.fs.path.join(gpa, &.{ root_abs, file.rel });
+        defer gpa.free(abs);
+        try known.note(abs, hash);
+    }
 }
 
 pub fn writeChangedFiles(js: *std.json.Stringify, files: []const run_command.ChangedFile) !void {

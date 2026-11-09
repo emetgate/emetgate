@@ -175,6 +175,7 @@ pub const open_run = src.open_run;
 pub const read_tools = src.read_tools;
 pub const read_budget = src.read_budget;
 pub const mirror = src.mirror;
+pub const known_files = src.known_files;
 pub const context_epoch = src.context_epoch;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;

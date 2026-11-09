@@ -506,10 +506,6 @@ fn measure(git: Git, tree: []const TreeEntry, seen: Survey, out: ?*std.ArrayList
                 try keep(gpa, out, path, symbol.hashOf(bytes), in_head, index_entry.oid);
                 continue;
             }
-            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and std.mem.eql(u8, index_entry.oid, try storedOid(git, plain, path, bytes))) {
-                try keep(gpa, out, path, symbol.hashOf(bytes), in_head, index_entry.oid);
-                continue;
-            }
             if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.mem.eql(u8, index_entry.mode, head_entry.mode)) return error.TargetHasUncommittedChanges;
             // `pre_written` callers (emetgate commit) commit content a gate already
             // wrote into the working tree, so the working-tree copy is expected to

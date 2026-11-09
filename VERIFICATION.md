@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2913**
-- Mutations declared in `tests/mutations.json`: **2014**
-  - killed: **1964**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2918**
+- Mutations declared in `tests/mutations.json`: **2016**
+  - killed: **1966**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1351 mutation(s).
+1353 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2113,10 +2113,12 @@ python tools/verification_page.py --check
 | `MCH7-change-reports-no-after` | `src/protocol/handlers.zig` | `if (failed == null and (branch != null or message != null)) try...` -> `` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
 | `MCH8-after-counts-own-workspace` | `src/platform/git_commit.zig` | `if (!ownWorkspace(std.mem.trim(u8, line[3..], "\""))) return fa...` -> `return false;` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
 | `RUN1-run-names-no-changed-files` | `src/platform/run_command.zig` | `ran.files = try namedChanges(gpa, io, changes);` -> `` | open run: a command that writes files reports files_changed with a receipt | killed |
-| `MCH9-change-sends-no-op-edits` | `src/protocol/handlers.zig` | `if (old != null and new != null and old.?.len != 0 and std.mem....` -> `` | emetgate_change skips an edit whose old_string equals its new_string and writes... | killed |
+| `MCH9-change-sends-no-op-edits` | `src/protocol/handlers.zig` | `if (old != null and new != null and old.?.len != 0 and std.mem....` -> `_ = .{ old, new };` | emetgate_change skips an edit whose old_string equals its new_string and writes... | killed |
 | `GW1-git-write-commit-skips-the-gate` | `src/protocol/handlers.zig` | `if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) ...` -> `` | emetgate_git_write commit -m after git add -A is made by the gated commit, with... | killed |
-| `GW2-git-write-commit-takes-untracked` | `src/platform/git_commit.zig` | `if (line[0] == '?') return false;` -> `` | emetgate_git_write commit -m with a change left unstaged is run by git and comm... | killed |
-| `GC1-staged-copy-equal-to-work-tree-refused` | `src/platform/git_commit.zig` | `if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entr...` -> `if (false) {` | emetgate_git_write commit -m after git add -A is made by the gated commit, with... | killed |
+| `GW2-git-write-commit-takes-untracked` | `src/platform/git_commit.zig` | `if (line[0] == '?') return false;` -> `` | emetgate_git_write commit -a -m with an untracked file is run by git and leaves... | killed |
+| `KF1-change-ignores-known-files` | `src/protocol/handlers.zig` | `try batch.put(arena, "edits", if (policy.known_files) \|known\|...` -> `try batch.put(arena, "edits", list);` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
+| `KF2-known-hash-not-compared-with-disk` | `src/protocol/handlers.zig` | `if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) ret...` -> `` | emetgate_change still asks for the hash of a file that changed on disk after th... | killed |
+| `KF3-written-files-not-noted` | `src/protocol/handlers.zig` | `if (!reply.is_error) if (policy.known_files) \|known\| try note...` -> `` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
 
 ## What this system does not prove
 

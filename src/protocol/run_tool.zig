@@ -14,6 +14,7 @@ const toolchain = @import("../platform/toolchain.zig");
 const output_digest = @import("output_digest.zig");
 const receipt_note = @import("receipt_note.zig");
 const open_run = @import("open_run.zig");
+const known_files = @import("known_files.zig");
 const frozen_hold = @import("../platform/frozen_hold.zig");
 
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -98,7 +99,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     defer if (project) |local| gpa.free(local);
     const entry = switch (run_command.check(allowed, command)) {
         .refused => |why| refused: {
-            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);
+            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event, policy.known_files);
             if (why == .not_allowed and run_command.isProjectCommand(gpa, io, root_abs, command)) {
                 project = try run_command.localCommand(gpa, command);
                 break :refused project.?;
@@ -131,7 +132,7 @@ fn render(gpa: Allocator, io: std.Io, requested: ?[]const u8, args: ?Value, poli
     return false;
 }
 
-fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, allowed: []const []const u8, w: *Writer, event: *telemetry.Event) !bool {
+fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, allowed: []const []const u8, w: *Writer, event: *telemetry.Event, known: ?*known_files.KnownFiles) !bool {
     const ran = run_command.runInRepo(gpa, io, root_abs, command, run_command.toolchain_limits, receipt_note.version) catch |err| switch (err) {
         error.SandboxUnavailable => {
             event.fail("SandboxUnavailable");
@@ -160,6 +161,7 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
         defer gpa.free(field);
         try receipt_note.insert(gpa, w, field);
         try insertChangedFiles(gpa, w, ran.files);
+        if (known) |files| try open_run.noteChangedFiles(gpa, root_abs, ran.files, files);
     } else if (ran.receipt_error) |err| {
         const field = try std.fmt.allocPrint(gpa, ",\"receipt_error\":\"{t}\"", .{err});
         defer gpa.free(field);

@@ -19307,14 +19307,34 @@
       "note": "git commit -m would sweep in an untracked file the user did not stage"
     },
     {
-      "id": "GC1-staged-copy-equal-to-work-tree-refused",
-      "file": "src/platform/git_commit.zig",
-      "from": "            if (pre_written and !std.mem.eql(u8, index_entry.oid, head_entry.oid) and std.mem.eql(u8, index_entry.mode, head_entry.mode) and std.mem.eql(u8, index_entry.oid, try storedOid(git, plain, path, bytes))) {\n",
-      "to": "            if (false) {\n",
+      "id": "KF1-change-ignores-known-files",
+      "file": "src/protocol/handlers.zig",
+      "from": "        try batch.put(arena, \"edits\", if (policy.known_files) |known| try withKnownHashes(arena, io, root, list, known) else list);\n",
+      "to": "        try batch.put(arena, \"edits\", list);\n",
       "kills": [
-        "emetgate_git_write commit -m commits a tracked file changed outside the gate once git add staged it as it is on disk"
+        "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash"
       ],
-      "note": "after git add -A the gated commit would refuse a staged copy that is the very content it commits"
+      "note": "a whole-file rewrite of a file the model wrote itself would be refused and sent again with its hash"
+    },
+    {
+      "id": "KF2-known-hash-not-compared-with-disk",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) return item;\n",
+      "to": "",
+      "kills": [
+        "emetgate_change still asks for the hash of a file that changed on disk after the session wrote it, and of a file it never wrote"
+      ],
+      "note": "a file the user changed after the session wrote it would be overwritten unseen"
+    },
+    {
+      "id": "KF3-written-files-not-noted",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);\n",
+      "to": "",
+      "kills": [
+        "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash"
+      ],
+      "note": "the session would forget what it wrote and ask for hashes it already knows"
     }
   ]
 }
