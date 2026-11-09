@@ -12,6 +12,7 @@ const frozen_hold = @import("frozen_hold.zig");
 const command_danger = @import("command_danger.zig");
 const low_run = @import("low_run.zig");
 const receipt = @import("../verify/receipt.zig");
+const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -336,13 +337,46 @@ pub fn localCommand(gpa: Allocator, command: []const u8) ![]u8 {
     return owned;
 }
 
+pub const ChangedFile = struct {
+    rel: []u8,
+    file_hash: ?symbol.Hash,
+};
+
+pub const max_named_changes = 20;
+
 pub const RepoRun = struct {
     report: sandbox.Report,
     changed: usize = 0,
+    files: []ChangedFile = &.{},
     receipt: ?[64]u8 = null,
     receipt_error: ?anyerror = null,
     frozen: frozen_hold.Report = .{},
+
+    pub fn deinitFiles(self: RepoRun, gpa: Allocator) void {
+        for (self.files) |file| gpa.free(file.rel);
+        gpa.free(self.files);
+    }
 };
+
+fn namedChanges(gpa: Allocator, io: std.Io, changes: []const receipts.FileChange) ![]ChangedFile {
+    const count = @min(changes.len, max_named_changes);
+    var files = try std.ArrayList(ChangedFile).initCapacity(gpa, count);
+    errdefer {
+        for (files.items) |file| gpa.free(file.rel);
+        files.deinit(gpa);
+    }
+    for (changes[0..count]) |change| {
+        const file_hash: ?symbol.Hash = if (change.after_abs) |abs| hashed: {
+            const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_hashed_bytes)) catch break :hashed null;
+            defer gpa.free(bytes);
+            break :hashed symbol.fileHash(bytes);
+        } else null;
+        const rel = try gpa.dupe(u8, change.rel);
+        std.mem.replaceScalar(u8, rel, '\\', '/');
+        files.appendAssumeCapacity(.{ .rel = rel, .file_hash = file_hash });
+    }
+    return files.toOwnedSlice(gpa);
+}
 
 pub fn runInRepo(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u8, limits: sandbox.Limits, version: []const u8) !RepoRun {
     if (!isToolchainIn(io, root_abs, command)) return error.RunCommandRefused;
@@ -424,6 +458,7 @@ fn recorded(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const u
         return ran;
     };
     ran.changed = changes.len;
+    ran.files = try namedChanges(gpa, io, changes);
     if (changes.len == 0 or !clean or !ran.frozen.held()) return ran;
     const written = receipts.write(gpa, io, root_abs, .{
         .operation = .run,

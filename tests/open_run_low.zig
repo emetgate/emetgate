@@ -111,6 +111,7 @@ test "outside lockdown a run writes outside the repository with the user's right
     const ran = try run_command.runOpenInRepo(gpa, testing.io, repo.root_abs, shell, command, .{}, "test", .{});
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     try testing.expect(ran.report.passed());
     try testing.expect(repo.exists("outside_user.txt"));
 }

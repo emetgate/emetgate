@@ -198,11 +198,7 @@ fn backslashed(arena: Allocator, rel: []const u8) ![]u8 {
 }
 
 /// Build one commit from the pending gated changes.
-fn ownWorkspace(rel: []const u8) bool {
-    const dir = shadow.workspace_dir;
-    if (rel.len < dir.len or !std.ascii.eqlIgnoreCase(rel[0..dir.len], dir)) return false;
-    return rel.len == dir.len or rel[dir.len] == '\\' or rel[dir.len] == '/';
-}
+const ownWorkspace = git_commit.ownWorkspace;
 
 fn addOutside(arena: Allocator, io: std.Io, root: []const u8, changes: *std.ArrayList(commit_plan.Change), rels: *std.ArrayList([]const u8), written: *std.ArrayList([]const Hash)) !void {
     const listed = (try receipts.git(arena, io, root, &.{ "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames" })) orelse return;

@@ -147,6 +147,7 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
     };
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     recordExit(event, ran.report);
     try writeRan(gpa, io, root_abs, w, command, ran.report, null, "repo");
     if (ran.changed != 0) {
@@ -158,6 +159,7 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
             try std.fmt.allocPrint(gpa, ",\"files_changed\":{d}", .{ran.changed});
         defer gpa.free(field);
         try receipt_note.insert(gpa, w, field);
+        try insertChangedFiles(gpa, w, ran.files);
     } else if (ran.receipt_error) |err| {
         const field = try std.fmt.allocPrint(gpa, ",\"receipt_error\":\"{t}\"", .{err});
         defer gpa.free(field);
@@ -166,6 +168,19 @@ fn runToolchain(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []con
     try insertFrozen(gpa, w, ran.frozen);
     if (!ran.frozen.held()) event.fail("FrozenNotRestored");
     return !ran.frozen.held();
+}
+
+fn insertChangedFiles(gpa: Allocator, w: *Writer, files: []const run_command.ChangedFile) !void {
+    if (files.len == 0) return;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    try open_run.writeChangedFiles(&js, files);
+    try js.endObject();
+    const text = out.written();
+    text[0] = ',';
+    try receipt_note.insert(gpa, w, text[0 .. text.len - 1]);
 }
 
 fn insertFrozen(gpa: Allocator, w: *Writer, frozen: frozen_hold.Report) !void {

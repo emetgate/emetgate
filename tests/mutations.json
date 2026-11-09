@@ -19245,6 +19245,36 @@
         "emetgate_change commits a gated edit and a file written outside the gate in one commit with one receipt"
       ],
       "note": "the change reply would say committed for a write and lead the model to think a git commit was made"
+    },
+    {
+      "id": "MCH7-change-reports-no-after",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);\n",
+      "to": "",
+      "kills": [
+        "emetgate_change creates and switches to the branch, writes the edits and commits every change with the message"
+      ],
+      "note": "without after the model runs git status and git log once more after every commit to learn the branch and whether the tree is clean"
+    },
+    {
+      "id": "MCH8-after-counts-own-workspace",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (!ownWorkspace(std.mem.trim(u8, line[3..], \"\\\"\"))) return false;\n",
+      "to": "        return false;\n",
+      "kills": [
+        "emetgate_change creates and switches to the branch, writes the edits and commits every change with the message"
+      ],
+      "note": "emetgate's own .emetgate folder would make every committed tree look unclean"
+    },
+    {
+      "id": "RUN1-run-names-no-changed-files",
+      "file": "src/platform/run_command.zig",
+      "from": "    ran.files = try namedChanges(gpa, io, changes);\n",
+      "to": "",
+      "kills": [
+        "open run: a command that writes files reports files_changed with a receipt"
+      ],
+      "note": "without the names and file_hash of the files a command wrote, the model reads each one again before it can overwrite it"
     }
   ]
 }

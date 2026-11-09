@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2908**
-- Mutations declared in `tests/mutations.json`: **2007**
-  - killed: **1957**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2910**
+- Mutations declared in `tests/mutations.json`: **2010**
+  - killed: **1960**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1344 mutation(s).
+1347 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2110,6 +2110,9 @@ python tools/verification_page.py --check
 | `MCH3-commit-takes-own-workspace` | `src/platform/commit_group.zig` | `if (ownWorkspace(rel)) continue;` -> `` | emetgate_change with only a commit message commits the work tree as it is | killed |
 | `MCH5-tools-list-serves-legacy` | `src/protocol/server.zig` | `if (!legacy and isLegacy(listed.name)) continue;` -> `` | tools/list hides the tools emetgate_change replaces and serves them again with ... | killed |
 | `MCH6-change-reports-committed` | `src/protocol/handlers.zig` | `if (status.* == .string and std.mem.eql(u8, status.string, wire...` -> `_ = status;` | emetgate_change commits a gated edit and a file written outside the gate in one... | killed |
+| `MCH7-change-reports-no-after` | `src/protocol/handlers.zig` | `if (failed == null and (branch != null or message != null)) try...` -> `` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
+| `MCH8-after-counts-own-workspace` | `src/platform/git_commit.zig` | `if (!ownWorkspace(std.mem.trim(u8, line[3..], "\""))) return fa...` -> `return false;` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
+| `RUN1-run-names-no-changed-files` | `src/platform/run_command.zig` | `ran.files = try namedChanges(gpa, io, changes);` -> `` | open run: a command that writes files reports files_changed with a receipt | killed |
 
 ## What this system does not prove
 

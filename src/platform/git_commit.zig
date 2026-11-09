@@ -677,6 +677,40 @@ fn indexPath(git: Git) ![]const u8 {
     return absOf(git.arena, git.root, listed);
 }
 
+pub const HeadState = struct {
+    branch: ?[]u8,
+    clean: bool,
+
+    pub fn deinit(self: HeadState, gpa: Allocator) void {
+        if (self.branch) |name| gpa.free(name);
+    }
+};
+
+pub fn headState(gpa: Allocator, io: std.Io, root: []const u8) !HeadState {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const git = try Git.init(arena_state.allocator(), io, root);
+    const status = (try git.raw(&.{ "status", "--porcelain=v1", "--untracked-files=normal" })) orelse return error.GitFailed;
+    const ref: ?[]const u8 = branchOf(git) catch null;
+    const branch: ?[]u8 = if (ref) |full| try gpa.dupe(u8, full[branch_prefix.len..]) else null;
+    return .{ .branch = branch, .clean = onlyWorkspace(status) };
+}
+
+fn onlyWorkspace(status: []const u8) bool {
+    var lines = std.mem.tokenizeAny(u8, status, "\r\n");
+    while (lines.next()) |line| {
+        if (line.len < 4) continue;
+        if (!ownWorkspace(std.mem.trim(u8, line[3..], "\""))) return false;
+    }
+    return true;
+}
+
+pub fn ownWorkspace(rel: []const u8) bool {
+    const dir = shadow.workspace_dir;
+    if (rel.len < dir.len or !std.ascii.eqlIgnoreCase(rel[0..dir.len], dir)) return false;
+    return rel.len == dir.len or rel[dir.len] == '\\' or rel[dir.len] == '/';
+}
+
 pub fn currentBranch(gpa: Allocator, io: std.Io, root: []const u8) ![]u8 {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

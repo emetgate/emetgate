@@ -5,6 +5,7 @@ const tool_result = @import("tool_result.zig");
 const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
+const symbol = @import("../engine/symbol.zig");
 const open_shell = @import("../platform/open_shell.zig");
 const commit_guard = @import("../platform/commit_guard.zig");
 const sandbox_env = @import("../platform/sandbox.zig");
@@ -116,6 +117,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     };
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     try audit.finish();
     const broken = audit.findings.items.len != 0;
     switch (ran.report.outcome) {
@@ -175,6 +177,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     if (ran.changed != 0) {
         try js.objectField("files_changed");
         try js.write(ran.changed);
+        try writeChangedFiles(&js, ran.files);
         if (ran.receipt) |id| {
             try js.objectField("receipt");
             try js.write(&id);
@@ -366,4 +369,25 @@ pub fn shapedOutput(gpa: Allocator, arena: Allocator, report: sandbox.Report, sh
     const gap: []const u8 = if (cut.text.len == 0 or cut.text[cut.text.len - 1] == '\n') "" else "\n";
     const text = try std.fmt.allocPrint(gpa, "{s}{s}[emetgate: {d} git noise lines dropped (line-ending warnings, hints, progress); {s}]", .{ cut.text, gap, dropped, run_trim.raw_hint });
     return .{ .text = text, .cut = true };
+}
+
+pub fn writeChangedFiles(js: *std.json.Stringify, files: []const run_command.ChangedFile) !void {
+    if (files.len == 0) return;
+    try js.objectField("files");
+    try js.beginArray();
+    for (files) |file| {
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file.rel);
+        if (file.file_hash) |hash| {
+            const hex = symbol.formatHash(hash);
+            try js.objectField("file_hash");
+            try js.write(hex[0..]);
+        } else {
+            try js.objectField("deleted");
+            try js.write(true);
+        }
+        try js.endObject();
+    }
+    try js.endArray();
 }

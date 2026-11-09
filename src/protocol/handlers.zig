@@ -42,6 +42,7 @@ const test_debt = @import("../platform/test_debt.zig");
 const tool_names = @import("../engine/tool_names.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const repo = @import("../platform/repo.zig");
+const git_commit = @import("../platform/git_commit.zig");
 const file_edit = @import("../platform/file_edit.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
@@ -1040,7 +1041,7 @@ fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may
     };
 }
 
-pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new or whole file; they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them.";
+pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new file ({file, hash, content} with its file_hash overwrites an existing one); they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them. After a branch or commit, after names the branch checked out and whether the work tree is clean.";
 
 pub const change_missing = "edits, commit or branch";
 
@@ -1084,6 +1085,7 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         try changeStep(arena, &js, "commit", made.text);
         if (made.is_error) failed = "commit";
     };
+    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);
     try js.objectField("status");
     try js.write(if (failed == null) "applied" else "stopped");
     if (failed) |step| {
@@ -1092,6 +1094,25 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+fn writeAfter(gpa: Allocator, io: std.Io, js: *std.json.Stringify, policy: Policy) !void {
+    const root = try repo.servedRoot(gpa, io, policy.root);
+    defer gpa.free(root);
+    const state = git_commit.headState(gpa, io, root) catch |err| switch (err) {
+        error.OutOfMemory => return err,
+        else => return,
+    };
+    defer state.deinit(gpa);
+    try js.objectField("after");
+    try js.beginObject();
+    if (state.branch) |name| {
+        try js.objectField("branch");
+        try js.write(name);
+    }
+    try js.objectField("clean");
+    try js.write(state.clean);
+    try js.endObject();
 }
 
 fn gitArgs(arena: Allocator, words: []const []const u8) !Value {

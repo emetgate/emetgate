@@ -27,6 +27,15 @@ const Reply = struct {
         return std.json.parseFromSlice(Value, gpa, self.text[0..end], .{});
     }
 
+    fn expectAfter(self: *Reply, branch: []const u8, clean: bool) !void {
+        var parsed = try self.body();
+        defer parsed.deinit();
+        errdefer std.debug.print("reply: {s}\n", .{self.text});
+        const after = parsed.value.object.get("after").?.object;
+        try testing.expectEqualStrings(branch, after.get("branch").?.string);
+        try testing.expectEqual(clean, after.get("clean").?.bool);
+    }
+
     fn expectStatus(self: *Reply, status: []const u8) !void {
         var parsed = try self.body();
         defer parsed.deinit();
@@ -200,6 +209,7 @@ test "emetgate_change creates and switches to the branch, writes the edits and c
     try testing.expect(!reply.is_error);
     try reply.expectStatus("applied");
     try repo.expectGit(&.{ "rev-parse", "--abbrev-ref", "HEAD" }, "feature/health");
+    try reply.expectAfter("feature/health", true);
     try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "Add health endpoint");
     try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "notes.txt\nsrc/health.js");
     try repo.expectGit(&.{ "status", "--porcelain" }, "");
@@ -262,4 +272,29 @@ test "emetgate_change commits a gated edit and a file written outside the gate i
     try testing.expectEqual(@as(i64, 1), commit.get("receipts").?.integer);
     try repo.expectGit(&.{ "show", "--name-only", "--format=", "HEAD" }, "package.json\nsrc/app.js");
     try repo.expectGit(&.{ "status", "--porcelain" }, "");
+}
+
+test "emetgate_change after a branch alone names the new branch and says the work tree still holds the uncommitted file" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.txt", .data = "made outside\n" });
+    var reply = try repo.call(.{ .branch = "feature/notes" }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try reply.expectAfter("feature/notes", false);
+}
+
+test "emetgate_change leaves after out when it only writes edits" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"after\"") == null);
 }

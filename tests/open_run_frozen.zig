@@ -291,6 +291,7 @@ test "frozen hold: a toolchain command is held the same way" {
     const ran = run_command.runInRepo(gpa, testing.io, env.repo.root_abs, "npm init -y", run_command.toolchain_limits, "test") catch return error.SkipZigTest;
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     if (!ran.report.passed()) return error.SkipZigTest;
     try testing.expect(env.missing("package.json"));
     try testing.expectEqual(@as(usize, 1), ran.frozen.restored.len);
@@ -344,6 +345,7 @@ test "frozen hold: outside lockdown a command that rewrites the gate config keep
     const ran = try run_command.runOpenInRepo(gpa, testing.io, env.repo.root_abs, shell, gate_command, .{}, "test", .{});
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     try testing.expect(ran.report.passed());
     try testing.expectEqual(@as(usize, 0), ran.frozen.restored.len);
     try env.expectFile(".mcp.json", "{}\n");
