@@ -437,6 +437,7 @@ pub fn detectTypecheckIn(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[]u
     defer dir.close(io);
     if (try mypyCommand(gpa, io, dir)) |command| return command;
     if (try pyrightCommand(gpa, io, dir)) |command| return command;
+    if (try tscCommand(gpa, io, dir)) |command| return command;
     return dotnetBuild(gpa, io, dir);
 }
 
@@ -507,6 +508,12 @@ fn pyrightCommand(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {
     if (dir.access(io, "node_modules\\.bin\\pyright.cmd", .{})) |_| return try gpa.dupe(u8, "node_modules\\.bin\\pyright") else |_| {}
     if (try onPath(gpa, io, &.{ "pyright.exe", "pyright.cmd" })) return try gpa.dupe(u8, "pyright");
     return null;
+}
+
+fn tscCommand(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {
+    dir.access(io, "tsconfig.json", .{}) catch return null;
+    dir.access(io, "node_modules\\.bin\\tsc.cmd", .{}) catch return null;
+    return try gpa.dupe(u8, "node_modules\\.bin\\tsc --noEmit -p .");
 }
 
 fn dotnetBuild(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !?[]u8 {

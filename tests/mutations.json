@@ -19435,6 +19435,36 @@
         "self update: a release signed by the release key replaces the exe and keeps the old one as emetgate.old.exe"
       ],
       "note": "lockdown would wait for a 20 MB download without a word"
+    },
+    {
+      "id": "TSC1-tsc-not-detected",
+      "file": "src/platform/test_command.zig",
+      "from": "    if (try tscCommand(gpa, io, dir)) |command| return command;\n",
+      "to": "",
+      "kills": [
+        "emetgate_change is refused when the project's own tsc, found by its tsconfig.json, reports a type error the change adds"
+      ],
+      "note": "a TypeScript project would have its type errors written to disk unless the user named tsc by hand"
+    },
+    {
+      "id": "TSC2-tsc-without-tsconfig",
+      "file": "src/platform/test_command.zig",
+      "from": "    dir.access(io, \"tsconfig.json\", .{}) catch return null;\n",
+      "to": "",
+      "kills": [
+        "typecheck detection: tsc needs a tsconfig.json at the root and the project's own TypeScript"
+      ],
+      "note": "tsc would run on a project that never configured it and fail every write on its defaults"
+    },
+    {
+      "id": "NT1-no-typecheck-ignored",
+      "file": "src/protocol/policy.zig",
+      "from": "    if (policy.no_typecheck) return \"\";\n",
+      "to": "",
+      "kills": [
+        "typecheck detection: --no-typecheck turns the detected type checker off and refuses a --typecheck beside it"
+      ],
+      "note": "a project whose type check is too slow for every write could not turn it off"
     }
   ]
 }

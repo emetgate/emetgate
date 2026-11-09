@@ -129,6 +129,25 @@ test "typecheck detection: pyright needs both its configuration and a program to
     try expectTypecheck(null, &.{.{ "node_modules/.bin/pyright.cmd", "" }}, &.{});
 }
 
+test "typecheck detection: tsc needs a tsconfig.json at the root and the project's own TypeScript" {
+    const local_tsc: [2][]const u8 = .{ "node_modules/.bin/tsc.cmd", "" };
+    try expectTypecheck("node_modules\\.bin\\tsc --noEmit -p .", &.{ .{ "tsconfig.json", "{}" }, local_tsc }, &.{});
+    try expectTypecheck(null, &.{.{ "tsconfig.json", "{}" }}, &.{"tsc.cmd"});
+    try expectTypecheck(null, &.{local_tsc}, &.{});
+    try expectTypecheck(null, &.{ .{ "src/tsconfig.json", "{}" }, local_tsc }, &.{});
+    try expectTypecheck("node_modules\\.bin\\pyright", &.{ .{ "pyrightconfig.json", "{}" }, .{ "node_modules/.bin/pyright.cmd", "" }, .{ "tsconfig.json", "{}" }, local_tsc }, &.{});
+}
+
+test "typecheck detection: --no-typecheck turns the detected type checker off and refuses a --typecheck beside it" {
+    const off = server.parsePolicy(&[_][]const u8{ "--detect-test", "--no-typecheck" }) orelse return error.TestExpectedPolicy;
+    try testing.expectEqualStrings("", server.trustedTypecheckCommand(off));
+    const on = server.parsePolicy(&[_][]const u8{"--detect-test"}) orelse return error.TestExpectedPolicy;
+    try testing.expect(test_command.detects(server.trustedTypecheckCommand(on)));
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--no-typecheck", "--typecheck", "npx tsc" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--typecheck", "npx tsc", "--no-typecheck" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--no-typecheck", "--no-typecheck" }) == null);
+}
+
 test "typecheck detection: dotnet build needs one project at the root and dotnet on PATH" {
     try expectTypecheck("dotnet build", &.{.{ "App.csproj", "" }}, &.{"dotnet.exe"});
     try expectTypecheck("dotnet build", &.{.{ "App.sln", "" }}, &.{"dotnet.exe"});

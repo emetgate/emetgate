@@ -74,6 +74,7 @@ const Repo = struct {
     workspace_abs: []u8,
     runtime: *Runtime,
     known: KnownFiles,
+    detect: bool = false,
 
     fn init() !Repo {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -111,7 +112,7 @@ const Repo = struct {
         var out: std.Io.Writer.Allocating = .init(gpa);
         errdefer out.deinit();
         var observer: telemetry.Observer = .{ .workspace_abs = self.workspace_abs };
-        _ = try server.handleMessageObserved(gpa, testing.io, self.runtime, line.written(), &out.writer, &observer, .{ .root = self.root_abs, .test_command = test_command, .known_files = &self.known });
+        _ = try server.handleMessageObserved(gpa, testing.io, self.runtime, line.written(), &out.writer, &observer, .{ .root = self.root_abs, .test_command = test_command, .known_files = &self.known, .detect_test = self.detect });
         return out.toOwnedSlice();
     }
 
@@ -425,4 +426,38 @@ test "emetgate_change still asks for the hash of a file that changed on disk aft
     defer unseen.deinit();
     try testing.expect(unseen.is_error);
     try repo.expectFile("src/app.js", app_js);
+}
+
+const fake_tsc =
+    \\@echo off
+    \\findstr /c:"BROKEN_TYPE" src\app.js >nul
+    \\if errorlevel 1 exit /b 0
+    \\echo src/app.js(2,3): error TS2322: Type 'string' is not assignable to type 'number'.
+    \\exit /b 2
+    \\
+;
+
+test "emetgate_change is refused when the project's own tsc, found by its tsconfig.json, reports a type error the change adds" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    repo.detect = true;
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/tsconfig.json", .data = "{}\n" });
+    try repo.tmp.dir.createDirPath(testing.io, "repo/node_modules/.bin");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/node_modules/.bin/tsc.cmd", .data = fake_tsc });
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    var broken = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return a + b; // BROKEN_TYPE" },
+    } }, "cmd /c exit 0");
+    defer broken.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{broken.text});
+    try testing.expect(broken.is_error);
+    try testing.expect(std.mem.indexOf(u8, broken.text, "TS2322") != null);
+    try repo.expectFile("src/app.js", app_js);
+    var fine = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    } }, "cmd /c exit 0");
+    defer fine.deinit();
+    try testing.expect(!fine.is_error);
+    try repo.expectFile("src/app.js", "export function total(a, b) {\n  return b + a;\n}\n");
 }
