@@ -7,8 +7,8 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 ## Numbers
 
 - `test "..."` blocks in `src/`, `tests/`, `tools/`: **2921**
-- Mutations declared in `tests/mutations.json`: **2008**
-  - killed: **1958**
+- Mutations declared in `tests/mutations.json`: **2009**
+  - killed: **1959**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1345 mutation(s).
+1346 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2111,6 +2111,7 @@ python tools/verification_page.py --check
 | `UPD7-draft-installed` | `src/update/update.zig` | `parsed.value.draft or parsed.value.prerelease or` -> `parsed.value.prerelease or` | self update: a prerelease or a draft is skipped without a download | killed |
 | `UPD8-version-not-checked` | `src/update/update.zig` | `if (!self.reports(new, version)) {` -> `if (false) {` | self update: a downloaded exe that does not report the release version is not i... | killed |
 | `UPD9-no-key-still-downloads` | `src/update/update.zig` | `const key = self.key orelse return .no_release_key;` -> `const key = self.key orelse [_]u8{0} ** 32;` | self update: a build without a release key never downloads, and the placeholder... | killed |
+| `UPD10-download-not-announced` | `src/update/update.zig` | `if (self.on_download) \|announce\| announce(version);` -> `` | self update: a release signed by the release key replaces the exe and keeps the... | killed |
 
 ## What this system does not prove
 
