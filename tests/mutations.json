@@ -19320,7 +19320,7 @@
       "id": "KF2-known-hash-not-compared-with-disk",
       "file": "src/protocol/handlers.zig",
       "from": "    if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) return item;\n",
-      "to": "",
+      "to": "    _ = bytes;\n",
       "kills": [
         "emetgate_change still asks for the hash of a file that changed on disk after the session wrote it, and of a file it never wrote"
       ],
