@@ -44,6 +44,17 @@ jobs:
           $hash = (Get-FileHash dist/emetgate.exe -Algorithm SHA256).Hash.ToLower()
           "$hash  emetgate.exe" | Out-File -FilePath dist/emetgate.exe.sha256 -Encoding ascii -NoNewline
           Get-Content dist/emetgate.exe.sha256
+      - run: zig build sign-tool -Doptimize=ReleaseSafe -Dcpu=baseline
+      - name: Sign the binary with the release key
+        shell: pwsh
+        env:
+          EMETGATE_SIGNING_KEY: ${{ secrets.EMETGATE_SIGNING_KEY }}
+        run: |
+          & zig-out/bin/emetgate-sign.exe sign dist/emetgate.exe dist/emetgate.exe.sig src/update/release_key.pub
+          if ($LASTEXITCODE -ne 0) { throw "emetgate-sign sign exited with $LASTEXITCODE" }
+          & zig-out/bin/emetgate-sign.exe verify dist/emetgate.exe dist/emetgate.exe.sig src/update/release_key.pub
+          if ($LASTEXITCODE -ne 0) { throw "emetgate-sign verify exited with $LASTEXITCODE" }
+          Copy-Item installers/install.ps1 dist/install.ps1
       - name: Attest that this binary was built from this commit
         uses: actions/attest-build-provenance@v2
         with:
@@ -52,4 +63,4 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$env:GITHUB_REF_NAME" dist/emetgate.exe dist/emetgate.exe.sha256 --title "$env:GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: gh release create "$env:GITHUB_REF_NAME" dist/emetgate.exe dist/emetgate.exe.sha256 dist/emetgate.exe.sig dist/install.ps1 --title "$env:GITHUB_REF_NAME" --generate-notes --verify-tag

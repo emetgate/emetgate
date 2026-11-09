@@ -141,13 +141,13 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 第一次使用？按 [docs/QUICKSTART.md](../docs/QUICKSTART.md) 操作：安装，运行 `emetgate doctor`，然后运行 `emetgate lockdown`。
 
-从[最新发布](https://github.com/emetgate/emetgate/releases/latest)下载 Windows 二进制文件，并把它所在的文件夹加入 `PATH`（PowerShell；之后打开一个新终端）：
+在 PowerShell 中从[最新发布](https://github.com/emetgate/emetgate/releases/latest)安装 Windows 二进制文件，然后打开一个新终端：
 
 ```
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
+
+安装脚本会校验 `emetgate.exe` 的 SHA256，把它放进 `%LOCALAPPDATA%\Programs\emetgate`，并在该文件夹不在用户 `PATH` 中时把它加入。之后 `emetgate doctor` 和 `emetgate lockdown` 每 24 小时最多检查一次新版本（最多 2 秒，离线时不输出任何内容），只有当其 Ed25519 签名与 emetgate 内置的密钥匹配时才安装。`emetgate update` 会立即做同样的事。设置 `EMETGATE_NO_UPDATE=1` 可关闭每日检查；设置了 `CI` 时它始终关闭。
 
 然后，在项目文件夹中：
 

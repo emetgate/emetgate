@@ -141,13 +141,13 @@ python tests/bench/n8n_search.py   ·   zig build test
 
 Yeni misiniz? [docs/QUICKSTART.md](../docs/QUICKSTART.md) adımlarını izleyin: kurun, `emetgate doctor` çalıştırın, sonra `emetgate lockdown`.
 
-Windows ikilisini [son sürümden](https://github.com/emetgate/emetgate/releases/latest) indirin ve klasörünü `PATH`'e ekleyin (PowerShell; ardından yeni bir terminal açın):
+Windows ikilisini [son sürümden](https://github.com/emetgate/emetgate/releases/latest) PowerShell ile kurun, ardından yeni bir terminal açın:
 
 ```
-New-Item -ItemType Directory -Force "$env:USERPROFILE\emetgate" | Out-Null
-Invoke-WebRequest "https://github.com/emetgate/emetgate/releases/latest/download/emetgate.exe" -OutFile "$env:USERPROFILE\emetgate\emetgate.exe"
-[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$env:USERPROFILE\emetgate", "User")
+irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
+
+Kurulum `emetgate.exe` dosyasının SHA256 değerini doğrular, dosyayı `%LOCALAPPDATA%\Programs\emetgate` içine koyar ve bu klasör kullanıcı `PATH`'inde yoksa ekler. Bundan sonra `emetgate doctor` ve `emetgate lockdown` en fazla 24 saatte bir yeni bir sürüm arar (en fazla 2 saniye, çevrimdışıyken sessiz) ve onu yalnızca Ed25519 imzası emetgate'e gömülü anahtarla eşleşirse kurar. `emetgate update` aynısını istendiğinde yapar. Günlük denetimi kapatmak için `EMETGATE_NO_UPDATE=1` ayarlayın; `CI` ayarlıyken her zaman kapalıdır.
 
 Sonra proje klasöründe:
 
