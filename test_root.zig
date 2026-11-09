@@ -176,6 +176,7 @@ pub const open_run = src.open_run;
 pub const read_tools = src.read_tools;
 pub const read_budget = src.read_budget;
 pub const mirror = src.mirror;
+pub const known_files = src.known_files;
 pub const context_epoch = src.context_epoch;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;
@@ -293,6 +294,7 @@ test {
     _ = @import("tests/dir_flush_crash.zig");
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/edit_tool.zig");
+    _ = @import("tests/change_tool.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/verify_branch.zig");

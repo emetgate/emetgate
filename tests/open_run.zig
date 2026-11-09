@@ -5,6 +5,7 @@ const server = @import("emetgate").server;
 const output_digest = @import("emetgate").output_digest;
 const run_trim = @import("emetgate").run_trim;
 const run_command = @import("emetgate").run_command;
+const symbol = @import("emetgate").symbol;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -151,6 +152,13 @@ test "open run: a command that writes files reports files_changed with a receipt
     try testing.expectEqual(@as(i64, 1), (try reply.field("files_changed")).?.integer);
     try testing.expect((try reply.field("receipt")) != null);
     try testing.expect(repo.exists("repo/head.txt"));
+    const files = (try reply.field("files")).?.array.items;
+    try testing.expectEqual(@as(usize, 1), files.len);
+    try testing.expectEqualStrings("head.txt", files[0].object.get("file").?.string);
+    const bytes = try repo.tmp.dir.readFileAlloc(testing.io, "repo/head.txt", gpa, .limited(4096));
+    defer gpa.free(bytes);
+    const hex = symbol.formatHash(symbol.fileHash(bytes));
+    try testing.expectEqualStrings(hex[0..], files[0].object.get("file_hash").?.string);
 }
 
 test "open run: a file that only enters the listing, such as a cache file git add tracks, is not counted as changed" {

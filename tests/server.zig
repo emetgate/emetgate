@@ -60,11 +60,11 @@ test "tools/list offers the commit message on the tools that commit only when co
     const line =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
     ;
-    const off = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{})).?;
+    const off = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .legacy_tools = true })).?;
     defer testing.allocator.free(off);
     try testing.expect(std.mem.indexOf(u8, off, "commit message for this change") == null);
 
-    const on = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .commit = true })).?;
+    const on = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .commit = true, .legacy_tools = true })).?;
     defer testing.allocator.free(on);
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, on, .{});
     defer parsed.deinit();
@@ -88,10 +88,31 @@ test "tools/list offers the commit message on the tools that commit only when co
     try testing.expectEqual(committing.len, offered);
 }
 
-test "tools/list names the three tools and marks hash required" {
-    const response = (try respond(testing.allocator, testing.io, undefined,
+test "tools/list hides the tools emetgate_change replaces and serves them again with --legacy-tools" {
+    const line =
         \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
-    )).?;
+    ;
+    const plain = (try respond(testing.allocator, testing.io, undefined, line)).?;
+    defer testing.allocator.free(plain);
+    const legacy = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, .{ .legacy_tools = true })).?;
+    defer testing.allocator.free(legacy);
+    try testing.expect(std.mem.indexOf(u8, plain, "\"emetgate_change\"") != null);
+    try testing.expect(std.mem.indexOf(u8, legacy, "\"emetgate_change\"") != null);
+    for (server.legacy_tools) |name| {
+        const quoted = try std.fmt.allocPrint(testing.allocator, "\"{s}\"", .{name});
+        defer testing.allocator.free(quoted);
+        errdefer std.debug.print("{s}\n", .{name});
+        try testing.expect(std.mem.indexOf(u8, plain, quoted) == null);
+        try testing.expect(std.mem.indexOf(u8, legacy, quoted) != null);
+    }
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--legacy-tools"}).?.legacy_tools);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--legacy-tools", "--legacy-tools" }) == null);
+}
+
+test "tools/list names the three tools and marks hash required" {
+    const response = (try respondWithPolicy(testing.allocator, testing.io, undefined,
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    , .{ .legacy_tools = true })).?;
     defer testing.allocator.free(response);
 
     try testing.expect(std.mem.indexOf(u8, response, "emetgate_symbols") != null);
@@ -373,6 +394,7 @@ const telemetry = @import("emetgate").telemetry;
 const served_tools = [_][]const u8{
     "emetgate_explore",
     "emetgate_evidence",
+    "emetgate_change",
     "emetgate_symbols",
     "emetgate_skeleton",
     "emetgate_read_symbol",

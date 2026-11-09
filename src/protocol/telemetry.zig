@@ -155,7 +155,7 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
     switch (event.outcome) {
         .ok => try w.print("✓ {s}", .{event.label}),
         .partial => try w.print("~ {s} partial, see missing", .{event.label}),
-        .committed => try w.writeAll("✓ committed"),
+        .committed => try w.writeAll("✓ written"),
         .rejected => try w.print("✗ rejected · {s}", .{event.reason orelse "rejected"}),
         .failed => try w.print("✗ {s}", .{event.resultName()}),
     }
@@ -230,7 +230,7 @@ test "footer gate always equals chooseGate for every confidence and scoped combi
 test "committed footer shows raw chars sent and the whole file size" {
     const text = try footer(.{ .tool = "emetgate_try", .outcome = .committed, .mutating = true, .edits = 1, .chars_emetgate = 1700, .chars_fullfile = 6630 }, .{ .edits = 3 });
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("emetgate ✓ committed · sent 1.7k / file 6.6k chars · session 3 edits", text);
+    try testing.expectEqualStrings("emetgate ✓ written · sent 1.7k / file 6.6k chars · session 3 edits", text);
 }
 
 test "footer never prints a ratio, a saving or a token claim" {

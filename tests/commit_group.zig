@@ -296,6 +296,7 @@ test "emetgate_run: a toolchain command that writes files leaves a run receipt f
     defer case.deinit();
     var ran = run_command.runInRepo(testing.allocator, testing.io, case.repo.root_abs, "npm init -y", run_command.toolchain_limits, "test") catch return error.SkipZigTest;
     defer ran.report.deinit(testing.allocator);
+    defer ran.deinitFiles(testing.allocator);
     switch (ran.report.outcome) {
         .exited => |code| if (code != 0) return error.SkipZigTest,
         else => return error.SkipZigTest,

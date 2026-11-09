@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2921**
-- Mutations declared in `tests/mutations.json`: **2009**
-  - killed: **1959**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2943**
+- Mutations declared in `tests/mutations.json`: **2026**
+  - killed: **1976**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1346 mutation(s).
+1363 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2102,6 +2102,23 @@ python tools/verification_page.py --check
 | `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: powershell and git start at low integrity through cmd | killed |
 | `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | lockdown run: an MSYS program that cannot start at low integrity is named in th... | killed |
 | `LR10-fix-missing` | `src/platform/low_run.zig` | `error.LowRootOnNetwork => "the command did not run: the reposit...` -> `error.LowRootOnNetwork => "the repository is on a network drive` | lockdown run: each failure to prepare the sandbox has its own fix that offers a... | killed |
+| `MC1-explore-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &addr...` -> `return out.written();` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
+| `MC2-evidence-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &none...` -> `_ = &none;` | map tools: evidence ends with a closure of the definitions its code calls | killed |
+| `MC3-closure-lists-shown` | `src/protocol/map_tools.zig` | `if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), fi...` -> `_ = ft;` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
+| `MC4-closure-every-word` | `src/protocol/map_tools.zig` | `if (opensCall(text, i) or afterNew(text, start) or isConstantNa...` -> `try names.put(arena, word, {});` | map tools: the closure takes call sites, constructed classes and constant names... | killed |
+| `MCH2-change-commit-leaves-outside-files` | `src/protocol/handlers.zig` | `const made = try commitReply(gpa, io, runtime, text, policy, ev...` -> `const made = try commitReply(gpa, io, runtime, text, policy, ev...` | emetgate_change commits a gated edit and a file written outside the gate in one... | killed |
+| `MCH3-commit-takes-own-workspace` | `src/platform/commit_group.zig` | `if (ownWorkspace(rel)) continue;` -> `` | emetgate_change with only a commit message commits the work tree as it is | killed |
+| `MCH5-tools-list-serves-legacy` | `src/protocol/server.zig` | `if (!legacy and isLegacy(listed.name)) continue;` -> `` | tools/list hides the tools emetgate_change replaces and serves them again with ... | killed |
+| `MCH6-change-reports-committed` | `src/protocol/handlers.zig` | `if (status.* == .string and std.mem.eql(u8, status.string, wire...` -> `_ = status;` | emetgate_change commits a gated edit and a file written outside the gate in one... | killed |
+| `MCH7-change-reports-no-after` | `src/protocol/handlers.zig` | `if (failed == null and (branch != null or message != null)) try...` -> `` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
+| `MCH8-after-counts-own-workspace` | `src/platform/git_commit.zig` | `if (!ownWorkspace(std.mem.trim(u8, line[3..], "\""))) return fa...` -> `return false;` | emetgate_change creates and switches to the branch, writes the edits and commit... | killed |
+| `RUN1-run-names-no-changed-files` | `src/platform/run_command.zig` | `ran.files = try namedChanges(gpa, io, changes);` -> `` | open run: a command that writes files reports files_changed with a receipt | killed |
+| `MCH9-change-sends-no-op-edits` | `src/protocol/handlers.zig` | `if (old != null and new != null and old.?.len != 0 and std.mem....` -> `_ = .{ old, new };` | emetgate_change skips an edit whose old_string equals its new_string and writes... | killed |
+| `GW1-git-write-commit-skips-the-gate` | `src/protocol/handlers.zig` | `if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) ...` -> `` | emetgate_git_write commit -m after git add -A is made by the gated commit, with... | killed |
+| `GW2-git-write-commit-takes-untracked` | `src/platform/git_commit.zig` | `if (line[0] == '?') return false;` -> `` | emetgate_git_write commit -a -m with an untracked file is run by git and leaves... | killed |
+| `KF1-change-ignores-known-files` | `src/protocol/handlers.zig` | `try batch.put(arena, "edits", if (policy.known_files) \|known\|...` -> `try batch.put(arena, "edits", list);` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
+| `KF2-known-hash-not-compared-with-disk` | `src/protocol/handlers.zig` | `if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) ret...` -> `_ = bytes;` | emetgate_change still asks for the hash of a file that changed on disk after th... | killed |
+| `KF3-written-files-not-noted` | `src/protocol/handlers.zig` | `if (!reply.is_error) if (policy.known_files) \|known\| try note...` -> `` | emetgate_change overwrites a whole file it wrote earlier in the session without... | killed |
 | `UPD1-check-every-start` | `src/update/update.zig` | `return now - seen >= check_interval_s;` -> `return now - seen >= 0;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
 | `UPD2-stamp-not-written` | `src/update/update.zig` | `updater.system.write(stamp, text) catch return null;` -> `_ = text;` | self update: the automatic check runs at most once per 24 hours and records the... | killed |
 | `UPD3-same-version-reinstalled` | `src/update/update.zig` | `if (version.order(current) != .gt) return .{ .up_to_date = vers...` -> `if (version.order(current) == .lt) return .{ .up_to_date = vers...` | self update: versions compare as X.Y.Z numbers and only a strictly newer releas... | killed |

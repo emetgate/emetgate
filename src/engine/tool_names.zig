@@ -3,6 +3,7 @@ const std = @import("std");
 pub const all = [_][]const u8{
     "emetgate_explore",
     "emetgate_evidence",
+    "emetgate_change",
     "emetgate_symbols",
     "emetgate_skeleton",
     "emetgate_read_symbol",

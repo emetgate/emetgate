@@ -5,6 +5,8 @@ const tool_result = @import("tool_result.zig");
 const policy_mod = @import("policy.zig");
 const repo = @import("../platform/repo.zig");
 const run_command = @import("../platform/run_command.zig");
+const symbol = @import("../engine/symbol.zig");
+const known_files = @import("known_files.zig");
 const open_shell = @import("../platform/open_shell.zig");
 const commit_guard = @import("../platform/commit_guard.zig");
 const sandbox_env = @import("../platform/sandbox.zig");
@@ -40,7 +42,7 @@ pub const timeout_fix = "the command ran past its time; pass timeout_s (at most 
 
 pub const frozen_fix = "fix the code instead; a frozen path and emetgate's own configuration are changed by hand by the user";
 pub const frozen_failed_fix = "a frozen path could not be put back; frozen_failed names each one and why: restore it by hand before going on";
-pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; emetgate_commit still checks them";
+pub const frozen_merge_fix = "a merge, rebase, cherry-pick or revert left the frozen_in_merge paths as git has them; a commit through emetgate_change still checks them";
 pub const rules_fix = "the command left what the rule_violations name, and nothing was undone; change what each rule names, and for a commit amend it or follow it with one that fixes it";
 pub const hold_fix = "the command did not run: emetgate could not keep a copy of the frozen paths; emetgate doctor says why";
 
@@ -116,6 +118,7 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     };
     defer ran.report.deinit(gpa);
     defer ran.frozen.deinit(gpa);
+    defer ran.deinitFiles(gpa);
     try audit.finish();
     const broken = audit.findings.items.len != 0;
     switch (ran.report.outcome) {
@@ -175,6 +178,8 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     if (ran.changed != 0) {
         try js.objectField("files_changed");
         try js.write(ran.changed);
+        try writeChangedFiles(&js, ran.files);
+        if (policy.known_files) |files| try noteChangedFiles(gpa, root_abs, ran.files, files);
         if (ran.receipt) |id| {
             try js.objectField("receipt");
             try js.write(&id);
@@ -366,4 +371,34 @@ pub fn shapedOutput(gpa: Allocator, arena: Allocator, report: sandbox.Report, sh
     const gap: []const u8 = if (cut.text.len == 0 or cut.text[cut.text.len - 1] == '\n') "" else "\n";
     const text = try std.fmt.allocPrint(gpa, "{s}{s}[emetgate: {d} git noise lines dropped (line-ending warnings, hints, progress); {s}]", .{ cut.text, gap, dropped, run_trim.raw_hint });
     return .{ .text = text, .cut = true };
+}
+
+pub fn noteChangedFiles(gpa: Allocator, root_abs: []const u8, files: []const run_command.ChangedFile, known: *known_files.KnownFiles) !void {
+    for (files) |file| {
+        const hash = file.file_hash orelse continue;
+        const abs = try std.fs.path.join(gpa, &.{ root_abs, file.rel });
+        defer gpa.free(abs);
+        try known.note(abs, hash);
+    }
+}
+
+pub fn writeChangedFiles(js: *std.json.Stringify, files: []const run_command.ChangedFile) !void {
+    if (files.len == 0) return;
+    try js.objectField("files");
+    try js.beginArray();
+    for (files) |file| {
+        try js.beginObject();
+        try js.objectField("file");
+        try js.write(file.rel);
+        if (file.file_hash) |hash| {
+            const hex = symbol.formatHash(hash);
+            try js.objectField("file_hash");
+            try js.write(hex[0..]);
+        } else {
+            try js.objectField("deleted");
+            try js.write(true);
+        }
+        try js.endObject();
+    }
+    try js.endArray();
 }

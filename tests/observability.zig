@@ -200,7 +200,7 @@ test "fail-soft: a broken event log never changes a tool result or what reaches 
     }
 
     try expectContains(healthy_out[0], "emetgate ✗ rejected · tests_failed · UNBOUNDED · gate full · disk untouched · session 0 edits");
-    try expectContains(healthy_out[1], "emetgate ✓ committed · UNBOUNDED · gate full · sent ");
+    try expectContains(healthy_out[1], "emetgate ✓ written · UNBOUNDED · gate full · sent ");
     try expectContains(healthy_out[1], " / file ");
     try expectContains(healthy_out[1], " chars · session 1 edits");
     try expectContains(healthy_out[2], "emetgate ✗ HashMismatch · disk untouched · session 1 edits");
@@ -366,7 +366,7 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
-    try expectContains(response, "emetgate ✓ committed · gate full · sent ");
+    try expectContains(response, "emetgate ✓ written · gate full · sent ");
     try expectContains(response, " chars · session 2 edits");
 
     const events = try repo.tmp.dir.readFileAlloc(testing.io, "repo/.emetgate/events.ndjson", testing.allocator, .unlimited);
@@ -457,7 +457,7 @@ test "fail-soft: an events file symlinked outside the repo is never written thro
 
     const response = try call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
     defer testing.allocator.free(response);
-    try expectContains(response, "emetgate ✓ committed");
+    try expectContains(response, "emetgate ✓ written");
 
     const after = try repo.tmp.dir.readFileAlloc(testing.io, "outside.txt", testing.allocator, .unlimited);
     defer testing.allocator.free(after);

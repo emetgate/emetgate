@@ -21,6 +21,7 @@ const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const known_files_mod = @import("known_files.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const batch_stage_mod = @import("batch_stage.zig");
@@ -83,6 +84,15 @@ pub const tool_defs = [_]Tool{
         .props = &.{.{ .name = "names", .desc = "Class.method or function", .ty = "array" }},
     },
     .{
+        .name = "emetgate_change",
+        .description = handlers.change_description,
+        .props = &.{
+            .{ .name = "edits", .desc = "{file, old_string, new_string} or {file, content}", .optional = true, .ty = "array" },
+            .{ .name = "branch", .desc = "new branch to create and switch to first", .optional = true },
+            .{ .name = "commit", .desc = "commit message for every change in the work tree", .optional = true },
+        },
+    },
+    .{
         .name = "emetgate_symbols",
         .description = "Lists a source file's symbols.",
         .props = &.{.{ .name = "file", .desc = "" }},
@@ -97,7 +107,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
-        .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; docs fold, bodies over " ++ budget_text ++ " chars too, unless detail:\"full\". nodes:true adds node ids for emetgate_try.",
+        .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; docs fold, bodies over " ++ budget_text ++ " chars too, unless detail:\"full\". nodes:true adds node ids for emetgate_change.",
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "symbol", .desc = "e.g. Class.method or add", .optional = true },
@@ -298,6 +308,7 @@ pub const Served = struct {
     workspace: ?[]u8,
     observer: ?telemetry.Observer,
     mirror: mirror_mod.Mirror,
+    known_files: known_files_mod.KnownFiles,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
     search: search_session_mod.Session,
@@ -325,6 +336,7 @@ pub const Served = struct {
             .workspace = workspace,
             .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
             .mirror = .init(gpa, policy.mirror_enabled),
+            .known_files = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
@@ -337,6 +349,7 @@ pub const Served = struct {
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
+        self.policy.known_files = &self.known_files;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
         self.policy.search_session = &self.search;
@@ -371,6 +384,7 @@ pub const Served = struct {
         self.search.deinit();
         self.tree_cache.deinit();
         self.mirror.deinit();
+        self.known_files.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
         if (self.root) |r| self.gpa.free(r);
@@ -450,7 +464,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id, policy.commit, policy.open_run, policy.nested_roots.len != 0);
+        try writeToolsList(out, request_id, policy.commit, policy.open_run, policy.nested_roots.len != 0, policy.legacy_tools);
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -530,7 +544,7 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
 
 const nested_dir_desc = "a folder in another git repository below this one; omit for this one";
 
-pub const instructions = "Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Edit code with emetgate_try, several files with emetgate_try_batch, and non-code files with emetgate_write_doc; each writes only if typecheck passes and no test fails that did not fail before (pytest and dotnet let a new test fail until emetgate_commit), and takes the hash you last read. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
+pub const instructions = "Answer a question about the code with one emetgate_explore call: write the question in English with its domain terms and put the identifiers you expect in names. Its reply holds the matching functions whole and ends with a closure of what it did not show; answer from it, call emetgate_evidence once only for a named item that decides the answer, and write that an item is not in the evidence instead of guessing. Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Make every change to files with one emetgate_change call per step: all its edits are written together only if typecheck passes and no test fails that did not fail before. Write files with emetgate_change, not with commands. Give it branch or commit only when the user asks for a branch or a commit; it then does the git work in the same call. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
 fn writeEmptyResult(out: *Writer, id: Value) !void {
     var js: std.json.Stringify = .{ .writer = out };
@@ -552,7 +566,16 @@ fn commits(tool: []const u8) bool {
     return false;
 }
 
-fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: bool) !void {
+pub const legacy_tools = [_][]const u8{ "emetgate_try", "emetgate_try_batch", "emetgate_edit", "emetgate_write", "emetgate_commit" };
+
+pub fn isLegacy(name: []const u8) bool {
+    for (legacy_tools) |tool| {
+        if (std.mem.eql(u8, tool, name)) return true;
+    }
+    return false;
+}
+
+fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: bool, legacy: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -561,6 +584,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: boo
     try js.objectField("tools");
     try js.beginArray();
     for (tool_defs) |listed| {
+        if (!legacy and isLegacy(listed.name)) continue;
         const tool = servedDef(listed, open);
         try js.beginObject();
         try js.objectField("name");
@@ -598,7 +622,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: boo
         try js.endObject();
         try js.endObject();
     }
-    try writeBatchToolDef(&js, commit);
+    if (legacy) try writeBatchToolDef(&js, commit);
     try js.endArray();
     try js.endObject();
     try js.endObject();

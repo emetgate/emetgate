@@ -21,6 +21,10 @@ const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
 pub const reply_budget: usize = 63_000;
+pub const closure_budget: usize = 2_500;
+pub const closure_max_defs: usize = 2;
+pub const closure_signature: usize = 140;
+pub const closure_footer = "This is everything the index matched. Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.";
 pub const pointer_budget: usize = 6_000;
 pub const evidence_budget: usize = 16_000;
 pub const header_chars: usize = 16;
@@ -370,6 +374,18 @@ pub const Session = struct {
             for (names[wanted.len..], 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
             try out.writer.writeByte('\n');
         }
+        var texts: std.StringHashMapUnmanaged(FileText) = .empty;
+        var shown: std.ArrayList(Shown) = .empty;
+        for (wanted) |n| {
+            for (try self.named(arena, n)) |f| {
+                const d = self.repo.?.store.file(f.file).facts.defs[f.def];
+                const ft = (try self.fileText(arena, &texts, f.path)) orelse continue;
+                const first = @max(d.line, 1);
+                try shown.append(arena, .{ .file = f.file, .first = first, .last = @max(ft.lineOf(d.span.end), first) });
+            }
+        }
+        const none: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        try self.closure(arena, &out.writer, &texts, shown.items, &none);
         return plain(gpa, out.written(), false);
     }
 
@@ -435,6 +451,7 @@ pub const Session = struct {
         }
         var texts: std.StringHashMapUnmanaged(FileText) = .empty;
         var shown: std.ArrayList(Shown) = .empty;
+        var addressed: std.AutoHashMapUnmanaged(u64, void) = .empty;
         var cut: Writer.Allocating = .init(arena);
         var pointers: Writer.Allocating = .init(arena);
         const limit = budget -| pointer_budget;
@@ -462,8 +479,10 @@ pub const Session = struct {
             const line = try std.fmt.allocPrint(arena, "{s}{s}:{d} {s} ({d} lines)\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname, last - first + 1 });
             if (pk.whole) {
                 try cut.writer.writeAll(line);
+                try addressed.put(arena, keyOf(pk.f), {});
             } else if (usefulAt(pk.score) >= pointer_chance and pointers.written().len + line.len <= pointer_budget) {
                 try pointers.writer.writeAll(line);
+                try addressed.put(arena, keyOf(pk.f), {});
             }
         }
         var mentions: std.AutoArrayHashMapUnmanaged(u64, Mention) = .empty;
@@ -518,7 +537,52 @@ pub const Session = struct {
             try out.writer.writeAll("Matching functions not shown:\n");
             try out.writer.writeAll(pointers.written());
         }
+        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);
         return out.written();
+    }
+
+    fn closure(self: *Session, arena: Allocator, w: *Writer, texts: *std.StringHashMapUnmanaged(FileText), shown: []const Shown, addressed: *const std.AutoHashMapUnmanaged(u64, void)) !void {
+        if (shown.len == 0) return;
+        const store = &self.repo.?.store;
+        var names: std.StringArrayHashMapUnmanaged(void) = .empty;
+        for (shown) |s| {
+            const ft = (try self.fileText(arena, texts, store.file(s.file).path)) orelse continue;
+            var k = s.first;
+            while (k <= s.last) : (k += 1) try closureNames(arena, &names, ft.line(k));
+        }
+        var rows: Writer.Allocating = .init(arena);
+        var listed: std.AutoHashMapUnmanaged(u64, void) = .empty;
+        var more: usize = 0;
+        for (names.keys()) |name| {
+            var kept: std.ArrayList(Fn) = .empty;
+            for (try self.definitions(arena, name)) |f| {
+                if (self.isTestPick(f.path)) continue;
+                try kept.append(arena, f);
+            }
+            if (kept.items.len == 0 or kept.items.len > closure_max_defs) continue;
+            for (kept.items) |f| {
+                const key = keyOf(f);
+                if (addressed.contains(key) or listed.contains(key)) continue;
+                const d = store.file(f.file).facts.defs[f.def];
+                const ft = (try self.fileText(arena, texts, f.path)) orelse continue;
+                const first = @max(d.line, 1);
+                if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), first))) continue;
+                try listed.put(arena, key, {});
+                const row = try std.fmt.allocPrint(arena, "  {s}  {s}{s}:{d}  {s}\n", .{ f.qname, display_path.prefix, f.path, first, signatureOf(d) });
+                if (rows.written().len + row.len > closure_budget) {
+                    more += 1;
+                    continue;
+                }
+                try rows.writer.writeAll(row);
+            }
+        }
+        try w.print("-- closure\nWhole above: {d} functions. By address above: {d}.\n", .{ shown.len, addressed.count() });
+        if (rows.written().len != 0) {
+            try w.writeAll("Named in the code above and defined in this repository, not shown (signature only):\n");
+            try w.writeAll(rows.written());
+        }
+        if (more != 0) try w.print("  +{d} more named definitions, not listed\n", .{more});
+        try w.print("{s}\n", .{closure_footer});
     }
 
     pub fn graph(self: *Session, arena: Allocator, w: *Writer, f: Fn) !void {
@@ -733,6 +797,69 @@ pub fn mentionChance(count: u32) f64 {
     var i: usize = 0;
     while (i < mention_count.len and count >= mention_count[i]) i += 1;
     return mention_chance[i];
+}
+
+const closure_skip = [_][]const u8{ "if", "for", "while", "switch", "catch", "return", "function", "super", "typeof", "await", "require", "import" };
+
+fn closureSkipped(word: []const u8) bool {
+    for (closure_skip) |s| {
+        if (std.mem.eql(u8, word, s)) return true;
+    }
+    return false;
+}
+
+fn isConstantName(word: []const u8) bool {
+    if (word.len < 3 or !std.ascii.isUpper(word[0])) return false;
+    for (word) |c| {
+        if (!std.ascii.isUpper(c) and !std.ascii.isDigit(c) and c != '_') return false;
+    }
+    return true;
+}
+
+fn opensCall(text: []const u8, end: usize) bool {
+    var j = end;
+    while (j < text.len and (text[j] == ' ' or text[j] == '\t')) j += 1;
+    if (j < text.len and text[j] == '<') {
+        j += 1;
+        while (j < text.len and text[j] != '>') : (j += 1) {
+            if (text[j] == '(' or text[j] == ')') return false;
+        }
+        if (j == text.len) return false;
+        j += 1;
+        while (j < text.len and (text[j] == ' ' or text[j] == '\t')) j += 1;
+    }
+    return j < text.len and text[j] == '(';
+}
+
+fn afterNew(text: []const u8, start: usize) bool {
+    var j = start;
+    while (j > 0 and (text[j - 1] == ' ' or text[j - 1] == '\t')) j -= 1;
+    if (j == start or j < 3 or !std.mem.eql(u8, text[j - 3 .. j], "new")) return false;
+    return j == 3 or !(identifierStart(text[j - 4]) or std.ascii.isDigit(text[j - 4]));
+}
+
+pub fn closureNames(arena: Allocator, names: *std.StringArrayHashMapUnmanaged(void), text: []const u8) !void {
+    var i: usize = 0;
+    while (i < text.len) {
+        if (!identifierStart(text[i])) {
+            i += 1;
+            continue;
+        }
+        const start = i;
+        while (i < text.len and (identifierStart(text[i]) or std.ascii.isDigit(text[i]))) i += 1;
+        if (start != 0 and std.ascii.isDigit(text[start - 1])) continue;
+        const word = text[start..i];
+        if (word.len < 3 or closureSkipped(word)) continue;
+        if (opensCall(text, i) or afterNew(text, start) or isConstantName(word)) try names.put(arena, word, {});
+    }
+}
+
+fn signatureOf(d: facts.Def) []const u8 {
+    const sig = if (d.signature.len != 0) d.signature else d.qname;
+    if (sig.len <= closure_signature) return sig;
+    var cut: usize = closure_signature;
+    while (cut > 0 and (sig[cut] & 0xC0) == 0x80) cut -= 1;
+    return sig[0..cut];
 }
 
 fn identifierStart(c: u8) bool {

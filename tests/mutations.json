@@ -14662,7 +14662,7 @@
     {
       "id": "TC5-toolchain-not-routed",
       "file": "src/protocol/run_tool.zig",
-      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event);\n",
+      "from": "            if (why == .not_allowed and run_command.isToolchainIn(io, root_abs, command)) return runToolchain(gpa, io, root_abs, command, allowed, w, event, policy.known_files);\n",
       "to": "",
       "kills": [
         "run tool: a toolchain command runs in the repository itself, never a repo-local script of the same name"
@@ -16325,7 +16325,7 @@
     {
       "id": "RS1-rename-service-failure-not-named",
       "file": "src/protocol/rename_tool.zig",
-      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_try_batch old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym, tool_names.prefix() });",
+      "from": "        if (err == error.RenameUnresolved and unresolved.count == 0) if (service_failure) |cause| wire.setFix(\"the language service failed with {s}, so the references of {s} could not be resolved; nothing was written; retry the rename, or rename by hand with {s}emetgate_change old_string/new_string items, one per file, with replace_all:true\", .{ @errorName(cause), sym, tool_names.prefix() });",
       "to": "",
       "kills": [
         "rename: when the language service fails the tool says so and names its error instead of only calling the references unresolved"
@@ -19165,6 +19165,176 @@
         "lockdown run: each failure to prepare the sandbox has its own fix that offers as_user"
       ],
       "note": "a network repository would not say the command did not run"
+    },
+    {
+      "id": "MC1-explore-closure-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);\n        return out.written();",
+      "to": "        return out.written();",
+      "kills": [
+        "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
+      ],
+      "note": "explore would end without saying what it left out, and the model would keep asking to be sure"
+    },
+    {
+      "id": "MC2-evidence-closure-dropped",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &none);\n",
+      "to": "        _ = &none;\n",
+      "kills": [
+        "map tools: evidence ends with a closure of the definitions its code calls"
+      ],
+      "note": "an evidence reply would leave the names its code calls unaccounted for"
+    },
+    {
+      "id": "MC3-closure-lists-shown",
+      "file": "src/protocol/map_tools.zig",
+      "from": "                if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), first))) continue;\n",
+      "to": "                _ = ft;\n",
+      "kills": [
+        "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
+      ],
+      "note": "the closure would list again functions the reply already shows whole"
+    },
+    {
+      "id": "MC4-closure-every-word",
+      "file": "src/protocol/map_tools.zig",
+      "from": "        if (opensCall(text, i) or afterNew(text, start) or isConstantName(word)) try names.put(arena, word, {});",
+      "to": "        try names.put(arena, word, {});",
+      "kills": [
+        "map tools: the closure takes call sites, constructed classes and constant names, and leaves plain words and keywords out"
+      ],
+      "note": "every local variable that shares a name with a definition would fill the closure"
+    },
+    {
+      "id": "MCH2-change-commit-leaves-outside-files",
+      "file": "src/protocol/handlers.zig",
+      "from": "        const made = try commitReply(gpa, io, runtime, text, policy, event, true);",
+      "to": "        const made = try commitReply(gpa, io, runtime, text, policy, event, false);",
+      "kills": [
+        "emetgate_change commits a gated edit and a file written outside the gate in one commit with one receipt"
+      ],
+      "note": "a commit from emetgate_change would leave package.json and other files written by commands uncommitted"
+    },
+    {
+      "id": "MCH3-commit-takes-own-workspace",
+      "file": "src/platform/commit_group.zig",
+      "from": "        if (ownWorkspace(rel)) continue;\n",
+      "to": "",
+      "kills": [
+        "emetgate_change with only a commit message commits the work tree as it is"
+      ],
+      "note": "emetgate's own .emetgate folder could land in the user's commit when its ignore file is missing"
+    },
+    {
+      "id": "MCH5-tools-list-serves-legacy",
+      "file": "src/protocol/server.zig",
+      "from": "        if (!legacy and isLegacy(listed.name)) continue;\n",
+      "to": "",
+      "kills": [
+        "tools/list hides the tools emetgate_change replaces and serves them again with --legacy-tools"
+      ],
+      "note": "the replaced write tools would be offered again and the model would split one change into many calls"
+    },
+    {
+      "id": "MCH6-change-reports-committed",
+      "file": "src/protocol/handlers.zig",
+      "from": "            if (status.* == .string and std.mem.eql(u8, status.string, wire.committed_status)) status.* = .{ .string = \"applied\" };",
+      "to": "            _ = status;",
+      "kills": [
+        "emetgate_change commits a gated edit and a file written outside the gate in one commit with one receipt"
+      ],
+      "note": "the change reply would say committed for a write and lead the model to think a git commit was made"
+    },
+    {
+      "id": "MCH7-change-reports-no-after",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);\n",
+      "to": "",
+      "kills": [
+        "emetgate_change creates and switches to the branch, writes the edits and commits every change with the message"
+      ],
+      "note": "without after the model runs git status and git log once more after every commit to learn the branch and whether the tree is clean"
+    },
+    {
+      "id": "MCH8-after-counts-own-workspace",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (!ownWorkspace(std.mem.trim(u8, line[3..], \"\\\"\"))) return false;\n",
+      "to": "        return false;\n",
+      "kills": [
+        "emetgate_change creates and switches to the branch, writes the edits and commits every change with the message"
+      ],
+      "note": "emetgate's own .emetgate folder would make every committed tree look unclean"
+    },
+    {
+      "id": "RUN1-run-names-no-changed-files",
+      "file": "src/platform/run_command.zig",
+      "from": "    ran.files = try namedChanges(gpa, io, changes);\n",
+      "to": "",
+      "kills": [
+        "open run: a command that writes files reports files_changed with a receipt"
+      ],
+      "note": "without the names and file_hash of the files a command wrote, the model reads each one again before it can overwrite it"
+    },
+    {
+      "id": "MCH9-change-sends-no-op-edits",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (old != null and new != null and old.?.len != 0 and std.mem.eql(u8, old.?, new.?)) continue;\n",
+      "to": "        _ = .{ old, new };\n",
+      "kills": [
+        "emetgate_change skips an edit whose old_string equals its new_string and writes the others"
+      ],
+      "note": "an edit that changes nothing would refuse the whole call and cost the model a turn to drop it"
+    },
+    {
+      "id": "GW1-git-write-commit-skips-the-gate",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) |made| return made;\n",
+      "to": "",
+      "kills": [
+        "emetgate_git_write commit -m after git add -A is made by the gated commit, with the gated write's receipt"
+      ],
+      "note": "a commit made with git_write would carry no receipt and leave the gated writes pending"
+    },
+    {
+      "id": "GW2-git-write-commit-takes-untracked",
+      "file": "src/platform/git_commit.zig",
+      "from": "        if (line[0] == '?') return false;\n",
+      "to": "",
+      "kills": [
+        "emetgate_git_write commit -a -m with an untracked file is run by git and leaves that file out"
+      ],
+      "note": "git commit -m would sweep in an untracked file the user did not stage"
+    },
+    {
+      "id": "KF1-change-ignores-known-files",
+      "file": "src/protocol/handlers.zig",
+      "from": "        try batch.put(arena, \"edits\", if (policy.known_files) |known| try withKnownHashes(arena, io, root, list, known) else list);\n",
+      "to": "        try batch.put(arena, \"edits\", list);\n",
+      "kills": [
+        "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash"
+      ],
+      "note": "a whole-file rewrite of a file the model wrote itself would be refused and sent again with its hash"
+    },
+    {
+      "id": "KF2-known-hash-not-compared-with-disk",
+      "file": "src/protocol/handlers.zig",
+      "from": "    if (!std.mem.eql(u8, &symbol.fileHash(bytes), &known_hash)) return item;\n",
+      "to": "    _ = bytes;\n",
+      "kills": [
+        "emetgate_change still asks for the hash of a file that changed on disk after the session wrote it, and of a file it never wrote"
+      ],
+      "note": "a file the user changed after the session wrote it would be overwritten unseen"
+    },
+    {
+      "id": "KF3-written-files-not-noted",
+      "file": "src/protocol/handlers.zig",
+      "from": "        if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);\n",
+      "to": "",
+      "kills": [
+        "emetgate_change overwrites a whole file it wrote earlier in the session without being given its hash"
+      ],
+      "note": "the session would forget what it wrote and ask for hashes it already knows"
     },
     {
       "id": "UPD1-check-every-start",

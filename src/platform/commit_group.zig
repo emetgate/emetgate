@@ -46,6 +46,7 @@ pub const Options = struct {
     runtime: ?*Runtime = null,
     tests: ?Tests = null,
     guard_config: bool = false,
+    outside: bool = false,
 };
 
 pub const Tests = struct {
@@ -197,6 +198,34 @@ fn backslashed(arena: Allocator, rel: []const u8) ![]u8 {
 }
 
 /// Build one commit from the pending gated changes.
+const ownWorkspace = git_commit.ownWorkspace;
+
+fn addOutside(arena: Allocator, io: std.Io, root: []const u8, changes: *std.ArrayList(commit_plan.Change), rels: *std.ArrayList([]const u8), written: *std.ArrayList([]const Hash)) !void {
+    const listed = (try receipts.git(arena, io, root, &.{ "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames" })) orelse return;
+    var records = std.mem.splitScalar(u8, listed, 0);
+    while (records.next()) |record| {
+        if (record.len < 4) continue;
+        const rel = try backslashed(arena, record[3..]);
+        if (ownWorkspace(rel)) continue;
+        const known = for (rels.items) |have| {
+            if (eqlPath(have, rel)) break true;
+        } else false;
+        if (known) continue;
+        const abs = try std.fs.path.join(arena, &.{ root, rel });
+        const bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(git_commit.max_index_bytes)) catch |err| switch (err) {
+            error.FileNotFound => null,
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return err,
+        };
+        if (try equalsHead(arena, io, root, rel, bytes)) continue;
+        const hashes = try arena.alloc(Hash, if (bytes != null) 1 else 0);
+        if (bytes) |content| hashes[0] = receipt.blake3(content);
+        try changes.append(arena, .{ .rel = rel, .content = bytes });
+        try rels.append(arena, rel);
+        try written.append(arena, hashes);
+    }
+}
+
 pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !Result {
     const lock = try shadow.Lock.acquire(io, root);
     defer lock.release();
@@ -205,7 +234,9 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const items = (try attested(arena, io, root)) orelse return .nothing_pending;
+    const found = try attested(arena, io, root);
+    if (found == null and !options.outside) return .nothing_pending;
+    const items = found orelse &.{};
 
     // Drift check (fail-closed): the working tree must still equal every digest
     // the latest receipt attests. Collect the files that do not, and refuse.
@@ -248,6 +279,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         }
         return .{ .drift = .{ .paths = paths, .total = drifted.items.len } };
     }
+    if (options.outside) try addOutside(arena, io, root, &changes, &rels, &written);
     if (changes.items.len == 0) return .nothing_pending;
 
     var request: commit_plan.Request = .{ .message = options.message, .runtime = options.runtime };

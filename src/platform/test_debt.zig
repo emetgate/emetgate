@@ -141,9 +141,9 @@ pub fn settle(gpa: Allocator, io: std.Io, root: []const u8) !void {
 
 pub fn summary(w: *std.Io.Writer, failing: []const []const u8, owed: usize) !void {
     if (owed == 0) {
-        try w.print("{d} failing, all failing before this session, so emetgate_commit is not blocked: ", .{failing.len});
+        try w.print("{d} failing, all failing before this session, so a commit is not blocked: ", .{failing.len});
     } else {
-        try w.print("{d} failing, {d} of them new this session; emetgate_commit is refused until those pass: ", .{ failing.len, owed });
+        try w.print("{d} failing, {d} of them new this session; a commit is refused until those pass: ", .{ failing.len, owed });
     }
     try names(w, failing);
 }
@@ -176,8 +176,8 @@ test "the debt summary is bounded and says whether commit is refused" {
     defer out.deinit();
     const ids = [_][]const u8{ "a", "b", "c", "d", "e", "f", "g", "h", "i", "j" };
     try summary(&out.writer, &ids, 3);
-    try testing.expectEqualStrings("10 failing, 3 of them new this session; emetgate_commit is refused until those pass: a, b, c, d, e, f, g, h +2 more", out.written());
+    try testing.expectEqualStrings("10 failing, 3 of them new this session; a commit is refused until those pass: a, b, c, d, e, f, g, h +2 more", out.written());
     out.clearRetainingCapacity();
     try summary(&out.writer, ids[0..1], 0);
-    try testing.expectEqualStrings("1 failing, all failing before this session, so emetgate_commit is not blocked: a", out.written());
+    try testing.expectEqualStrings("1 failing, all failing before this session, so a commit is not blocked: a", out.written());
 }

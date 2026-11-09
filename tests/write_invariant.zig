@@ -239,6 +239,27 @@ const Op = struct {
             const content = try std.fmt.allocPrint(env.arena(), "export function written() {s}\n", .{self.text()});
             return try self.send(tool, try self.value(.{ .file = try env.abs(rel), .content = content }));
         }
+        if (std.mem.eql(u8, tool, "emetgate_change")) {
+            const Spot = struct { rel: []const u8, old: []const u8 };
+            const spot = self.pick(Spot, &.{
+                .{ .rel = "src/core/a.ts", .old = "return x + 1;" },
+                .{ .rel = "src/core/b.ts", .old = "return 2;" },
+                .{ .rel = "src/util/c.ts", .old = "return three;" },
+            });
+            var edits = std.json.Array.init(env.arena());
+            if (env.repo.exists(spot.rel) and std.mem.indexOf(u8, try env.read(spot.rel), spot.old) != null) {
+                const new = if (self.random.boolean()) "return \"evil\"; // evil" else "return 12;";
+                try edits.append(try self.value(.{ .file = try env.abs(spot.rel), .old_string = spot.old, .new_string = new }));
+            }
+            if (edits.items.len == 0 or self.random.boolean()) {
+                const rel = self.pick([]const u8, &.{ "src/core/new/w.ts", "src/util/w.ts" });
+                const content = try std.fmt.allocPrint(env.arena(), "export function written() {s}\n", .{self.text()});
+                try edits.append(try self.value(.{ .file = try env.abs(rel), .content = content }));
+            }
+            var object: std.json.ObjectMap = .empty;
+            try object.put(env.arena(), "edits", .{ .array = edits });
+            return try self.send(tool, .{ .object = object });
+        }
         if (std.mem.eql(u8, tool, "emetgate_rename")) {
             const site = self.pick(Site, &.{ .{ .rel = "src/core/a.ts", .name = "helper" }, .{ .rel = "src/core/b.ts", .name = "spare" }, .{ .rel = "src/util/c.ts", .name = "lonely" } });
             if (!env.repo.exists(site.rel)) return null;
@@ -341,10 +362,7 @@ fn exercise(tool: []const u8, seed: u64, tally: *Tally) !void {
 const seeds_per_tool = 6;
 
 const exercised_tools = [_][]const u8{
-    "emetgate_try",
-    "emetgate_try_batch",
-    "emetgate_edit",
-    "emetgate_write",
+    "emetgate_change",
     "emetgate_write_doc",
     "emetgate_rename",
     "emetgate_move",
@@ -378,6 +396,10 @@ test "write invariant: every served write tool but emetgate_commit is exercised 
         try testing.expect(listed);
     }
     try testing.expectEqual(exercised_tools.len, served_writers);
+}
+
+test "write invariant: after any accepted emetgate_change a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_change");
 }
 
 test "write invariant: after any accepted emetgate_try a scan finds no violation it did not find before" {
@@ -420,15 +442,16 @@ test "write invariant: after any accepted emetgate_git_write a scan finds no vio
     try exerciseTool("emetgate_git_write");
 }
 
-test "write invariant: the served list holds a write tool that the tool table does not, and no read-only tool is exercised as a writer" {
+test "write invariant: the served list holds emetgate_change and none of the tools it replaces, and no read-only tool is exercised as a writer" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
     const served = try servedTools(arena_state.allocator());
-    var batch_served = false;
+    var change_served = false;
     for (served) |tool| {
-        if (std.mem.eql(u8, tool, "emetgate_try_batch")) batch_served = true;
+        if (std.mem.eql(u8, tool, "emetgate_change")) change_served = true;
+        try testing.expect(!server.isLegacy(tool));
     }
-    try testing.expect(batch_served);
+    try testing.expect(change_served);
     for (server.tool_defs) |tool| try testing.expect(!std.mem.eql(u8, tool.name, "emetgate_try_batch"));
     try testing.expect(readOnly("emetgate_scan"));
     try testing.expect(!readOnly("emetgate_try_batch"));
