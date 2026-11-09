@@ -39,6 +39,7 @@ const getString = tool_result.getString;
 
 pub const Policy = policy_mod.Policy;
 pub const parsePolicy = policy_mod.parsePolicy;
+pub const trustedTypecheckCommand = policy_mod.trustedTypecheckCommand;
 pub const open_run_flag = policy_mod.open_run_flag;
 pub const parseTree = policy_mod.parseTree;
 pub const refusedRunEntry = policy_mod.refusedRunEntry;

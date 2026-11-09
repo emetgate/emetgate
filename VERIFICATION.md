@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2943**
-- Mutations declared in `tests/mutations.json`: **2026**
-  - killed: **1976**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2946**
+- Mutations declared in `tests/mutations.json`: **2029**
+  - killed: **1979**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -472,7 +472,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-152 mutation(s).
+153 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -628,6 +628,7 @@ python tools/verification_page.py --check
 | `BLD16-detect-flag-repeatable` | `src/protocol/policy.zig` | `if (policy.detect_test) return null;` -> `` | test detection: --detect-test is parsed once | killed |
 | `FW6-write-leaves-find-session-fresh` | `src/protocol/policy.zig` | `if (self.find_session) \|session\| session.invalidate();` -> `_ = self;` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |
 | `CE13-mirror-flag-is-not-trust` | `src/protocol/policy.zig` | `policy.mirror_trusted = policy.mirror_enabled;` -> `` | context epoch: --mirror trusts the mirror without an epoch, the default and --n... | killed |
+| `NT1-no-typecheck-ignored` | `src/protocol/policy.zig` | `if (policy.no_typecheck) return "";` -> `` | typecheck detection: --no-typecheck turns the detected type checker off and ref... | killed |
 
 ### Scan
 
@@ -762,7 +763,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1363 mutation(s).
+1365 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2129,6 +2130,8 @@ python tools/verification_page.py --check
 | `UPD8-version-not-checked` | `src/update/update.zig` | `if (!self.reports(new, version)) {` -> `if (false) {` | self update: a downloaded exe that does not report the release version is not i... | killed |
 | `UPD9-no-key-still-downloads` | `src/update/update.zig` | `const key = self.key orelse return .no_release_key;` -> `const key = self.key orelse [_]u8{0} ** 32;` | self update: a build without a release key never downloads, and the placeholder... | killed |
 | `UPD10-download-not-announced` | `src/update/update.zig` | `if (self.on_download) \|announce\| announce(version);` -> `` | self update: a release signed by the release key replaces the exe and keeps the... | killed |
+| `TSC1-tsc-not-detected` | `src/platform/test_command.zig` | `if (try tscCommand(gpa, io, dir)) \|command\| return command;` -> `` | emetgate_change is refused when the project's own tsc, found by its tsconfig.js... | killed |
+| `TSC2-tsc-without-tsconfig` | `src/platform/test_command.zig` | `dir.access(io, "tsconfig.json", .{}) catch return null;` -> `` | typecheck detection: tsc needs a tsconfig.json at the root and the project's ow... | killed |
 
 ## What this system does not prove
 

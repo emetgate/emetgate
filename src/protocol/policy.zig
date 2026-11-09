@@ -24,6 +24,7 @@ const Value = std.json.Value;
 pub const Policy = struct {
     test_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
+    no_typecheck: bool = false,
     allow_repo_config: bool = false,
     detect_test: bool = false,
     allow_repo_memory: bool = false,
@@ -153,8 +154,11 @@ pub fn parsePolicy(args: anytype) ?Policy {
             if (json_code) return null;
             json_code = true;
             policy.raw_code = false;
+        } else if (std.mem.eql(u8, arg, "--no-typecheck")) {
+            if (policy.no_typecheck or policy.typecheck_command != null) return null;
+            policy.no_typecheck = true;
         } else if (std.mem.eql(u8, arg, "--typecheck")) {
-            if (policy.typecheck_command != null or i + 1 >= args.len) return null;
+            if (policy.typecheck_command != null or policy.no_typecheck or i + 1 >= args.len) return null;
             i += 1;
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
@@ -206,6 +210,7 @@ pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestP
 }
 
 pub fn trustedTypecheckCommand(policy: Policy) []const u8 {
+    if (policy.no_typecheck) return "";
     return policy.typecheck_command orelse if (policy.detect_test) test_command_mod.detect else "";
 }
 
