@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2899**
-- Mutations declared in `tests/mutations.json`: **2003**
-  - killed: **1953**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2908**
+- Mutations declared in `tests/mutations.json`: **2007**
+  - killed: **1957**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1340 mutation(s).
+1344 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2106,6 +2106,10 @@ python tools/verification_page.py --check
 | `MC2-evidence-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &none...` -> `_ = &none;` | map tools: evidence ends with a closure of the definitions its code calls | killed |
 | `MC3-closure-lists-shown` | `src/protocol/map_tools.zig` | `if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), fi...` -> `_ = ft;` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
 | `MC4-closure-every-word` | `src/protocol/map_tools.zig` | `if (opensCall(text, i) or afterNew(text, start) or isConstantNa...` -> `try names.put(arena, word, {});` | map tools: the closure takes call sites, constructed classes and constant names... | killed |
+| `MCH2-change-commit-leaves-outside-files` | `src/protocol/handlers.zig` | `const made = try commitReply(gpa, io, runtime, text, policy, ev...` -> `const made = try commitReply(gpa, io, runtime, text, policy, ev...` | emetgate_change commits a gated edit and a file written outside the gate in one... | killed |
+| `MCH3-commit-takes-own-workspace` | `src/platform/commit_group.zig` | `if (ownWorkspace(rel)) continue;` -> `` | emetgate_change with only a commit message commits the work tree as it is | killed |
+| `MCH5-tools-list-serves-legacy` | `src/protocol/server.zig` | `if (!legacy and isLegacy(listed.name)) continue;` -> `` | tools/list hides the tools emetgate_change replaces and serves them again with ... | killed |
+| `MCH6-change-reports-committed` | `src/protocol/handlers.zig` | `if (status.* == .string and std.mem.eql(u8, status.string, wire...` -> `_ = status;` | emetgate_change commits a gated edit and a file written outside the gate in one... | killed |
 
 ## What this system does not prove
 
