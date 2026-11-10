@@ -59,8 +59,7 @@ const Fixture = struct {
         const root = try tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
         errdefer gpa.free(root);
         try git_fixture.initRepo(root);
-        try gitOk(root, &.{ "add", "." });
-        try gitOk(root, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root, false);
         return .{ .tmp = tmp, .root = root };
     }
 
@@ -134,4 +133,97 @@ test "git index reader: the eval repositories read the same as git ls-files" {
         defer gpa.free(root);
         try expectMatchesLsFiles(root);
     }
+}
+
+fn expectTrackedFilesMatchGit(root: []const u8) !void {
+    const shadow = @import("emetgate").shadow;
+    const files = try shadow.trackedFiles(gpa, testing.io, root);
+    defer {
+        shadow.freeFileList(gpa, files);
+        gpa.free(files);
+    }
+    const listed = try git(root, &.{ "ls-files", "-z" });
+    defer gpa.free(listed);
+    var expected = std.mem.tokenizeScalar(u8, listed, 0);
+    var n: usize = 0;
+    while (expected.next()) |name| {
+        if (n >= files.len) return error.TooFewNames;
+        try testing.expectEqualStrings(name, files[n]);
+        n += 1;
+    }
+    try testing.expectEqual(n, files.len);
+}
+
+test "tracked files: the listing is git ls-files entry for entry, for a plain, a version 4, a conflicted and a split index and from a subdirectory" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+    try expectTrackedFilesMatchGit(fx.root);
+
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/deep/new.ts", .data = "x" });
+    try gitOk(fx.root, &.{ "add", "-N", "src/deep/new.ts" });
+    try gitOk(fx.root, &.{ "update-index", "--index-version", "4" });
+    try expectTrackedFilesMatchGit(fx.root);
+    try gitOk(fx.root, &.{ "commit", "-q", "-am", "new" });
+
+    try gitOk(fx.root, &.{ "checkout", "-q", "-b", "other" });
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/a.ts", .data = "export const v = 2;\n" });
+    try gitOk(fx.root, &.{ "commit", "-q", "-am", "other" });
+    try gitOk(fx.root, &.{ "checkout", "-q", "-" });
+    try fx.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/a.ts", .data = "export const v = 3;\n" });
+    try gitOk(fx.root, &.{ "commit", "-q", "-am", "main" });
+    try gitOk(fx.root, &.{ "merge", "-q", "other" });
+    const unmerged = try git(fx.root, &.{ "ls-files", "-u" });
+    defer gpa.free(unmerged);
+    try testing.expect(unmerged.len != 0);
+    try expectTrackedFilesMatchGit(fx.root);
+
+    const sub = try std.fmt.allocPrint(gpa, "{s}\\src", .{fx.root});
+    defer gpa.free(sub);
+    try expectTrackedFilesMatchGit(sub);
+
+    try gitOk(fx.root, &.{ "update-index", "--split-index" });
+    try expectTrackedFilesMatchGit(fx.root);
+}
+
+test "tracked files: an empty repository and one whose index is gone list nothing, as git ls-files does" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+    try fx.tmp.dir.deleteFile(testing.io, "repo/.git/index");
+    try expectTrackedFilesMatchGit(fx.root);
+}
+
+test "toplevel: a remembered root is dropped when a repository appears between it and the directory, and when the root stops being one" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const repo = @import("emetgate").repo;
+    var fx = try Fixture.init();
+    defer fx.deinit();
+    const deep = try std.fmt.allocPrint(gpa, "{s}\\src\\deep", .{fx.root});
+    defer gpa.free(deep);
+    const inner = try std.fmt.allocPrint(gpa, "{s}\\src", .{fx.root});
+    defer gpa.free(inner);
+
+    for (0..2) |_| {
+        const top = try repo.gitToplevel(gpa, testing.io, deep);
+        defer gpa.free(top);
+        try testing.expectEqualStrings(fx.root, top);
+    }
+
+    try git_fixture.initRepo(inner);
+    {
+        const top = try repo.gitToplevel(gpa, testing.io, deep);
+        defer gpa.free(top);
+        try testing.expectEqualStrings(inner, top);
+    }
+
+    try fx.tmp.dir.deleteTree(testing.io, "repo/src/.git");
+    try fx.tmp.dir.deleteTree(testing.io, "repo/.git");
+    const outer = repo.gitToplevel(gpa, testing.io, deep) catch |err| {
+        try testing.expectEqual(error.NotInRepo, err);
+        return;
+    };
+    defer gpa.free(outer);
+    try testing.expect(!std.ascii.eqlIgnoreCase(outer, fx.root));
+    try testing.expect(!std.ascii.eqlIgnoreCase(outer, inner));
 }

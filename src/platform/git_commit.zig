@@ -808,7 +808,34 @@ const Settings = struct {
     icase: bool = false,
     attributes_file: ?[]const u8 = null,
     conversion: std.crypto.hash.Blake3 = std.crypto.hash.Blake3.init(.{}),
+    name_usable: bool = false,
+    email_usable: bool = false,
+    committer_override: bool = false,
 };
+
+const identity_variables = [_][:0]const u16{
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_COMMITTER_NAME"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_COMMITTER_EMAIL"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_COMMITTER_DATE"),
+    std.unicode.utf8ToUtf16LeStringLiteral("EMAIL"),
+};
+
+fn usableIdentityPart(value: ?[]const u8) bool {
+    const text = value orelse return false;
+    for (text) |c| {
+        if (c > ' ' and std.mem.indexOfScalar(u8, ".,:;<>\"\'", c) == null) return true;
+    }
+    return false;
+}
+
+fn identityCertain(git: Git, set: Settings) bool {
+    if (builtin.os.tag != .windows or git.env != null) return false;
+    if (!set.name_usable or !set.email_usable or set.committer_override) return false;
+    for (identity_variables) |name| {
+        if ((sandbox.environmentValue(git.arena, name) catch return false) != null) return false;
+    }
+    return true;
+}
 
 const conversion_keys = [_][]const u8{ "core.autocrlf", "core.eol", "core.symlinks", "core.attributesfile" };
 
@@ -881,6 +908,9 @@ fn settings(git: Git) !Settings {
         if (std.ascii.eqlIgnoreCase(key, "commit.gpgsign")) found.signing = truthy(value);
         if (std.ascii.eqlIgnoreCase(key, "core.ignorecase")) found.icase = truthy(value);
         if (std.ascii.eqlIgnoreCase(key, "core.attributesfile")) found.attributes_file = value;
+        if (std.ascii.eqlIgnoreCase(key, "user.name")) found.name_usable = usableIdentityPart(value);
+        if (std.ascii.eqlIgnoreCase(key, "user.email")) found.email_usable = usableIdentityPart(value);
+        if (std.ascii.startsWithIgnoreCase(key, "committer.") or std.ascii.eqlIgnoreCase(key, "user.useconfigonly")) found.committer_override = true;
         if (shapesCheckout(key)) {
             found.conversion.update(entry);
             found.conversion.update(&.{0});
@@ -924,7 +954,7 @@ fn preflightImpl(gpa: Allocator, io: std.Io, root: []const u8, rels: []const []c
     var set = try settings(git);
     if (set.signing) return error.SigningNotSupported;
     const conversion = try conversionOf(git, &set, known.attributes);
-    if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) return error.NoCommitIdentity;
+    if (!identityCertain(git, set) and try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) return error.NoCommitIdentity;
 
     var measured: std.ArrayList(Measured) = .empty;
     errdefer {

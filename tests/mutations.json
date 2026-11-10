@@ -9678,7 +9678,7 @@
     {
       "id": "GC8-no-identity-accepted",
       "file": "src/platform/git_commit.zig",
-      "from": "    if (try git.run(&.{ \"var\", \"GIT_COMMITTER_IDENT\" }) == null) return error.NoCommitIdentity;\n",
+      "from": "    if (!identityCertain(git, set) and try git.run(&.{ \"var\", \"GIT_COMMITTER_IDENT\" }) == null) return error.NoCommitIdentity;\n",
       "to": "",
       "expect_status": "survived",
       "filter": [
