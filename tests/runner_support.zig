@@ -22,8 +22,7 @@ pub const Repo = struct {
         errdefer testing.allocator.free(root_abs);
 
         try git_fixture.initRepo(root_abs);
-        try git(root_abs, &.{ "add", "." });
-        try git(root_abs, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root_abs, false);
         return .{ .tmp = tmp, .root_abs = root_abs };
     }
 
@@ -79,8 +78,7 @@ pub const TwoFile = struct {
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", testing.allocator);
         errdefer testing.allocator.free(root_abs);
         try git_fixture.initRepo(root_abs);
-        try Repo.git(root_abs, &.{ "add", "." });
-        try Repo.git(root_abs, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root_abs, false);
         return .{ .tmp = tmp, .root_abs = root_abs };
     }
 

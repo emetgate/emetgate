@@ -27,8 +27,7 @@ const Repo = struct {
         self.root_abs = try self.tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
         errdefer gpa.free(self.root_abs);
         try git_fixture.initRepo(self.root_abs);
-        try git(self.root_abs, &.{ "add", "." });
-        try git(self.root_abs, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(self.root_abs, false);
         self.store = .init(gpa);
     }
 

@@ -39,10 +39,7 @@ const Clone = struct {
         const file_abs = try std.fmt.allocPrint(gpa, "{s}\\src\\math.ts", .{root_abs});
         errdefer gpa.free(file_abs);
         try git_fixture.initRepo(root_abs);
-        for ([_][]const []const u8{
-            &.{ "add", "." },
-            &.{ "commit", "-q", "-m", "init" },
-        }) |args| try git(root_abs, args);
+        try git_fixture.commitInit(root_abs, false);
         return .{ .tmp = tmp, .root_abs = root_abs, .drop_abs = drop_abs, .file_abs = file_abs };
     }
 

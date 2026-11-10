@@ -824,8 +824,7 @@ fn gitIn(root: []const u8, args: []const []const u8) !void {
 
 fn commitAll(root: []const u8) !void {
     try git_fixture.initRepo(root);
-    try gitIn(root, &.{ "add", "." });
-    try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+    try git_fixture.commitInit(root, false);
 }
 
 test "internal workspace and git paths are refused, others pass" {

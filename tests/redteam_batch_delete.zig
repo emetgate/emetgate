@@ -35,8 +35,7 @@ const Repo = struct {
         const outside_abs = try tmp.dir.realPathFileAlloc(testing.io, "outside", testing.allocator);
         errdefer testing.allocator.free(outside_abs);
         try git_fixture.initRepo(root_abs);
-        try git(root_abs, &.{ "add", "." });
-        try git(root_abs, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root_abs, false);
         return .{ .tmp = tmp, .root_abs = root_abs, .outside_abs = outside_abs };
     }
 

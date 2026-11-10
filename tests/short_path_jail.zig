@@ -65,8 +65,7 @@ const Served = struct {
         const long = try join(top, repo_dir);
         errdefer testing.allocator.free(long);
         try git_fixture.initRepo(long);
-        try run(long, &.{ try git_fixture.git(), "add", "." });
-        try run(long, &.{ try git_fixture.git(), "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(long, false);
         try tmp.dir.createDirPath(testing.io, repo_dir ++ "/.emetgate");
         try tmp.dir.writeFile(testing.io, .{ .sub_path = repo_dir ++ "/.emetgate/secret-file-long.txt", .data = secret_text });
         try tmp.dir.createDirPath(testing.io, repo_dir ++ "/nested-repository-long");
