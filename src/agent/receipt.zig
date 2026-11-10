@@ -38,9 +38,9 @@ pub const Session = struct {
         merkle_root: ledger_mod.Hash,
     };
 
-    pub fn record(self: *Session, result: Result) Allocator.Error!ledger_mod.Handle {
+    pub fn registerOnly(self: *Session, result: Result) Allocator.Error!usize {
         self.ledger.tick();
-        const handle = try self.ledger.register(.{
+        _ = try self.ledger.register(.{
             .claim = result.claim,
             .body = result.body,
             .body_tokens = result.body_tokens,
@@ -49,12 +49,37 @@ pub const Session = struct {
             .tool_use_id = result.tool_use_id,
             .msg_index = self.canonical.items.len,
         });
-        const entry = &self.ledger.entries.items[self.ledger.entries.items.len - 1];
+        return self.ledger.entries.items.len - 1;
+    }
+
+    pub fn appendToolResults(self: *Session, indices: []const usize) Allocator.Error!void {
+        const arena = self.arena_state.allocator();
+        const blocks = try arena.alloc(api.ContentBlock, indices.len);
+        for (indices, blocks) |idx, *b| {
+            const entry = self.ledger.entries.items[idx];
+            b.* = .{ .tool_result = .{ .tool_use_id = entry.tool_use_id, .content = entry.body } };
+        }
+        try self.canonical.append(self.gpa, .{ .role = .user, .content = blocks });
+    }
+
+    pub fn record(self: *Session, result: Result) Allocator.Error!ledger_mod.Handle {
+        const idx = try self.registerOnly(result);
+        try self.appendToolResults(&.{idx});
+        return self.ledger.entries.items[idx].handle;
+    }
+
+    pub fn appendUser(self: *Session, text: []const u8) Allocator.Error!void {
         const arena = self.arena_state.allocator();
         const blocks = try arena.alloc(api.ContentBlock, 1);
-        blocks[0] = .{ .tool_result = .{ .tool_use_id = entry.tool_use_id, .content = entry.body } };
+        blocks[0] = .{ .text = try arena.dupe(u8, text) };
         try self.canonical.append(self.gpa, .{ .role = .user, .content = blocks });
-        return handle;
+    }
+
+    pub fn appendAssistant(self: *Session, content: []const api.ContentBlock) Allocator.Error!void {
+        const arena = self.arena_state.allocator();
+        const blocks = try arena.alloc(api.ContentBlock, content.len);
+        for (content, blocks) |src, *dst| dst.* = try dupBlock(arena, src);
+        try self.canonical.append(self.gpa, .{ .role = .assistant, .content = blocks });
     }
 
     pub const Advance = struct { collapsed: usize, freed: usize, resident_after: usize };
@@ -73,6 +98,14 @@ pub const Session = struct {
         return self.ledger.residentTokens();
     }
 };
+
+fn dupBlock(arena: Allocator, block: api.ContentBlock) Allocator.Error!api.ContentBlock {
+    return switch (block) {
+        .text => |t| .{ .text = try arena.dupe(u8, t) },
+        .tool_use => |tu| .{ .tool_use = .{ .id = try arena.dupe(u8, tu.id), .name = try arena.dupe(u8, tu.name), .input_json = try arena.dupe(u8, tu.input_json) } },
+        .tool_result => |tr| .{ .tool_result = .{ .tool_use_id = try arena.dupe(u8, tr.tool_use_id), .content = try arena.dupe(u8, tr.content), .is_error = tr.is_error } },
+    };
+}
 
 const testing = std.testing;
 
