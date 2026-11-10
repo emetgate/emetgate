@@ -6,6 +6,7 @@ const Allocator = std.mem.Allocator;
 const Ledger = ledger_mod.Ledger;
 const Handle = ledger_mod.Handle;
 const Hash = ledger_mod.Hash;
+const Target = ledger_mod.Target;
 
 pub const Threshold = struct {
     max_chars: usize = 1200,
@@ -22,7 +23,7 @@ pub fn compact(
     gpa: Allocator,
     ledger: *Ledger,
     tool_name: []const u8,
-    args_json: []const u8,
+    targets: []const Target,
     result_text: []const u8,
     is_error: bool,
     merkle_root: Hash,
@@ -37,13 +38,12 @@ pub fn compact(
     const arena = arena_state.allocator();
 
     const claim = try wrap.claim(arena, tool_name, result_text, is_error);
-    const tgts = try wrap.targets(arena, args_json);
     ledger.tick();
     const handle = try ledger.register(.{
         .claim = claim,
         .body = result_text,
         .merkle_root = merkle_root,
-        .targets = tgts,
+        .targets = targets,
         .tool_use_id = "",
         .msg_index = 0,
     });
@@ -159,21 +159,69 @@ pub const Expansion = struct {
     stale: bool,
 };
 
-pub fn expand(gpa: Allocator, ledger: *Ledger, handle_text: []const u8, current_root: Hash) Allocator.Error!Expansion {
+pub fn parseHandle(handle_text: []const u8) ?Handle {
     const clean = if (handle_text.len != 0 and handle_text[0] == '#') handle_text[1..] else handle_text;
-    if (clean.len != ledger_mod.handle_len) {
-        return .{ .text = try gpa.dupe(u8, "expand: malformed handle; copy the exact handle from the collapsed line"), .found = false, .stale = false };
-    }
+    if (clean.len != ledger_mod.handle_len) return null;
     var handle: Handle = undefined;
     @memcpy(&handle, clean[0..ledger_mod.handle_len]);
+    return handle;
+}
+
+pub fn expand(gpa: Allocator, ledger: *Ledger, handle_text: []const u8, current_root: Hash, file: ?[]const u8) Allocator.Error!Expansion {
+    const handle = parseHandle(handle_text) orelse {
+        return .{ .text = try gpa.dupe(u8, "expand: malformed handle; copy the exact handle from the collapsed line"), .found = false, .stale = false };
+    };
     const got = ledger.expand(handle, current_root) orelse {
         return .{ .text = try gpa.dupe(u8, "expand: unknown handle; it may be from an earlier server run, re-run the original tool"), .found = false, .stale = false };
     };
+    const body = if (file) |f| sliceFile(got.body, f) else got.body;
+    const missing = file != null and body.len == got.body.len and !fileHeaderPresent(got.body, file.?);
     const stale = got.state == .stale;
     if (stale) {
-        return .{ .text = try std.fmt.allocPrint(gpa, "(stale: the file changed since this was captured; re-run the tool for the current version)\n{s}", .{got.body}), .found = true, .stale = true };
+        return .{ .text = try std.fmt.allocPrint(gpa, "(stale: the source changed since this was captured; re-run the tool for the current version)\n{s}", .{body}), .found = true, .stale = true };
     }
-    return .{ .text = try gpa.dupe(u8, got.body), .found = true, .stale = false };
+    if (missing) {
+        return .{ .text = try std.fmt.allocPrint(gpa, "(no section for \"{s}\" in this result; returning the whole body)\n{s}", .{ file.?, body }), .found = true, .stale = false };
+    }
+    return .{ .text = try gpa.dupe(u8, body), .found = true, .stale = false };
+}
+
+fn isHeaderLine(line: []const u8) bool {
+    if (line.len == 0) return false;
+    const c0 = line[0];
+    return !((c0 >= '0' and c0 <= '9') or c0 == '|' or c0 == ' ' or c0 == '\t' or c0 == 0xE2);
+}
+
+fn matchesFile(line: []const u8, file: []const u8) bool {
+    return std.mem.eql(u8, line, file) or std.mem.endsWith(u8, line, file);
+}
+
+fn fileHeaderPresent(body: []const u8, file: []const u8) bool {
+    var pos: usize = 0;
+    while (pos <= body.len) {
+        const nl = std.mem.indexOfScalarPos(u8, body, pos, '\n') orelse body.len;
+        if (isHeaderLine(body[pos..nl]) and matchesFile(body[pos..nl], file)) return true;
+        if (nl == body.len) break;
+        pos = nl + 1;
+    }
+    return false;
+}
+
+fn sliceFile(body: []const u8, file: []const u8) []const u8 {
+    var pos: usize = 0;
+    var target_start: ?usize = null;
+    while (pos <= body.len) {
+        const nl = std.mem.indexOfScalarPos(u8, body, pos, '\n') orelse body.len;
+        const line = body[pos..nl];
+        if (isHeaderLine(line)) {
+            if (target_start != null) return body[target_start.?..pos];
+            if (matchesFile(line, file)) target_start = pos;
+        }
+        if (nl == body.len) break;
+        pos = nl + 1;
+    }
+    if (target_start) |ts| return body[ts..];
+    return body;
 }
 
 fn headOf(text: []const u8, limit: usize) []const u8 {
@@ -195,7 +243,7 @@ fn root(tag: []const u8) Hash {
 test "a small result passes through unchanged and stores nothing" {
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
-    const out = try compact(testing.allocator, &l, "emetgate_read_symbol", "{\"file\":\"a.zig\"}", "short body", false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_read_symbol", &.{}, "short body", false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(!out.compacted);
     try testing.expectEqualStrings("short body", out.text);
@@ -206,7 +254,7 @@ test "an error passes through even when large" {
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "E" ** 5000;
-    const out = try compact(testing.allocator, &l, "emetgate_try", "{}", big, true, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_try", &.{}, big, true, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(!out.compacted);
     try testing.expectEqual(@as(usize, 0), l.entries.items.len);
@@ -216,7 +264,7 @@ test "a large result is compacted to a head plus an expand handle and the body i
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "line\n" ** 2000;
-    const out = try compact(testing.allocator, &l, "emetgate_search", "{\"pattern\":\"x\"}", big, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, big, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(out.text.len < big.len);
@@ -237,7 +285,7 @@ test "search compaction yields a file match-map and preserves the certificate fo
         "23:pub const CollectError = Unrunnable || Allocator.Error;\n" ++
         "109:pub fn validate(gpa: Allocator, spec: []const u8) Error!void {\n" ++
         "partial: matches 1-42 of 520; next offset:42\n";
-    const out = try compact(testing.allocator, &l, "emetgate_search", "{\"pattern\":\"Allocator\"}", body, false, root("r1"), .{ .max_chars = 100 });
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, body, false, root("r1"), .{ .max_chars = 100 });
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(std.mem.indexOf(u8, out.text, "src/engine/alloc_bridge.zig (1)") != null);
@@ -251,7 +299,7 @@ test "a non-search large result keeps its certificate footer in the generic dige
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const body = ("x: body line\n" ** 400) ++ "CERTIFICATE: no edge is missing; unresolved 0\n";
-    const out = try compact(testing.allocator, &l, "emetgate_evidence", "{}", body, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_evidence", &.{}, body, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(out.text.len < body.len);
@@ -262,16 +310,16 @@ test "expand returns the stored body fresh, and flags stale when the root change
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "data " ** 1000;
-    const out = try compact(testing.allocator, &l, "emetgate_search", "{\"file\":\"a.zig\"}", big, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, big, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
 
     var hbuf: [ledger_mod.handle_len]u8 = out.handle.?;
-    const fresh = try expand(testing.allocator, &l, &hbuf, root("r1"));
+    const fresh = try expand(testing.allocator, &l, &hbuf, root("r1"), null);
     defer testing.allocator.free(fresh.text);
     try testing.expect(fresh.found and !fresh.stale);
     try testing.expectEqualStrings(big, fresh.text);
 
-    const stale = try expand(testing.allocator, &l, &hbuf, root("r2"));
+    const stale = try expand(testing.allocator, &l, &hbuf, root("r2"), null);
     defer testing.allocator.free(stale.text);
     try testing.expect(stale.found and stale.stale);
     try testing.expect(std.mem.indexOf(u8, stale.text, "stale") != null);
@@ -280,12 +328,40 @@ test "expand returns the stored body fresh, and flags stale when the root change
 test "expand of an unknown or malformed handle is a helpful message, not a crash" {
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
-    const unknown = try expand(testing.allocator, &l, "abcdef012345", root("r1"));
+    const unknown = try expand(testing.allocator, &l, "abcdef012345", root("r1"), null);
     defer testing.allocator.free(unknown.text);
     try testing.expect(!unknown.found);
 
-    const malformed = try expand(testing.allocator, &l, "xyz", root("r1"));
+    const malformed = try expand(testing.allocator, &l, "xyz", root("r1"), null);
     defer testing.allocator.free(malformed.text);
     try testing.expect(!malformed.found);
     try testing.expect(std.mem.indexOf(u8, malformed.text, "malformed") != null);
+}
+
+test "granular expand returns only the requested file's section" {
+    var l: Ledger = .init(testing.allocator);
+    defer l.deinit();
+    const body =
+        "src/a.zig\n" ++
+        "10:fn one() void {}\n" ++
+        "src/b.zig\n" ++
+        "20:fn two() void {}\n" ++
+        "30:fn three() void {}\n" ++
+        "partial: matches 1-3 of 3\n";
+    const h = try l.register(.{ .claim = "search", .body = body, .merkle_root = root("r1"), .msg_index = 0 });
+
+    const one = try expand(testing.allocator, &l, &h, root("r1"), "src/a.zig");
+    defer testing.allocator.free(one.text);
+    try testing.expect(std.mem.indexOf(u8, one.text, "fn one") != null);
+    try testing.expect(std.mem.indexOf(u8, one.text, "fn two") == null);
+
+    const two = try expand(testing.allocator, &l, &h, root("r1"), "b.zig");
+    defer testing.allocator.free(two.text);
+    try testing.expect(std.mem.indexOf(u8, two.text, "fn two") != null);
+    try testing.expect(std.mem.indexOf(u8, two.text, "fn three") != null);
+    try testing.expect(std.mem.indexOf(u8, two.text, "fn one") == null);
+
+    const missing = try expand(testing.allocator, &l, &h, root("r1"), "nope.zig");
+    defer testing.allocator.free(missing.text);
+    try testing.expect(std.mem.indexOf(u8, missing.text, "no section") != null);
 }

@@ -239,7 +239,7 @@ pub const Workspace = struct {
             .nested => |index| {
                 const section = self.callSection(index, call, null) catch return false;
                 defer self.gpa.free(section.text);
-                const comp = server.compactReply(self.gpa, self.primary.policy, call.name, section.text, section.is_error) catch null;
+                const comp = server.compactReply(self.gpa, self.io, self.primary.policy, call.name, call.arguments, section.text, section.is_error) catch null;
                 defer if (comp) |c| self.gpa.free(c);
                 try server.writeToolResult(out, id, comp orelse section.text, section.is_error);
                 return true;
@@ -281,7 +281,7 @@ pub const Workspace = struct {
             try text.writer.print("--- {s}\n{s}", .{ self.repositories.items[index].label, section.text });
         }
         if (self.cut) try text.writer.print("\nmore than {d} repositories or too many folders under this one; pass dir to reach the rest", .{max_repositories});
-        const comp = server.compactReply(self.gpa, self.primary.policy, call.name, text.written(), all_failed) catch null;
+        const comp = server.compactReply(self.gpa, self.io, self.primary.policy, call.name, call.arguments, text.written(), all_failed) catch null;
         defer if (comp) |c| self.gpa.free(c);
         try server.writeToolResult(out, id, comp orelse text.written(), all_failed);
         return true;

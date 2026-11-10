@@ -294,8 +294,11 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_expand",
-        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle exactly as shown on the collapsed line; the body is verified unchanged or flagged stale.",
-        .props = &.{.{ .name = "handle", .desc = "the handle from a collapsed result line" }},
+        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle from the collapsed line; the body is verified byte-identical, or flagged stale when its source files changed. With file, returns only that file's section of the result (e.g. one file from a search match-map).",
+        .props = &.{
+            .{ .name = "handle", .desc = "the handle from a collapsed result line" },
+            .{ .name = "file", .desc = "optional: return only this file's section", .optional = true },
+        },
     },
 };
 
@@ -507,7 +510,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         };
     };
     defer gpa.free(result.text);
-    const compacted = compactReply(gpa, policy, name, result.text, result.is_error) catch null;
+    const compacted = compactReply(gpa, io, policy, name, arguments, result.text, result.is_error) catch null;
     defer if (compacted) |c| gpa.free(c);
     const body = compacted orelse result.text;
     const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, body) else null;
@@ -532,7 +535,12 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
         const stash = policy.stash orelse return .{ .text = try gpa.dupe(u8, "expand is unavailable outside a server session"), .is_error = true };
         const args = arguments orelse return error.MissingArgument;
         const handle = getString(args, "handle") orelse return error.MissingArgument;
-        const exp = try compact_mod.expand(gpa, stash, handle, std.mem.zeroes(ledger_mod.Hash));
+        const file = getString(args, "file");
+        const current = if (compact_mod.parseHandle(handle)) |h|
+            (if (stash.find(h)) |entry| fileRoot(gpa, io, policy.root, entry.targets) else std.mem.zeroes(ledger_mod.Hash))
+        else
+            std.mem.zeroes(ledger_mod.Hash);
+        const exp = try compact_mod.expand(gpa, stash, handle, current, file);
         return .{ .text = exp.text, .is_error = !exp.found };
     }
     return rawCall(gpa, io, runtime, name, arguments, event, policy);
@@ -549,15 +557,49 @@ fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
 }
 
-pub fn compactReply(gpa: Allocator, policy: Policy, name: []const u8, text: []const u8, is_error: bool) !?[]u8 {
+pub fn compactReply(gpa: Allocator, io: std.Io, policy: Policy, name: []const u8, args: ?Value, text: []const u8, is_error: bool) !?[]u8 {
     if (is_error or !shouldCompact(name)) return null;
     const stash = policy.stash orelse return null;
-    const c = compact_mod.compact(gpa, stash, name, "{}", text, false, std.mem.zeroes(ledger_mod.Hash), .{}) catch return null;
+    const file = fileArg(args);
+    var tgts_buf: [1]ledger_mod.Target = undefined;
+    const tgts: []const ledger_mod.Target = if (file) |f| blk: {
+        tgts_buf[0] = .{ .file = f };
+        break :blk tgts_buf[0..1];
+    } else &.{};
+    const root = fileRoot(gpa, io, policy.root, tgts);
+    const c = compact_mod.compact(gpa, stash, name, tgts, text, false, root, .{}) catch return null;
     if (!c.compacted) {
         gpa.free(c.text);
         return null;
     }
     return c.text;
+}
+
+fn fileArg(args: ?Value) ?[]const u8 {
+    const a = args orelse return null;
+    return getString(a, "file") orelse getString(a, "from") orelse getString(a, "path");
+}
+
+fn fileRoot(gpa: Allocator, io: std.Io, root_dir: ?[]const u8, targets: []const ledger_mod.Target) ledger_mod.Hash {
+    const zero = std.mem.zeroes(ledger_mod.Hash);
+    if (targets.len == 0) return zero;
+    const rd = root_dir orelse return zero;
+    var dir = std.Io.Dir.openDirAbsolute(io, rd, .{}) catch return zero;
+    defer dir.close(io);
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    for (targets) |t| {
+        hasher.update(t.file);
+        hasher.update("\x00");
+        const content = dir.readFileAlloc(io, t.file, gpa, .limited(4 << 20)) catch {
+            hasher.update("<unreadable>");
+            continue;
+        };
+        defer gpa.free(content);
+        hasher.update(content);
+    }
+    var out: ledger_mod.Hash = undefined;
+    hasher.final(&out);
+    return out;
 }
 
 fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
