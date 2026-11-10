@@ -48,10 +48,109 @@ pub fn compact(
         .msg_index = 0,
     });
 
-    const head = headOf(result_text, threshold.head_chars);
-    const hidden = result_text.len - head.len;
-    const text = try std.fmt.allocPrint(gpa, "{s}\n\u{2026} +{d} chars collapsed \u{00B7} emetgate_expand {{\"handle\":\"{s}\"}}\n", .{ head, hidden, &handle });
+    const text = try digest(gpa, tool_name, result_text, handle, threshold.head_chars);
     return .{ .text = text, .compacted = true, .handle = handle };
+}
+
+pub const max_map_files: usize = 80;
+
+fn digest(gpa: Allocator, tool_name: []const u8, text: []const u8, handle: Handle, head_chars: usize) Allocator.Error![]u8 {
+    if (std.mem.eql(u8, tool_name, "emetgate_search")) {
+        if (try searchDigest(gpa, text, handle)) |d| return d;
+    }
+    return genericDigest(gpa, text, handle, head_chars);
+}
+
+fn genericDigest(gpa: Allocator, text: []const u8, handle: Handle, head_chars: usize) Allocator.Error![]u8 {
+    const head = headOf(text, head_chars);
+    const hidden = text.len - head.len;
+    const foot = footerOf(text);
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    try out.appendSlice(gpa, head);
+    const trailer = try std.fmt.allocPrint(gpa, "\n\u{2026} +{d} chars collapsed \u{00B7} emetgate_expand {{\"handle\":\"{s}\"}}\n", .{ hidden, &handle });
+    defer gpa.free(trailer);
+    try out.appendSlice(gpa, trailer);
+    if (foot.len != 0 and @intFromPtr(foot.ptr) >= @intFromPtr(text.ptr) + head.len) {
+        try out.appendSlice(gpa, foot);
+        try out.append(gpa, '\n');
+    }
+    return out.toOwnedSlice(gpa);
+}
+
+fn searchDigest(gpa: Allocator, text: []const u8, handle: Handle) Allocator.Error!?[]u8 {
+    if (std.mem.indexOf(u8, text, "\n--- ") != null) return null;
+    const foot = footerOf(text);
+    var map: std.ArrayList(u8) = .empty;
+    defer map.deinit(gpa);
+    var files: usize = 0;
+    var hits: usize = 0;
+    var listed: usize = 0;
+    var have_cur = false;
+    var cur_name: []const u8 = "";
+    var cur_count: usize = 0;
+
+    var it = std.mem.splitScalar(u8, text, '\n');
+    while (it.next()) |line| {
+        if (line.len == 0) continue;
+        if (@intFromPtr(line.ptr) == @intFromPtr(foot.ptr)) continue;
+        const c0 = line[0];
+        const is_hit = (c0 >= '0' and c0 <= '9') or c0 == '|';
+        if (is_hit) {
+            if (have_cur) cur_count += 1;
+            continue;
+        }
+        if (c0 == ' ' or c0 == '\t' or c0 == 0xE2) continue;
+        if (have_cur) {
+            try appendFile(gpa, &map, cur_name, cur_count, &listed);
+            files += 1;
+            hits += cur_count;
+        }
+        cur_name = line;
+        cur_count = 0;
+        have_cur = true;
+    }
+    if (have_cur) {
+        try appendFile(gpa, &map, cur_name, cur_count, &listed);
+        files += 1;
+        hits += cur_count;
+    }
+    if (files == 0) return null;
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(gpa);
+    const header = try std.fmt.allocPrint(gpa, "{d} file(s) matched, {d} hit(s); which file and how many:\n", .{ files, hits });
+    defer gpa.free(header);
+    try out.appendSlice(gpa, header);
+    try out.appendSlice(gpa, map.items);
+    if (files > listed) {
+        const more = try std.fmt.allocPrint(gpa, "  \u{2026} {d} more file(s)\n", .{files - listed});
+        defer gpa.free(more);
+        try out.appendSlice(gpa, more);
+    }
+    const trailer = try std.fmt.allocPrint(gpa, "\u{2026} full hit lines collapsed \u{00B7} emetgate_expand {{\"handle\":\"{s}\"}}\n", .{&handle});
+    defer gpa.free(trailer);
+    try out.appendSlice(gpa, trailer);
+    if (foot.len != 0) {
+        try out.appendSlice(gpa, foot);
+        try out.append(gpa, '\n');
+    }
+    return try out.toOwnedSlice(gpa);
+}
+
+fn appendFile(gpa: Allocator, map: *std.ArrayList(u8), name: []const u8, count: usize, listed: *usize) Allocator.Error!void {
+    if (listed.* >= max_map_files) return;
+    const line = try std.fmt.allocPrint(gpa, "  {s} ({d})\n", .{ name, count });
+    defer gpa.free(line);
+    try map.appendSlice(gpa, line);
+    listed.* += 1;
+}
+
+fn footerOf(text: []const u8) []const u8 {
+    var end = text.len;
+    while (end > 0 and (text[end - 1] == '\n' or text[end - 1] == '\r')) end -= 1;
+    const start = if (std.mem.lastIndexOfScalar(u8, text[0..end], '\n')) |nl| nl + 1 else 0;
+    return text[start..end];
 }
 
 pub const Expansion = struct {
@@ -124,6 +223,39 @@ test "a large result is compacted to a head plus an expand handle and the body i
     try testing.expect(std.mem.indexOf(u8, out.text, "emetgate_expand") != null);
     try testing.expect(std.mem.indexOf(u8, out.text, &out.handle.?) != null);
     try testing.expectEqual(@as(usize, 1), l.entries.items.len);
+}
+
+test "search compaction yields a file match-map and preserves the certificate footer" {
+    var l: Ledger = .init(testing.allocator);
+    defer l.deinit();
+    const body =
+        "|1 const Allocator = std.mem.Allocator;\n" ++
+        "src/engine/alloc_bridge.zig\n" ++
+        "104:fn backingAllocator() std.mem.Allocator {\n" ++
+        "src/engine/checks.zig\n" ++
+        "13|1\n" ++
+        "23:pub const CollectError = Unrunnable || Allocator.Error;\n" ++
+        "109:pub fn validate(gpa: Allocator, spec: []const u8) Error!void {\n" ++
+        "partial: matches 1-42 of 520; next offset:42\n";
+    const out = try compact(testing.allocator, &l, "emetgate_search", "{\"pattern\":\"Allocator\"}", body, false, root("r1"), .{ .max_chars = 100 });
+    defer testing.allocator.free(out.text);
+    try testing.expect(out.compacted);
+    try testing.expect(std.mem.indexOf(u8, out.text, "src/engine/alloc_bridge.zig (1)") != null);
+    try testing.expect(std.mem.indexOf(u8, out.text, "src/engine/checks.zig (3)") != null);
+    try testing.expect(std.mem.indexOf(u8, out.text, "partial: matches 1-42 of 520") != null);
+    try testing.expect(std.mem.indexOf(u8, out.text, "emetgate_expand") != null);
+    try testing.expect(out.text.len < body.len);
+}
+
+test "a non-search large result keeps its certificate footer in the generic digest" {
+    var l: Ledger = .init(testing.allocator);
+    defer l.deinit();
+    const body = ("x: body line\n" ** 400) ++ "CERTIFICATE: no edge is missing; unresolved 0\n";
+    const out = try compact(testing.allocator, &l, "emetgate_evidence", "{}", body, false, root("r1"), .{});
+    defer testing.allocator.free(out.text);
+    try testing.expect(out.compacted);
+    try testing.expect(out.text.len < body.len);
+    try testing.expect(std.mem.indexOf(u8, out.text, "CERTIFICATE: no edge is missing") != null);
 }
 
 test "expand returns the stored body fresh, and flags stale when the root changed" {
