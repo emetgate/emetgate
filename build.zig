@@ -63,7 +63,8 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
-    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .pcre2 = pcre2.library };
+    const test_strip = b.option(bool, "test-strip", "Build the test binary without debug information: faster to build, failures show addresses instead of source lines");
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .pcre2 = pcre2.library, .strip = test_strip };
     const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
@@ -193,6 +194,7 @@ const TestModuleOptions = struct {
     version_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
     pcre2: *std.Build.Step.Compile,
+    strip: ?bool = null,
 };
 
 fn buildOptions(b: *std.Build, bench: bool) *std.Build.Module {
@@ -224,6 +226,7 @@ fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
         .target = options.target,
         .optimize = options.optimize,
         .link_libc = true,
+        .strip = options.strip,
         .imports = &.{
             .{ .name = "c", .module = options.c_module },
             .{ .name = "version", .module = options.version_module },
