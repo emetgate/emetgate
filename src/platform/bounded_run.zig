@@ -14,6 +14,13 @@ pub fn run(gpa: Allocator, io: std.Io, options: std.process.RunOptions) !std.pro
     return runWith(gpa, io, options, null);
 }
 
+extern "kernel32" fn GetConsoleCP() callconv(.winapi) u32;
+
+pub fn hidesWindow(wanted: bool) bool {
+    if (!wanted or builtin.os.tag != .windows) return wanted;
+    return GetConsoleCP() == 0;
+}
+
 pub fn runFed(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: []const u8) !std.process.RunResult {
     return runWith(gpa, io, options, input);
 }
@@ -32,7 +39,7 @@ fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?
         .cwd = options.cwd,
         .environ_map = options.environ_map,
         .expand_arg0 = options.expand_arg0,
-        .create_no_window = options.create_no_window,
+        .create_no_window = hidesWindow(options.create_no_window),
         .stdin = if (input == null) .ignore else .pipe,
         .stdout = .pipe,
         .stderr = .pipe,
