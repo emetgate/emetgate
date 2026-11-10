@@ -541,6 +541,18 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
         else
             std.mem.zeroes(ledger_mod.Hash);
         const exp = try compact_mod.expand(gpa, stash, handle, current, file);
+        if (exp.stale and file == null) {
+            if (compact_mod.parseHandle(handle)) |h| {
+                if (stash.find(h)) |entry| {
+                    if (entry.tool.len != 0) {
+                        if (selfHeal(gpa, io, runtime, event, policy, entry.tool, entry.args)) |fresh| {
+                            gpa.free(exp.text);
+                            return fresh;
+                        } else |_| {}
+                    }
+                }
+            }
+        }
         return .{ .text = exp.text, .is_error = !exp.found };
     }
     return rawCall(gpa, io, runtime, name, arguments, event, policy);
@@ -567,12 +579,27 @@ pub fn compactReply(gpa: Allocator, io: std.Io, policy: Policy, name: []const u8
         break :blk tgts_buf[0..1];
     } else &.{};
     const root = fileRoot(gpa, io, policy.root, tgts);
-    const c = compact_mod.compact(gpa, stash, name, tgts, text, false, root, .{}) catch return null;
+    const args_json = if (args) |a| (std.json.Stringify.valueAlloc(gpa, a, .{}) catch try gpa.dupe(u8, "")) else try gpa.dupe(u8, "");
+    defer gpa.free(args_json);
+    const c = compact_mod.compact(gpa, stash, name, tgts, args_json, text, false, root, .{}) catch return null;
     if (!c.compacted) {
         gpa.free(c.text);
         return null;
     }
     return c.text;
+}
+
+fn selfHeal(gpa: Allocator, io: std.Io, runtime: *Runtime, event: *telemetry.Event, policy: Policy, tool: []const u8, args_json: []const u8) !tool_result.ToolResult {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const parsed = std.json.parseFromSliceLeaky(Value, arena_state.allocator(), args_json, .{}) catch return error.BadHealArgs;
+    const fresh = try rawCall(gpa, io, runtime, tool, parsed, event, policy);
+    defer gpa.free(fresh.text);
+    const comp = compactReply(gpa, io, policy, tool, parsed, fresh.text, fresh.is_error) catch null;
+    defer if (comp) |c| gpa.free(c);
+    const body = comp orelse fresh.text;
+    const text = try std.fmt.allocPrint(gpa, "(refreshed: the source changed, so this is {s} re-run against the current code)\n{s}", .{ tool, body });
+    return .{ .text = text, .is_error = fresh.is_error };
 }
 
 fn fileArg(args: ?Value) ?[]const u8 {

@@ -29,6 +29,8 @@ pub const Entry = struct {
     merkle_root: Hash,
     targets: []const Target,
     tool_use_id: []const u8,
+    tool: []const u8,
+    args: []const u8,
     call_index: u32,
     msg_index: usize,
     state: State,
@@ -80,6 +82,8 @@ pub const Ledger = struct {
         self.gpa.free(entry.claim);
         self.gpa.free(entry.body);
         self.gpa.free(entry.tool_use_id);
+        self.gpa.free(entry.tool);
+        self.gpa.free(entry.args);
         for (entry.targets) |t| {
             self.gpa.free(t.file);
             self.gpa.free(t.symbol);
@@ -98,6 +102,8 @@ pub const Ledger = struct {
         merkle_root: Hash,
         targets: []const Target = &.{},
         tool_use_id: []const u8 = "",
+        tool: []const u8 = "",
+        args: []const u8 = "",
         msg_index: usize,
     };
 
@@ -109,6 +115,10 @@ pub const Ledger = struct {
         errdefer self.gpa.free(body);
         const tool_use_id = try self.gpa.dupe(u8, record.tool_use_id);
         errdefer self.gpa.free(tool_use_id);
+        const tool = try self.gpa.dupe(u8, record.tool);
+        errdefer self.gpa.free(tool);
+        const args = try self.gpa.dupe(u8, record.args);
+        errdefer self.gpa.free(args);
         const targets = try self.gpa.alloc(Target, record.targets.len);
         var filled: usize = 0;
         errdefer {
@@ -134,6 +144,8 @@ pub const Ledger = struct {
             .merkle_root = record.merkle_root,
             .targets = targets,
             .tool_use_id = tool_use_id,
+            .tool = tool,
+            .args = args,
             .call_index = self.calls,
             .msg_index = record.msg_index,
             .state = .live,

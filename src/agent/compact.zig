@@ -24,6 +24,7 @@ pub fn compact(
     ledger: *Ledger,
     tool_name: []const u8,
     targets: []const Target,
+    args_json: []const u8,
     result_text: []const u8,
     is_error: bool,
     merkle_root: Hash,
@@ -45,6 +46,8 @@ pub fn compact(
         .merkle_root = merkle_root,
         .targets = targets,
         .tool_use_id = "",
+        .tool = tool_name,
+        .args = args_json,
         .msg_index = 0,
     });
 
@@ -243,7 +246,7 @@ fn root(tag: []const u8) Hash {
 test "a small result passes through unchanged and stores nothing" {
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
-    const out = try compact(testing.allocator, &l, "emetgate_read_symbol", &.{}, "short body", false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_read_symbol", &.{}, "{}", "short body", false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(!out.compacted);
     try testing.expectEqualStrings("short body", out.text);
@@ -254,7 +257,7 @@ test "an error passes through even when large" {
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "E" ** 5000;
-    const out = try compact(testing.allocator, &l, "emetgate_try", &.{}, big, true, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_try", &.{}, "{}", big, true, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(!out.compacted);
     try testing.expectEqual(@as(usize, 0), l.entries.items.len);
@@ -264,7 +267,7 @@ test "a large result is compacted to a head plus an expand handle and the body i
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "line\n" ** 2000;
-    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, big, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, "{}", big, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(out.text.len < big.len);
@@ -285,7 +288,7 @@ test "search compaction yields a file match-map and preserves the certificate fo
         "23:pub const CollectError = Unrunnable || Allocator.Error;\n" ++
         "109:pub fn validate(gpa: Allocator, spec: []const u8) Error!void {\n" ++
         "partial: matches 1-42 of 520; next offset:42\n";
-    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, body, false, root("r1"), .{ .max_chars = 100 });
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, "{}", body, false, root("r1"), .{ .max_chars = 100 });
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(std.mem.indexOf(u8, out.text, "src/engine/alloc_bridge.zig (1)") != null);
@@ -299,7 +302,7 @@ test "a non-search large result keeps its certificate footer in the generic dige
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const body = ("x: body line\n" ** 400) ++ "CERTIFICATE: no edge is missing; unresolved 0\n";
-    const out = try compact(testing.allocator, &l, "emetgate_evidence", &.{}, body, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_evidence", &.{}, "{}", body, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
     try testing.expect(out.compacted);
     try testing.expect(out.text.len < body.len);
@@ -310,7 +313,7 @@ test "expand returns the stored body fresh, and flags stale when the root change
     var l: Ledger = .init(testing.allocator);
     defer l.deinit();
     const big = "data " ** 1000;
-    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, big, false, root("r1"), .{});
+    const out = try compact(testing.allocator, &l, "emetgate_search", &.{}, "{}", big, false, root("r1"), .{});
     defer testing.allocator.free(out.text);
 
     var hbuf: [ledger_mod.handle_len]u8 = out.handle.?;
