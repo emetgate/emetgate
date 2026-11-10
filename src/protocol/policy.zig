@@ -18,6 +18,7 @@ const find_tools = @import("find_tools.zig");
 const batch_stage_mod = @import("batch_stage.zig");
 const shadow = @import("../platform/shadow.zig");
 const cache_gc = @import("../platform/cache_gc.zig");
+const agent_ledger = @import("../agent/ledger.zig");
 
 const Value = std.json.Value;
 
@@ -47,6 +48,7 @@ pub const Policy = struct {
     search_internals: bool = true,
     language_service: ?*tsserver.Session = null,
     map_session: ?*map_tools.Session = null,
+    stash: ?*agent_ledger.Ledger = null,
     find_session: ?*find_tools.Session = null,
     batch_stage: ?*batch_stage_mod.Store = null,
     allow_run: [run_command.max_entries][]const u8 = undefined,

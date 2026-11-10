@@ -200,6 +200,7 @@ pub const agent_rewrite = @import("agent/rewrite.zig");
 pub const agent_receipt = @import("agent/receipt.zig");
 pub const agent_wrap = @import("agent/wrap.zig");
 pub const agent_loop = @import("agent/loop.zig");
+pub const agent_compact = @import("agent/compact.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
 pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 pub const self_update = @import("update/update.zig");

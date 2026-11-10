@@ -21,6 +21,8 @@ const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const ledger_mod = @import("../agent/ledger.zig");
+const compact_mod = @import("../agent/compact.zig");
 const known_files_mod = @import("known_files.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
@@ -290,6 +292,11 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
         },
     },
+    .{
+        .name = "emetgate_expand",
+        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle exactly as shown on the collapsed line; the body is verified unchanged or flagged stale.",
+        .props = &.{.{ .name = "handle", .desc = "the handle from a collapsed result line" }},
+    },
 };
 
 pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
@@ -309,6 +316,7 @@ pub const Served = struct {
     workspace: ?[]u8,
     observer: ?telemetry.Observer,
     mirror: mirror_mod.Mirror,
+    stash: ledger_mod.Ledger,
     known_files: known_files_mod.KnownFiles,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
@@ -337,6 +345,7 @@ pub const Served = struct {
             .workspace = workspace,
             .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
             .mirror = .init(gpa, policy.mirror_enabled),
+            .stash = .init(gpa),
             .known_files = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
@@ -350,6 +359,7 @@ pub const Served = struct {
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
+        self.policy.stash = &self.stash;
         self.policy.known_files = &self.known_files;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
@@ -385,6 +395,7 @@ pub const Served = struct {
         self.search.deinit();
         self.tree_cache.deinit();
         self.mirror.deinit();
+        self.stash.deinit();
         self.known_files.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
@@ -501,7 +512,31 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     try writeToolResult(out, id, decorated orelse result.text, result.is_error);
 }
 
+fn shouldCompact(name: []const u8) bool {
+    const heavy = [_][]const u8{
+        "emetgate_search",   "emetgate_explore", "emetgate_evidence", "emetgate_read_file",
+        "emetgate_read_symbol", "emetgate_skeleton", "emetgate_symbols", "emetgate_list",
+        "emetgate_git",      "emetgate_scan",    "emetgate_facts",
+    };
+    for (heavy) |h| {
+        if (std.mem.eql(u8, h, name)) return true;
+    }
+    return false;
+}
+
 pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
+    if (std.mem.eql(u8, name, "emetgate_expand")) {
+        const stash = policy.stash orelse return .{ .text = try gpa.dupe(u8, "expand is unavailable outside a server session"), .is_error = true };
+        const args = arguments orelse return error.MissingArgument;
+        const handle = getString(args, "handle") orelse return error.MissingArgument;
+        const exp = try compact_mod.expand(gpa, stash, handle, std.mem.zeroes(ledger_mod.Hash));
+        return .{ .text = exp.text, .is_error = !exp.found };
+    }
+    const result = try rawCall(gpa, io, runtime, name, arguments, event, policy);
+    return maybeCompact(gpa, policy, name, result);
+}
+
+fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
     const explore = std.mem.eql(u8, name, "emetgate_explore");
     const evidence = std.mem.eql(u8, name, "emetgate_evidence");
     if (!explore and !evidence) return handlers.callTool(gpa, io, runtime, name, arguments, event, policy);
@@ -510,6 +545,18 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
         event.reason = note;
     };
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
+}
+
+fn maybeCompact(gpa: Allocator, policy: Policy, name: []const u8, result: tool_result.ToolResult) !tool_result.ToolResult {
+    if (result.is_error or !shouldCompact(name)) return result;
+    const stash = policy.stash orelse return result;
+    const c = compact_mod.compact(gpa, stash, name, "{}", result.text, false, std.mem.zeroes(ledger_mod.Hash), .{}) catch return result;
+    if (!c.compacted) {
+        gpa.free(c.text);
+        return result;
+    }
+    gpa.free(result.text);
+    return .{ .text = c.text, .is_error = false };
 }
 
 fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {

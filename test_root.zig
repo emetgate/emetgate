@@ -190,6 +190,7 @@ pub const agent_rewrite = src.agent_rewrite;
 pub const agent_receipt = src.agent_receipt;
 pub const agent_wrap = src.agent_wrap;
 pub const agent_loop = src.agent_loop;
+pub const agent_compact = src.agent_compact;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
 pub const self_update = src.self_update;
