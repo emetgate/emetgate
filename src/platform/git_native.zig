@@ -149,6 +149,35 @@ pub const Repo = struct {
     }
 };
 
+pub const HeadState = union(enum) {
+    oid: []const u8,
+    unborn,
+};
+
+pub fn headOid(arena: Allocator, io: std.Io, root: []const u8) !?HeadState {
+    var repo = (try Repo.open(arena, io, root)) orelse return null;
+    const path = try std.fmt.allocPrint(arena, "{s}\\HEAD", .{repo.git_dir});
+    const text = (readSmall(arena, io, path, 4096) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Unreadable => return null,
+    }) orelse return null;
+    const line = std.mem.trimEnd(u8, text, "\r\n");
+    const state: HeadState = if (isHex(line)) .{ .oid = line } else blk: {
+        if (!std.mem.startsWith(u8, line, "ref: ")) return null;
+        const found = (try repo.ref(line["ref: ".len..], 0)) orelse return null;
+        break :blk switch (found) {
+            .oid => |oid| .{ .oid = oid },
+            .absent => .unborn,
+        };
+    };
+    switch (state) {
+        .oid => |oid| if ((try repo.store.read(oid)) == null) return null,
+        .unborn => {},
+    }
+    _ = answered.fetchAdd(1, .monotonic);
+    return state;
+}
+
 pub fn parents(arena: Allocator, io: std.Io, root: []const u8, rev: []const u8) !?[]const []const u8 {
     var repo = (try Repo.open(arena, io, root)) orelse return null;
     const hex = (try repo.commit(rev)) orelse return null;

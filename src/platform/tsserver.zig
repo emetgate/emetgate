@@ -228,6 +228,10 @@ pub const Client = struct {
 };
 
 pub fn programFiles(gpa: Allocator, io: std.Io, root: []const u8) ![][]u8 {
+    if (try @import("git_native.zig").trackedUnder(gpa, io, root, ".")) |listed| {
+        defer gpa.free(listed);
+        return filesOf(gpa, root, listed);
+    }
     const git = try exe_path.git(gpa, root);
     defer gpa.free(git);
     const result = bounded_run.run(gpa, io, .{
@@ -241,12 +245,16 @@ pub fn programFiles(gpa: Allocator, io: std.Io, root: []const u8) ![][]u8 {
         .exited => |code| if (code != 0) return error.GitFailed,
         else => return error.GitFailed,
     }
+    return filesOf(gpa, root, result.stdout);
+}
+
+fn filesOf(gpa: Allocator, root: []const u8, listed: []const u8) ![][]u8 {
     var out: std.ArrayList([]u8) = .empty;
     errdefer {
         for (out.items) |f| gpa.free(f);
         out.deinit(gpa);
     }
-    var entries = std.mem.tokenizeScalar(u8, result.stdout, 0);
+    var entries = std.mem.tokenizeScalar(u8, listed, 0);
     while (entries.next()) |rel| {
         const profile = registry.forPath(rel) orelse continue;
         if (!rename.supports(profile)) continue;

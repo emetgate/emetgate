@@ -216,3 +216,40 @@ test "git native: the tracked listing under a pathspec is git ls-files byte for 
     _ = try case.git(&.{ "update-index", "--split-index" });
     try testing.expect((try git_native.trackedUnder(gpa, testing.io, case.root, "src")) == null);
 }
+
+test "git native: the root of a directory is found on disk and is what git says, and a nested repository or a redirected one is left to git" {
+    try skipOffWindows();
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    const repo = emetgate.repo;
+    const deep = try std.fmt.allocPrint(case.arena(), "{s}\\src\\deep", .{case.root});
+
+    const before = repo.toplevels_discovered.load(.monotonic);
+    for ([_][]const u8{ case.root, deep }) |dir| {
+        const top = try repo.gitToplevel(gpa, testing.io, dir);
+        defer gpa.free(top);
+        var argv = [_][]const u8{ try git_fixture.git(), "rev-parse", "--show-toplevel" };
+        const result = try emetgate.bounded_run.run(case.arena(), testing.io, .{ .argv = &argv, .cwd = .{ .path = dir } });
+        const want = try case.arena().dupe(u8, std.mem.trim(u8, result.stdout, "\r\n"));
+        std.mem.replaceScalar(u8, want, '/', '\\');
+        try testing.expectEqualStrings(want, top);
+    }
+    try testing.expect(repo.toplevels_discovered.load(.monotonic) > before);
+
+    const inner = try std.fmt.allocPrint(case.arena(), "{s}\\src", .{case.root});
+    try git_fixture.initRepo(inner);
+    const nested = try repo.gitToplevel(gpa, testing.io, deep);
+    defer gpa.free(nested);
+    try testing.expectEqualStrings(inner, nested);
+
+    const elsewhere = try std.fmt.allocPrint(case.arena(), "{s}\\..\\elsewhere", .{case.root});
+    _ = try case.git(&.{ "worktree", "add", "-q", "--detach", elsewhere });
+    const linked = try std.fs.path.resolve(case.arena(), &.{elsewhere});
+    const counted = repo.toplevels_discovered.load(.monotonic);
+    const top = try repo.gitToplevel(gpa, testing.io, linked);
+    defer gpa.free(top);
+    try testing.expectEqualStrings(linked, top);
+    try testing.expectEqual(counted, repo.toplevels_discovered.load(.monotonic));
+}
+

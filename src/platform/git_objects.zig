@@ -386,6 +386,10 @@ pub const Store = struct {
         return false;
     }
 
+    pub fn putObject(self: *Store, kind: Kind, data: []const u8) !Oid {
+        return self.put(kind, data);
+    }
+
     fn put(self: *Store, kind: Kind, data: []const u8) !Oid {
         const oid = hashOf(.{ .kind = kind, .data = data });
         if (try self.freshen(oid)) return oid;
