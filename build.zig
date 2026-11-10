@@ -106,6 +106,7 @@ pub fn build(b: *std.Build) void {
         .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },
         .filters = test_filters,
     });
+    b.step("test-compile", "Compile the selected tests without running them").dependOn(&test_selected.step);
     const full_run = testRun(b, test_selected, probe, selection, &.{ "--jobs", b.fmt("{d}", .{test_jobs}), "--part", test_part });
     if (test_manifest) |path| full_run.addArg(b.fmt("--manifest={s}", .{path}));
     test_step.dependOn(&full_run.step);

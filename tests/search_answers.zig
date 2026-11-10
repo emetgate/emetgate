@@ -39,8 +39,7 @@ const Repo = struct {
         const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
         errdefer gpa.free(root);
         try git_fixture.initRepo(root);
-        try gitIn(root, &.{ "add", "." });
-        try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root, false);
         return .{ .tmp = tmp, .root = root };
     }
 
@@ -261,8 +260,7 @@ test "search answers: a regex alternation over many files finds every match a li
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(root);
     try git_fixture.initRepo(root);
-    try gitIn(root, &.{ "add", "." });
-    try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+    try git_fixture.commitInit(root, false);
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
@@ -283,8 +281,7 @@ test "search answers: a line that runs out of regex steps makes the answer parti
     const root = try tmp.dir.realPathFileAlloc(testing.io, ".", gpa);
     defer gpa.free(root);
     try git_fixture.initRepo(root);
-    try gitIn(root, &.{ "add", "." });
-    try gitIn(root, &.{ "commit", "-q", "-m", "init" });
+    try git_fixture.commitInit(root, false);
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 

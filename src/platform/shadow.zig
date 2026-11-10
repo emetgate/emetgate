@@ -8,6 +8,8 @@ const own_dir = @import("own_dir.zig");
 const dir_scan = @import("dir_scan.zig");
 const gate_tree = @import("gate_tree.zig");
 const worker_pool = @import("worker_pool.zig");
+const git_index = @import("git_index.zig");
+const sandbox = @import("sandbox.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -19,7 +21,41 @@ pub const dependency_dirs = [_][]const u8{ "node_modules", ".venv", "venv" };
 const max_git_listing = 64 * 1024 * 1024;
 
 pub fn trackedFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
+    if (try trackedFromIndex(gpa, io, root_abs)) |files| return files;
     return listFiles(gpa, io, root_abs, &.{ "ls-files", "-z" });
+}
+
+const index_variables = [_][:0]const u16{
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_DIR"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_INDEX_FILE"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_WORK_TREE"),
+    std.unicode.utf8ToUtf16LeStringLiteral("GIT_COMMON_DIR"),
+};
+
+fn trackedFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8) !?[][]u8 {
+    if (builtin.os.tag != .windows) return null;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for (index_variables) |name| {
+        if ((sandbox.environmentValue(arena, name) catch return null) != null) return null;
+    }
+    const head = try std.fmt.allocPrint(arena, "{s}\\.git\\HEAD", .{root_abs});
+    Dir.cwd().access(io, head, .{}) catch return null;
+    const index_path = try std.fmt.allocPrint(arena, "{s}\\.git\\index", .{root_abs});
+    const all = (try git_index.readEntries(arena, io, index_path)) orelse return null;
+    for (all) |entry| {
+        if (entry.mode & 0o170000 == 0o160000) return null;
+    }
+
+    var files: std.ArrayList([]u8) = .empty;
+    errdefer {
+        freeFileList(gpa, files.items);
+        files.deinit(gpa);
+    }
+    try files.ensureTotalCapacity(gpa, all.len);
+    for (all) |entry| files.appendAssumeCapacity(try gpa.dupe(u8, entry.name));
+    return try files.toOwnedSlice(gpa);
 }
 
 pub const working_listing = [_][]const u8{

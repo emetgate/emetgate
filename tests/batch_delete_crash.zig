@@ -68,8 +68,7 @@ const Repo = struct {
         const root = try tmp.dir.realPathFileAlloc(testing.io, ".", testing.allocator);
         errdefer testing.allocator.free(root);
         try git_fixture.initRepo(root);
-        testing.allocator.free(try git(root, &.{ "add", "." }));
-        testing.allocator.free(try git(root, &.{ "commit", "-q", "--allow-empty", "-m", "init" }));
+        try git_fixture.commitInit(root, true);
         const journal_dir = try std.fmt.allocPrint(testing.allocator, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
         return .{ .tmp = tmp, .root = root, .journal_dir = journal_dir, .kinds = kinds };
     }

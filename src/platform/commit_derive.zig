@@ -116,7 +116,7 @@ fn start(git: Git, work_dir: []const u8, number: usize, paths: []const []const u
         .stdin = .{ .file = run.input.? },
         .stdout = .{ .file = run.output.? },
         .stderr = .ignore,
-        .create_no_window = true,
+        .create_no_window = bounded_run.hidesWindow(true),
     }) catch return error.GitFailed;
     run.guard = bounded_run.Guard.adopt(&run.child.?);
     if (builtin.is_test) probe.processes += 1;

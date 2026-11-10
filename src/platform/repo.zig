@@ -345,6 +345,71 @@ pub fn toplevelOf(gpa: Allocator, io: std.Io, file_abs: []const u8) ![]u8 {
 }
 
 pub fn gitToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) ![]u8 {
+    if (try rememberedToplevel(gpa, io, dir_abs)) |top| return top;
+    const top = try askToplevel(gpa, io, dir_abs);
+    rememberToplevel(gpa, io, dir_abs, top);
+    return top;
+}
+
+const Remembered = struct { dir: []u8, top: []u8 };
+const remembered_slots = 64;
+var remembered: [remembered_slots]?Remembered = @splat(null);
+var remembered_next: usize = 0;
+var remembered_lock: std.Io.Mutex = .init;
+const remembered_store = std.heap.page_allocator;
+
+fn under(top: []const u8, dir: []const u8) bool {
+    if (dir.len < top.len or !std.ascii.eqlIgnoreCase(dir[0..top.len], top)) return false;
+    return dir.len == top.len or dir[top.len] == '\\';
+}
+
+fn stillTop(gpa: Allocator, io: std.Io, top: []const u8, dir_abs: []const u8) bool {
+    if (gitDiscoveryOverridden(gpa) catch return false) return false;
+    std.Io.Dir.cwd().access(io, dir_abs, .{}) catch return false;
+    var dir = dir_abs;
+    while (dir.len > top.len) {
+        if (ownsRepository(gpa, io, dir) catch return false) return false;
+        dir = std.fs.path.dirname(dir) orelse return false;
+    }
+    if (dir.len != top.len) return false;
+    return entryExists(gpa, io, top, ".git") catch false;
+}
+
+fn rememberedToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) Allocator.Error!?[]u8 {
+    remembered_lock.lockUncancelable(io);
+    defer remembered_lock.unlock(io);
+    for (&remembered) |*slot| {
+        const entry = slot.* orelse continue;
+        if (!std.mem.eql(u8, entry.dir, dir_abs)) continue;
+        if (stillTop(gpa, io, entry.top, dir_abs)) return try gpa.dupe(u8, entry.top);
+        remembered_store.free(entry.dir);
+        remembered_store.free(entry.top);
+        slot.* = null;
+        return null;
+    }
+    return null;
+}
+
+fn rememberToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8, top: []const u8) void {
+    if (!std.fs.path.isAbsolute(dir_abs) or !under(top, dir_abs)) return;
+    if (!stillTop(gpa, io, top, dir_abs)) return;
+    const dir_copy = remembered_store.dupe(u8, dir_abs) catch return;
+    const top_copy = remembered_store.dupe(u8, top) catch {
+        remembered_store.free(dir_copy);
+        return;
+    };
+    remembered_lock.lockUncancelable(io);
+    defer remembered_lock.unlock(io);
+    const slot = &remembered[remembered_next];
+    remembered_next = (remembered_next + 1) % remembered_slots;
+    if (slot.*) |old| {
+        remembered_store.free(old.dir);
+        remembered_store.free(old.top);
+    }
+    slot.* = .{ .dir = dir_copy, .top = top_copy };
+}
+
+fn askToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) ![]u8 {
     const git = try exe_path.git(gpa, dir_abs);
     defer gpa.free(git);
     const result = bounded_run.run(gpa, io, .{

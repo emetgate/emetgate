@@ -35,8 +35,7 @@ pub const Repo = struct {
         const root_abs = try tmp.dir.realPathFileAlloc(testing.io, "repo", gpa);
         errdefer gpa.free(root_abs);
         try git_fixture.initRepo(root_abs);
-        try git(root_abs, &.{ "add", "." });
-        try git(root_abs, &.{ "commit", "-q", "-m", "init" });
+        try git_fixture.commitInit(root_abs, false);
         return .{ .tmp = tmp, .top_abs = top_abs, .root_abs = root_abs };
     }
 

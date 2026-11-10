@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2946**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2949**
 - Mutations declared in `tests/mutations.json`: **2029**
   - killed: **1979**
   - equivalent: **9**
@@ -1261,7 +1261,7 @@ python tools/verification_page.py --check
 | `GC5-hand-edited-target-accepted` | `src/platform/git_commit.zig` | `if (!pre_written and !std.mem.eql(u8, head_entry.oid, try store...` -> `if (false and !pre_written and !std.mem.eql(u8, head_entry.oid,...` | git commit: a target edited by hand is refused, and an edit to another file is ...; commi... | killed |
 | `GC6-empty-commit-made` | `src/platform/git_commit.zig` | `if (std.mem.eql(u8, tree, head.tree)) return error.NothingToCom...` -> `` | git commit: a change that leaves the tree as it is has nothing to commit | killed |
 | `GC7-failed-branch-update-reported-as-a-commit` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, now, base)) error.BranchUpdateRefuse...` -> `if (now.len != 0) return;     return error.BranchMoved;` | git commit: when HEAD moved after the commit was prepared, publish refuses and ...; redte... | killed |
-| `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (try git.run(&.{ "var", "GIT_COMMITTER_IDENT" }) == null) re...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
+| `GC8-no-identity-accepted` | `src/platform/git_commit.zig` | `if (!identityCertain(git, set) and try git.run(&.{ "var", "GIT_...` -> `` | no test can take the identity away: git falls back to the user's global configuration and... | control |
 | `DC2-write-doc-commits-the-old-bytes` | `src/platform/doc_writer.zig` | `.content = applied.source }};` -> `.content = source }};` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
 | `DC3-write-doc-written-but-not-published` | `src/platform/doc_writer.zig` | `try session.land(gpa, io, root, &change, &pendings, &journal, o...` -> `for (&pendings) \|*p\| p.discard(null);             if (false) ...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |
 | `DC4-write-doc-handler-drops-the-commit` | `src/protocol/handlers.zig` | `.commit = if (commit) \|*request\| request else null,         ....` -> `.commit = if (commit) \|*request\| if (false) request else null...` | commit write_doc: an accepted write is one commit with the given message and th... | killed |

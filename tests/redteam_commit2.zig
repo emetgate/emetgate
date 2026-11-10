@@ -710,8 +710,7 @@ test "redteam2 commit: inside a submodule the commit lands in the submodule, a c
     try case.repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "other/.gitignore", .data = ".emetgate/\n" });
     const other_abs = try case.repo.tmp.dir.realPathFileAlloc(testing.io, "other", env.arena());
     try git_fixture.initRepo(other_abs);
-    try support.Repo.git(other_abs, &.{ "add", "." });
-    try support.Repo.git(other_abs, &.{ "commit", "-q", "-m", "init" });
+    try git_fixture.commitInit(other_abs, false);
     _ = try env.git(&.{ "-c", "protocol.file.allow=always", "submodule", "add", "-q", other_abs, "sub" });
     _ = try env.git(&.{ "commit", "-q", "-m", "add sub" });
     const outer = try env.head();
