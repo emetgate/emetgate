@@ -415,6 +415,7 @@ const served_tools = [_][]const u8{
     "emetgate_edit",
     "emetgate_write",
     "emetgate_write_doc",
+    "emetgate_expand",
 };
 
 test "red line: the served tool surface is exactly this list, so a new tool cannot slip in unnoticed" {

@@ -21,6 +21,8 @@ const cache_gc = @import("../platform/cache_gc.zig");
 const cache_lease = @import("../platform/cache_lease.zig");
 const stdio = @import("../platform/stdio.zig");
 const mirror_mod = @import("mirror.zig");
+const ledger_mod = @import("../agent/ledger.zig");
+const compact_mod = @import("../agent/compact.zig");
 const known_files_mod = @import("known_files.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
@@ -290,6 +292,14 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
         },
     },
+    .{
+        .name = "emetgate_expand",
+        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle from the collapsed line; the body is verified byte-identical, or flagged stale when its source files changed. With file, returns only that file's section of the result (e.g. one file from a search match-map).",
+        .props = &.{
+            .{ .name = "handle", .desc = "the handle from a collapsed result line" },
+            .{ .name = "file", .desc = "optional: return only this file's section", .optional = true },
+        },
+    },
 };
 
 pub fn finishPendingCommits(gpa: Allocator, io: std.Io, root: []const u8) void {
@@ -309,6 +319,7 @@ pub const Served = struct {
     workspace: ?[]u8,
     observer: ?telemetry.Observer,
     mirror: mirror_mod.Mirror,
+    stash: ledger_mod.Ledger,
     known_files: known_files_mod.KnownFiles,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
@@ -337,6 +348,7 @@ pub const Served = struct {
             .workspace = workspace,
             .observer = if (workspace) |ws| .{ .workspace_abs = ws } else null,
             .mirror = .init(gpa, policy.mirror_enabled),
+            .stash = .init(gpa),
             .known_files = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
@@ -350,6 +362,7 @@ pub const Served = struct {
         };
         self.policy.root = root;
         self.policy.mirror = &self.mirror;
+        self.policy.stash = &self.stash;
         self.policy.known_files = &self.known_files;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
@@ -385,6 +398,7 @@ pub const Served = struct {
         self.search.deinit();
         self.tree_cache.deinit();
         self.mirror.deinit();
+        self.stash.deinit();
         self.known_files.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
@@ -496,12 +510,55 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         };
     };
     defer gpa.free(result.text);
-    const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, result.text) else null;
+    const compacted = compactReply(gpa, io, policy, name, arguments, result.text, result.is_error) catch null;
+    defer if (compacted) |c| gpa.free(c);
+    const body = compacted orelse result.text;
+    const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, body) else null;
     defer if (decorated) |d| gpa.free(d);
-    try writeToolResult(out, id, decorated orelse result.text, result.is_error);
+    try writeToolResult(out, id, decorated orelse body, result.is_error);
+}
+
+fn shouldCompact(name: []const u8) bool {
+    const heavy = [_][]const u8{
+        "emetgate_search",   "emetgate_explore", "emetgate_evidence", "emetgate_read_file",
+        "emetgate_read_symbol", "emetgate_skeleton", "emetgate_symbols", "emetgate_list",
+        "emetgate_git",      "emetgate_scan",    "emetgate_facts",
+    };
+    for (heavy) |h| {
+        if (std.mem.eql(u8, h, name)) return true;
+    }
+    return false;
 }
 
 pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
+    if (std.mem.eql(u8, name, "emetgate_expand")) {
+        const stash = policy.stash orelse return .{ .text = try gpa.dupe(u8, "expand is unavailable outside a server session"), .is_error = true };
+        const args = arguments orelse return error.MissingArgument;
+        const handle = getString(args, "handle") orelse return error.MissingArgument;
+        const file = getString(args, "file");
+        const current = if (compact_mod.parseHandle(handle)) |h|
+            (if (stash.find(h)) |entry| fileRoot(gpa, io, policy.root, entry.targets) else std.mem.zeroes(ledger_mod.Hash))
+        else
+            std.mem.zeroes(ledger_mod.Hash);
+        const exp = try compact_mod.expand(gpa, stash, handle, current, file);
+        if (exp.stale and file == null) {
+            if (compact_mod.parseHandle(handle)) |h| {
+                if (stash.find(h)) |entry| {
+                    if (entry.tool.len != 0) {
+                        if (selfHeal(gpa, io, runtime, event, policy, entry.tool, entry.args)) |fresh| {
+                            gpa.free(exp.text);
+                            return fresh;
+                        } else |_| {}
+                    }
+                }
+            }
+        }
+        return .{ .text = exp.text, .is_error = !exp.found };
+    }
+    return rawCall(gpa, io, runtime, name, arguments, event, policy);
+}
+
+fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
     const explore = std.mem.eql(u8, name, "emetgate_explore");
     const evidence = std.mem.eql(u8, name, "emetgate_evidence");
     if (!explore and !evidence) return handlers.callTool(gpa, io, runtime, name, arguments, event, policy);
@@ -510,6 +567,66 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
         event.reason = note;
     };
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
+}
+
+pub fn compactReply(gpa: Allocator, io: std.Io, policy: Policy, name: []const u8, args: ?Value, text: []const u8, is_error: bool) !?[]u8 {
+    if (is_error or policy.no_compact or !shouldCompact(name)) return null;
+    const stash = policy.stash orelse return null;
+    const file = fileArg(args);
+    var tgts_buf: [1]ledger_mod.Target = undefined;
+    const tgts: []const ledger_mod.Target = if (file) |f| blk: {
+        tgts_buf[0] = .{ .file = f };
+        break :blk tgts_buf[0..1];
+    } else &.{};
+    const root = fileRoot(gpa, io, policy.root, tgts);
+    const args_json = if (args) |a| (std.json.Stringify.valueAlloc(gpa, a, .{}) catch try gpa.dupe(u8, "")) else try gpa.dupe(u8, "");
+    defer gpa.free(args_json);
+    const c = compact_mod.compact(gpa, stash, name, tgts, args_json, text, false, root, .{}) catch return null;
+    if (!c.compacted) {
+        gpa.free(c.text);
+        return null;
+    }
+    return c.text;
+}
+
+fn selfHeal(gpa: Allocator, io: std.Io, runtime: *Runtime, event: *telemetry.Event, policy: Policy, tool: []const u8, args_json: []const u8) !tool_result.ToolResult {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const parsed = std.json.parseFromSliceLeaky(Value, arena_state.allocator(), args_json, .{}) catch return error.BadHealArgs;
+    const fresh = try rawCall(gpa, io, runtime, tool, parsed, event, policy);
+    defer gpa.free(fresh.text);
+    const comp = compactReply(gpa, io, policy, tool, parsed, fresh.text, fresh.is_error) catch null;
+    defer if (comp) |c| gpa.free(c);
+    const body = comp orelse fresh.text;
+    const text = try std.fmt.allocPrint(gpa, "(refreshed: the source changed, so this is {s} re-run against the current code)\n{s}", .{ tool, body });
+    return .{ .text = text, .is_error = fresh.is_error };
+}
+
+fn fileArg(args: ?Value) ?[]const u8 {
+    const a = args orelse return null;
+    return getString(a, "file") orelse getString(a, "from") orelse getString(a, "path");
+}
+
+fn fileRoot(gpa: Allocator, io: std.Io, root_dir: ?[]const u8, targets: []const ledger_mod.Target) ledger_mod.Hash {
+    const zero = std.mem.zeroes(ledger_mod.Hash);
+    if (targets.len == 0) return zero;
+    const rd = root_dir orelse return zero;
+    var dir = std.Io.Dir.openDirAbsolute(io, rd, .{}) catch return zero;
+    defer dir.close(io);
+    var hasher = std.crypto.hash.Blake3.init(.{});
+    for (targets) |t| {
+        hasher.update(t.file);
+        hasher.update("\x00");
+        const content = dir.readFileAlloc(io, t.file, gpa, .limited(4 << 20)) catch {
+            hasher.update("<unreadable>");
+            continue;
+        };
+        defer gpa.free(content);
+        hasher.update(content);
+    }
+    var out: ledger_mod.Hash = undefined;
+    hasher.final(&out);
+    return out;
 }
 
 fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
