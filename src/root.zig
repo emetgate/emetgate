@@ -196,6 +196,7 @@ pub const agent_ledger = @import("agent/ledger.zig");
 pub const agent_tokcount = @import("agent/tokcount.zig");
 pub const agent_evict = @import("agent/evict.zig");
 pub const agent_api = @import("agent/api.zig");
+pub const agent_rewrite = @import("agent/rewrite.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
 pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 pub const self_update = @import("update/update.zig");

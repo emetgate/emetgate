@@ -28,6 +28,7 @@ pub const Entry = struct {
     body_tokens: usize,
     merkle_root: Hash,
     targets: []const Target,
+    tool_use_id: []const u8,
     call_index: u32,
     msg_index: usize,
     state: State,
@@ -78,6 +79,7 @@ pub const Ledger = struct {
     fn freeEntry(self: *Ledger, entry: Entry) void {
         self.gpa.free(entry.claim);
         self.gpa.free(entry.body);
+        self.gpa.free(entry.tool_use_id);
         for (entry.targets) |t| {
             self.gpa.free(t.file);
             self.gpa.free(t.symbol);
@@ -95,6 +97,7 @@ pub const Ledger = struct {
         body_tokens: ?usize = null,
         merkle_root: Hash,
         targets: []const Target = &.{},
+        tool_use_id: []const u8 = "",
         msg_index: usize,
     };
 
@@ -104,6 +107,8 @@ pub const Ledger = struct {
         errdefer self.gpa.free(claim);
         const body = try self.gpa.dupe(u8, record.body);
         errdefer self.gpa.free(body);
+        const tool_use_id = try self.gpa.dupe(u8, record.tool_use_id);
+        errdefer self.gpa.free(tool_use_id);
         const targets = try self.gpa.alloc(Target, record.targets.len);
         var filled: usize = 0;
         errdefer {
@@ -128,6 +133,7 @@ pub const Ledger = struct {
             .body_tokens = record.body_tokens orelse estimateTokens(record.body.len),
             .merkle_root = record.merkle_root,
             .targets = targets,
+            .tool_use_id = tool_use_id,
             .call_index = self.calls,
             .msg_index = record.msg_index,
             .state = .live,
@@ -187,7 +193,6 @@ pub const Ledger = struct {
     pub fn expand(self: *Ledger, handle: Handle, current_root: Hash) ?Expansion {
         const entry = self.find(handle) orelse return null;
         const state: ExpandState = if (std.mem.eql(u8, &entry.merkle_root, &current_root)) .fresh else .stale;
-        if (state == .fresh and entry.state == .collapsed) entry.state = .live;
         return .{ .body = entry.body, .state = state, .handle = handle };
     }
 };
@@ -271,7 +276,7 @@ test "selectForEviction takes oldest spent first until the saving is met, else n
     try testing.expectEqual(@as(usize, 0), chosen.items.len);
 }
 
-test "collapse shrinks resident tokens; expand restores fresh when merkle is unchanged" {
+test "collapse shrinks resident tokens; expand serves the body fresh without un-collapsing" {
     var ledger: Ledger = .init(testing.allocator);
     defer ledger.deinit();
     const h = try ledger.register(.{ .claim = "fold", .body = "z" ** 2000, .merkle_root = root("r1"), .msg_index = 0 });
@@ -282,7 +287,8 @@ test "collapse shrinks resident tokens; expand restores fresh when merkle is unc
 
     const fresh = ledger.expand(h, root("r1")).?;
     try testing.expectEqual(ExpandState.fresh, fresh.state);
-    try testing.expectEqual(State.live, ledger.find(h).?.state);
+    try testing.expectEqualStrings("z" ** 2000, fresh.body);
+    try testing.expectEqual(State.collapsed, ledger.find(h).?.state);
 
     const stale = ledger.expand(h, root("r2")).?;
     try testing.expectEqual(ExpandState.stale, stale.state);
