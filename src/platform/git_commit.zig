@@ -12,6 +12,7 @@ const commit_names = @import("commit_names.zig");
 const commit_refusal = @import("commit_refusal.zig");
 const git_index = @import("git_index.zig");
 const git_objects = @import("git_objects.zig");
+const git_native = @import("git_native.zig");
 
 const Allocator = std.mem.Allocator;
 const Dir = std.Io.Dir;
@@ -751,6 +752,12 @@ const Facts = struct {
 };
 
 fn facts(git: Git) !Facts {
+    if (git.env == null) {
+        if (try git_native.facts(git.arena, git.io, git.root)) |known| {
+            if (!std.mem.startsWith(u8, known.branch, branch_prefix)) return error.DetachedHead;
+            return .{ .git_dir = known.git_dir, .index = try listedPath(git, known.index), .attributes = try listedPath(git, known.attributes), .oid = known.commit, .tree = known.tree, .branch = known.branch };
+        }
+    }
     const out = (try git.run(&.{ "rev-parse", "--absolute-git-dir", "--git-path", "index", "--git-path", "info/attributes", "HEAD^{commit}", "HEAD^{tree}", "--symbolic-full-name", "HEAD" })) orelse {
         if (try git.run(&.{ "rev-parse", "--verify", "-q", "HEAD^{commit}" }) == null) return unbornFacts(git);
         return error.GitFailed;
@@ -1515,6 +1522,9 @@ pub const Lineage = struct {
 };
 
 fn commitParents(git: Git, commit: []const u8) !?[]const []const u8 {
+    if (git.env == null) {
+        if (try git_native.parents(git.arena, git.io, git.root, commit)) |found| return found;
+    }
     const listed = (try git.run(&.{ "rev-list", "--parents", "-n", "1", commit })) orelse return null;
     var ids = std.mem.tokenizeAny(u8, listed, " \r\n");
     const self_id = ids.next() orelse return null;

@@ -310,6 +310,20 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
 }
 
 fn unbornHead(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) !bool {
+    {
+        var arena_state = std.heap.ArenaAllocator.init(gpa);
+        defer arena_state.deinit();
+        const arena = arena_state.allocator();
+        if (try @import("../platform/git_native.zig").headOid(arena, io, root)) |state| switch (state) {
+            .oid => |oid| {
+                var opened = (try @import("../platform/git_native.zig").Repo.open(arena, io, root)) orelse return false;
+                if (try opened.store.read(oid)) |object| {
+                    if (object.kind == .commit) return false;
+                }
+            },
+            .unborn => {},
+        };
+    }
     const probe = bounded_run.run(gpa, io, .{
         .argv = &.{ git, "rev-parse", "--verify", "-q", "HEAD^{commit}" },
         .cwd = .{ .path = root },

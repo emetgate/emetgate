@@ -124,6 +124,10 @@ pub const Audit = struct {
     }
 
     fn headOf(self: *Audit, root: []const u8) !?[]const u8 {
+        if (try @import("git_native.zig").headOid(self.arena(), self.io, root)) |state| return switch (state) {
+            .oid => |oid| oid,
+            .unborn => null,
+        };
         const text = (receipts.git(self.arena(), self.io, root, &.{ "rev-parse", "-q", "--verify", "HEAD" }) catch return null) orelse return null;
         return std.mem.trim(u8, text, " \t\r\n");
     }

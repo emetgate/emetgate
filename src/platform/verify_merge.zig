@@ -22,6 +22,7 @@ const alternate_directories = "GIT_ALTERNATE_OBJECT_DIRECTORIES";
 const max_output = 64 * 1024 * 1024;
 
 pub fn parents(arena: Allocator, io: std.Io, root: []const u8, commit: []const u8) ![]const []const u8 {
+    if (try @import("git_native.zig").parents(arena, io, root, commit)) |found| return found;
     const out = (try receipts.git(arena, io, root, &.{ "rev-list", "--parents", "-n", "1", commit })) orelse return error.GitFailed;
     var list: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, out, " \r\n");

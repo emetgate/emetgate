@@ -17,6 +17,7 @@ const Hash = receipt.Hash;
 
 pub const receipts_dir = "receipts";
 pub const notes_ref = "emetgate";
+const git_native = @import("git_native.zig");
 const max_git_output = 64 * 1024 * 1024;
 
 pub const FileChange = struct {
@@ -271,6 +272,7 @@ pub fn resolveCommit(arena: Allocator, io: std.Io, root: []const u8, commit: []c
 }
 
 pub fn changedPaths(arena: Allocator, io: std.Io, root: []const u8, commit: []const u8) ![]const []const u8 {
+    if (try git_native.changedPaths(arena, io, root, commit)) |listed| return listed;
     const out = (try git(arena, io, root, &.{ "diff-tree", "--no-commit-id", "--root", "-r", "--name-only", "-z", commit })) orelse return error.GitFailed;
     var list: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeScalar(u8, out, 0);
@@ -279,6 +281,10 @@ pub fn changedPaths(arena: Allocator, io: std.Io, root: []const u8, commit: []co
 }
 
 pub fn readNote(arena: Allocator, io: std.Io, root: []const u8, commit: []const u8) !?[]u8 {
+    if (try git_native.note(arena, io, root, notes_ref, commit)) |found| return switch (found) {
+        .found => |bytes| bytes,
+        .absent => null,
+    };
     return git(arena, io, root, &.{ "notes", "--ref=" ++ notes_ref, "show", commit });
 }
 

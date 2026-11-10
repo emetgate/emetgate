@@ -4,6 +4,7 @@ const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
 const exe_path = @import("exe_path.zig");
 const open_nowait = @import("open_nowait.zig");
+const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const max_git_output = 64 * 1024;
@@ -163,6 +164,7 @@ pub fn filesMentioning(gpa: Allocator, io: std.Io, root_abs: []const u8, word: [
 }
 
 pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec: []const u8) ![]u8 {
+    if (try @import("git_native.zig").trackedUnder(gpa, io, root_abs, pathspec)) |listed| return listed;
     const git = try exe_path.git(gpa, root_abs);
     defer gpa.free(git);
     const result = bounded_run.run(gpa, io, .{
@@ -346,9 +348,96 @@ pub fn toplevelOf(gpa: Allocator, io: std.Io, file_abs: []const u8) ![]u8 {
 
 pub fn gitToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) ![]u8 {
     if (try rememberedToplevel(gpa, io, dir_abs)) |top| return top;
-    const top = try askToplevel(gpa, io, dir_abs);
+    const top = (try discoverToplevel(gpa, io, dir_abs)) orelse try askToplevel(gpa, io, dir_abs);
     rememberToplevel(gpa, io, dir_abs, top);
     return top;
+}
+
+pub var toplevels_discovered: std.atomic.Value(usize) = .init(0);
+
+const ownership = struct {
+    extern "advapi32" fn GetNamedSecurityInfoW(name: [*:0]const u16, object_type: c_int, info: u32, owner: ?*?*anyopaque, group: ?*?*anyopaque, dacl: ?*?*anyopaque, sacl: ?*?*anyopaque, descriptor: *?*anyopaque) callconv(.winapi) u32;
+    extern "advapi32" fn EqualSid(a: *anyopaque, b: *anyopaque) callconv(.winapi) c_int;
+    extern "advapi32" fn OpenProcessToken(process: *anyopaque, access: u32, token: *?*anyopaque) callconv(.winapi) c_int;
+    extern "advapi32" fn GetTokenInformation(token: *anyopaque, class: c_int, info: ?*anyopaque, len: u32, needed: *u32) callconv(.winapi) c_int;
+    extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
+    extern "kernel32" fn CloseHandle(handle: *anyopaque) callconv(.winapi) c_int;
+    extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+    extern "advapi32" fn IsWellKnownSid(sid: *anyopaque, kind: c_int) callconv(.winapi) c_int;
+    extern "advapi32" fn CheckTokenMembership(token: ?*anyopaque, sid: *anyopaque, is_member: *c_int) callconv(.winapi) c_int;
+
+    const builtin_administrators = 26;
+
+    const se_file_object = 1;
+    const owner_security_information = 1;
+    const token_query = 0x0008;
+    const token_user = 1;
+
+    fn ours(gpa: Allocator, path: []const u8) bool {
+        const wide = std.unicode.utf8ToUtf16LeAllocZ(gpa, path) catch return false;
+        defer gpa.free(wide);
+        var owner: ?*anyopaque = null;
+        var descriptor: ?*anyopaque = null;
+        if (GetNamedSecurityInfoW(wide, se_file_object, owner_security_information, &owner, null, null, null, &descriptor) != 0) return false;
+        defer _ = LocalFree(descriptor);
+        var token: ?*anyopaque = null;
+        if (OpenProcessToken(GetCurrentProcess(), token_query, &token) == 0) return false;
+        defer _ = CloseHandle(token.?);
+        var buffer: [256]u8 align(@alignOf(usize)) = undefined;
+        var needed: u32 = 0;
+        if (GetTokenInformation(token.?, token_user, &buffer, buffer.len, &needed) == 0) return false;
+        const user: *anyopaque = @as(*const ?*anyopaque, @ptrCast(&buffer)).* orelse return false;
+        const owned_by = owner orelse return false;
+        if (EqualSid(owned_by, user) != 0) return true;
+        if (IsWellKnownSid(owned_by, builtin_administrators) == 0) return false;
+        var is_member: c_int = 0;
+        return CheckTokenMembership(null, owned_by, &is_member) != 0 and is_member != 0;
+    }
+};
+
+pub fn ownedByCurrentUser(gpa: Allocator, path: []const u8) bool {
+    return builtin.os.tag == .windows and ownership.ours(gpa, path);
+}
+
+fn redirectsWorkTree(gpa: Allocator, io: std.Io, git_dir: []const u8) bool {
+    const path = std.fmt.allocPrint(gpa, "{s}\\config", .{git_dir}) catch return true;
+    defer gpa.free(path);
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return true,
+    };
+    defer gpa.free(text);
+    if (std.ascii.findIgnoreCase(text, "worktree") != null) return true;
+    var lines = std.mem.tokenizeAny(u8, text, "\r\n");
+    while (lines.next()) |line| {
+        if (std.ascii.findIgnoreCase(line, "bare") != null and std.ascii.findIgnoreCase(line, "false") == null) return true;
+    }
+    return false;
+}
+
+fn discoverToplevel(gpa: Allocator, io: std.Io, dir_abs: []const u8) Allocator.Error!?[]u8 {
+    if (builtin.os.tag != .windows or !std.fs.path.isAbsolute(dir_abs)) return null;
+    if (gitDiscoveryOverridden(gpa) catch return null) return null;
+    const final = finalOf(gpa, dir_abs) catch return null;
+    defer gpa.free(final);
+    if (!std.mem.eql(u8, final, dir_abs)) return null;
+    var dir: []const u8 = dir_abs;
+    while (true) {
+        if (entryExists(gpa, io, dir, ".git") catch return null) break;
+        if (entryExists(gpa, io, dir, "HEAD") catch return null) return null;
+        const parent = std.fs.path.dirname(dir) orelse return null;
+        if (parent.len >= dir.len) return null;
+        dir = parent;
+    }
+    const git_dir = try std.fmt.allocPrint(gpa, "{s}\\.git", .{dir});
+    defer gpa.free(git_dir);
+    if (!(entryExists(gpa, io, git_dir, "HEAD") catch return null)) return null;
+    if (!(entryExists(gpa, io, git_dir, "objects") catch return null)) return null;
+    if (entryExists(gpa, io, git_dir, "commondir") catch return null) return null;
+    if (redirectsWorkTree(gpa, io, git_dir)) return null;
+    if (!ownership.ours(gpa, dir) or !ownership.ours(gpa, git_dir)) return null;
+    _ = toplevels_discovered.fetchAdd(1, .monotonic);
+    return try gpa.dupe(u8, dir);
 }
 
 const Remembered = struct { dir: []u8, top: []u8 };
