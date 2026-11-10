@@ -44,6 +44,10 @@ const Context = struct {
     fn blob(self: *Context, rev: ?[]const u8, path: []const u8) !?[]const u8 {
         const r = rev orelse return null;
         const spec = try std.fmt.allocPrint(self.arena, "{s}:{s}", .{ r, path });
+        if (try @import("git_native.zig").blobAt(self.arena, self.io, self.root, spec)) |found| return switch (found) {
+            .found => |bytes| bytes,
+            .absent => null,
+        };
         return receipts.git(self.arena, self.io, self.root, &.{ "cat-file", "blob", spec });
     }
 

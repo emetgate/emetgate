@@ -125,6 +125,10 @@ pub const Staged = struct {
 };
 
 fn blob(arena: Allocator, io: std.Io, root_abs: []const u8, spec: []const u8) !?[]u8 {
+    if (try @import("git_native.zig").blobAt(arena, io, root_abs, spec)) |found| return switch (found) {
+        .found => |bytes| bytes,
+        .absent => null,
+    };
     return receipts.git(arena, io, root_abs, &.{ "cat-file", "blob", spec });
 }
 

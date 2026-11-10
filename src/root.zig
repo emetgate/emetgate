@@ -91,6 +91,7 @@ pub const index_map = @import("platform/index_map.zig");
 pub const stat_scan = @import("platform/stat_scan.zig");
 pub const git_index = @import("platform/git_index.zig");
 pub const git_objects = @import("platform/git_objects.zig");
+pub const git_native = @import("platform/git_native.zig");
 pub const worker_pool = @import("platform/worker_pool.zig");
 pub const io_seam = @import("platform/io_seam.zig");
 pub const exe_path = @import("platform/exe_path.zig");

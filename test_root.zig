@@ -92,6 +92,7 @@ pub const index_map = src.index_map;
 pub const stat_scan = src.stat_scan;
 pub const git_index = src.git_index;
 pub const git_objects = src.git_objects;
+pub const git_native = src.git_native;
 pub const worker_pool = src.worker_pool;
 pub const io_seam = src.io_seam;
 pub const exe_path = src.exe_path;
@@ -216,6 +217,7 @@ test {
     _ = @import("tests/search_answers.zig");
     _ = @import("tests/search_text.zig");
     _ = @import("tests/git_index.zig");
+    _ = @import("tests/git_native.zig");
     _ = @import("tests/scan_tool.zig");
     _ = @import("tests/redteam_memory.zig");
     _ = @import("tests/redteam_ledger.zig");

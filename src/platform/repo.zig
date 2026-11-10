@@ -163,6 +163,7 @@ pub fn filesMentioning(gpa: Allocator, io: std.Io, root_abs: []const u8, word: [
 }
 
 pub fn trackedListing(gpa: Allocator, io: std.Io, root_abs: []const u8, pathspec: []const u8) ![]u8 {
+    if (try @import("git_native.zig").trackedUnder(gpa, io, root_abs, pathspec)) |listed| return listed;
     const git = try exe_path.git(gpa, root_abs);
     defer gpa.free(git);
     const result = bounded_run.run(gpa, io, .{
