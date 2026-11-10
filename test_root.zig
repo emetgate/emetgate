@@ -185,6 +185,7 @@ pub const raw_reply = src.raw_reply;
 pub const agent_ledger = src.agent_ledger;
 pub const agent_tokcount = src.agent_tokcount;
 pub const agent_evict = src.agent_evict;
+pub const agent_api = src.agent_api;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
 pub const self_update = src.self_update;
