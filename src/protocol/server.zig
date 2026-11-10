@@ -507,9 +507,12 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         };
     };
     defer gpa.free(result.text);
-    const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, result.text) else null;
+    const compacted = compactReply(gpa, policy, name, result.text, result.is_error) catch null;
+    defer if (compacted) |c| gpa.free(c);
+    const body = compacted orelse result.text;
+    const decorated: ?[]u8 = if (observer) |obs| telemetry.observe(gpa, io, obs, event, body) else null;
     defer if (decorated) |d| gpa.free(d);
-    try writeToolResult(out, id, decorated orelse result.text, result.is_error);
+    try writeToolResult(out, id, decorated orelse body, result.is_error);
 }
 
 fn shouldCompact(name: []const u8) bool {
@@ -532,8 +535,7 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
         const exp = try compact_mod.expand(gpa, stash, handle, std.mem.zeroes(ledger_mod.Hash));
         return .{ .text = exp.text, .is_error = !exp.found };
     }
-    const result = try rawCall(gpa, io, runtime, name, arguments, event, policy);
-    return maybeCompact(gpa, policy, name, result);
+    return rawCall(gpa, io, runtime, name, arguments, event, policy);
 }
 
 fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, arguments: ?Value, event: *telemetry.Event, policy: Policy) !tool_result.ToolResult {
@@ -547,16 +549,15 @@ fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
     return if (explore) session.explore(gpa, arguments) else session.evidenceTool(gpa, arguments);
 }
 
-fn maybeCompact(gpa: Allocator, policy: Policy, name: []const u8, result: tool_result.ToolResult) !tool_result.ToolResult {
-    if (result.is_error or !shouldCompact(name)) return result;
-    const stash = policy.stash orelse return result;
-    const c = compact_mod.compact(gpa, stash, name, "{}", result.text, false, std.mem.zeroes(ledger_mod.Hash), .{}) catch return result;
+pub fn compactReply(gpa: Allocator, policy: Policy, name: []const u8, text: []const u8, is_error: bool) !?[]u8 {
+    if (is_error or !shouldCompact(name)) return null;
+    const stash = policy.stash orelse return null;
+    const c = compact_mod.compact(gpa, stash, name, "{}", text, false, std.mem.zeroes(ledger_mod.Hash), .{}) catch return null;
     if (!c.compacted) {
         gpa.free(c.text);
-        return result;
+        return null;
     }
-    gpa.free(result.text);
-    return .{ .text = c.text, .is_error = false };
+    return c.text;
 }
 
 fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {

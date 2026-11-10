@@ -132,6 +132,7 @@ pub const Workspace = struct {
         const served = try self.gpa.create(Served);
         errdefer self.gpa.destroy(served);
         served.open(self.gpa, self.io, self.runtime, self.policy, .{ .root = entry.root, .environ = self.environ });
+        served.policy.stash = self.primary.policy.stash;
         entry.served = served;
         return served;
     }
@@ -238,7 +239,9 @@ pub const Workspace = struct {
             .nested => |index| {
                 const section = self.callSection(index, call, null) catch return false;
                 defer self.gpa.free(section.text);
-                try server.writeToolResult(out, id, section.text, section.is_error);
+                const comp = server.compactReply(self.gpa, self.primary.policy, call.name, section.text, section.is_error) catch null;
+                defer if (comp) |c| self.gpa.free(c);
+                try server.writeToolResult(out, id, comp orelse section.text, section.is_error);
                 return true;
             },
             .primary => {},
@@ -278,7 +281,9 @@ pub const Workspace = struct {
             try text.writer.print("--- {s}\n{s}", .{ self.repositories.items[index].label, section.text });
         }
         if (self.cut) try text.writer.print("\nmore than {d} repositories or too many folders under this one; pass dir to reach the rest", .{max_repositories});
-        try server.writeToolResult(out, id, text.written(), all_failed);
+        const comp = server.compactReply(self.gpa, self.primary.policy, call.name, text.written(), all_failed) catch null;
+        defer if (comp) |c| self.gpa.free(c);
+        try server.writeToolResult(out, id, comp orelse text.written(), all_failed);
         return true;
     }
 
