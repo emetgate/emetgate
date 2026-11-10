@@ -192,6 +192,7 @@ pub const context_epoch = @import("protocol/context_epoch.zig");
 pub const outline = @import("protocol/outline.zig");
 pub const read_cache = @import("protocol/read_cache.zig");
 pub const raw_reply = @import("protocol/raw_reply.zig");
+pub const agent_ledger = @import("agent/ledger.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
 pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 pub const self_update = @import("update/update.zig");

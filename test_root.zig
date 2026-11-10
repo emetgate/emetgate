@@ -182,6 +182,7 @@ pub const context_epoch = src.context_epoch;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
+pub const agent_ledger = src.agent_ledger;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
 pub const self_update = src.self_update;
