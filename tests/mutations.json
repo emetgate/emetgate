@@ -6615,7 +6615,7 @@
     {
       "id": "GI2-split-git-index-read-as-complete",
       "file": "src/platform/git_index.zig",
-      "from": "        if (std.ascii.isLower(signature[0])) return null;",
+      "from": "        if (signature[0] < 'A' or signature[0] > 'Z') return null;",
       "to": "        if (std.mem.eql(u8, signature, \"sdir\")) return null;",
       "kills": [
         "an index whose entries live partly in a shared index is not read as the whole list"
