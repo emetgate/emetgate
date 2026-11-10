@@ -235,7 +235,12 @@ test "git native: the root of a directory is found on disk and is what git says,
         std.mem.replaceScalar(u8, want, '/', '\\');
         try testing.expectEqualStrings(want, top);
     }
-    try testing.expect(repo.toplevels_discovered.load(.monotonic) > before);
+    const git_dir = try std.fmt.allocPrint(case.arena(), "{s}\\.git", .{case.root});
+    if (repo.ownedByCurrentUser(gpa, case.root) and repo.ownedByCurrentUser(gpa, git_dir)) {
+        try testing.expect(repo.toplevels_discovered.load(.monotonic) > before);
+    } else {
+        try testing.expectEqual(before, repo.toplevels_discovered.load(.monotonic));
+    }
 
     const inner = try std.fmt.allocPrint(case.arena(), "{s}\\src", .{case.root});
     try git_fixture.initRepo(inner);

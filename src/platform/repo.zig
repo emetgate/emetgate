@@ -363,6 +363,10 @@ const ownership = struct {
     extern "kernel32" fn GetCurrentProcess() callconv(.winapi) *anyopaque;
     extern "kernel32" fn CloseHandle(handle: *anyopaque) callconv(.winapi) c_int;
     extern "kernel32" fn LocalFree(memory: ?*anyopaque) callconv(.winapi) ?*anyopaque;
+    extern "advapi32" fn IsWellKnownSid(sid: *anyopaque, kind: c_int) callconv(.winapi) c_int;
+    extern "advapi32" fn CheckTokenMembership(token: ?*anyopaque, sid: *anyopaque, is_member: *c_int) callconv(.winapi) c_int;
+
+    const builtin_administrators = 26;
 
     const se_file_object = 1;
     const owner_security_information = 1;
@@ -383,9 +387,17 @@ const ownership = struct {
         var needed: u32 = 0;
         if (GetTokenInformation(token.?, token_user, &buffer, buffer.len, &needed) == 0) return false;
         const user: *anyopaque = @as(*const ?*anyopaque, @ptrCast(&buffer)).* orelse return false;
-        return EqualSid(owner orelse return false, user) != 0;
+        const owned_by = owner orelse return false;
+        if (EqualSid(owned_by, user) != 0) return true;
+        if (IsWellKnownSid(owned_by, builtin_administrators) == 0) return false;
+        var is_member: c_int = 0;
+        return CheckTokenMembership(null, owned_by, &is_member) != 0 and is_member != 0;
     }
 };
+
+pub fn ownedByCurrentUser(gpa: Allocator, path: []const u8) bool {
+    return builtin.os.tag == .windows and ownership.ours(gpa, path);
+}
 
 fn redirectsWorkTree(gpa: Allocator, io: std.Io, git_dir: []const u8) bool {
     const path = std.fmt.allocPrint(gpa, "{s}\\config", .{git_dir}) catch return true;
