@@ -4,6 +4,7 @@ const symbol = @import("emetgate").symbol;
 const handlers = @import("emetgate").handlers;
 const telemetry = @import("emetgate").telemetry;
 const receipts = @import("emetgate").receipts;
+const memory = @import("emetgate").memory;
 const commit_group = @import("emetgate").commit_group;
 const verify_branch = @import("emetgate").verify_branch;
 const checker = @import("emetgate").checker;
@@ -140,6 +141,22 @@ test "emetgate_commit: refuses when a file was edited outside the gate" {
     try testing.expect(result == .drift);
     try testing.expectEqual(@as(usize, 1), result.drift.total);
     try testing.expectEqualStrings("src/math.ts", result.drift.paths[0]);
+}
+
+test "emetgate_commit: a file changed outside the gate that breaks a content rule is refused, not committed" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+
+    const id = try memory.remember(testing.allocator, testing.io, case.repo.root_abs, .project, "no console.log", true, "forbid:console.log", null);
+    testing.allocator.free(id);
+
+    try case.repo.write("src/math.ts", "export function add(a: number, b: number): number {\n  console.log(a);\n  return a + b;\n}\n");
+
+    var result = try commit_group.commit(testing.allocator, testing.io, case.repo.root_abs, .{ .message = "sneak", .runtime = case.runtime, .outside = true });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rule_violation);
 }
 
 test "emetgate_commit: a gated file that git put back to HEAD is skipped, not refused as drift" {

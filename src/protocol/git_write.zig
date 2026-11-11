@@ -402,6 +402,18 @@ fn localPath(text: []const u8) []const u8 {
     return rest;
 }
 
+fn validRev(text: []const u8) bool {
+    if (text.len == 0 or text.len > 80) return false;
+    const base = std.mem.indexOfAny(u8, text, "^~") orelse text.len;
+    const head = text[0..base];
+    if (!std.mem.eql(u8, head, "HEAD")) {
+        if (head.len < 4 or head.len > 64) return false;
+        for (head) |c| if (!std.ascii.isHex(c)) return false;
+    }
+    for (text[base..]) |c| if (c != '^' and c != '~' and !std.ascii.isDigit(c)) return false;
+    return true;
+}
+
 fn remoteRefusal(arena: Allocator, root_abs: []const u8, text: []const u8) !?Refusal {
     if (std.mem.indexOf(u8, text, "::") != null) return .{ .reason = "unsupported_url", .arg = text };
     if (!std.ascii.startsWithIgnoreCase(text, "file:") and isRemoteUrl(text)) return null;
@@ -596,6 +608,13 @@ fn renderRead(arena: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, 
         event.fail("GitReadRefused");
         try writeRefused(w, "not_read_only", argv[0]);
         return true;
+    }
+    if (std.mem.eql(u8, sub, "show") or std.mem.eql(u8, sub, "cat-file")) {
+        for (ok.positionals()) |p| if (!validRev(p)) {
+            event.fail("GitReadRefused");
+            try writeRefused(w, "invalid_revision", p);
+            return true;
+        };
     }
     if (try confine(arena, root_abs, &ok)) |why| {
         event.fail("GitReadRefused");
@@ -982,6 +1001,7 @@ fn fixFor(reason: []const u8) []const u8 {
     if (std.mem.eql(u8, reason, "unsupported_config_key")) return "config reads and writes are limited to these keys: " ++ config_list;
     if (std.mem.eql(u8, reason, "unsupported_value")) return "the strategy is one of ort, recursive, resolve, octopus, ours, subtree";
     if (std.mem.eql(u8, reason, "not_read_only")) return "this form changes the repository; run it with emetgate_git_write";
+    if (std.mem.eql(u8, reason, "invalid_revision")) return "show and cat-file take a 4-64 character hex object id or HEAD (optionally with ~N or ^N); resolve a name with rev-parse first";
     if (std.mem.eql(u8, reason, "too_many_args")) return "give at most 32 arguments";
     if (std.mem.eql(u8, reason, "rule_check_failed")) return "the frozen rules could not be checked, so nothing was committed; emetgate doctor says why";
     return "use a supported flag; file edits go through the gate";

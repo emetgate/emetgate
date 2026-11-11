@@ -780,6 +780,7 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .guard_config = policy.open_run,
         .tests = .{ .given = policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "", .typecheck = policy.typecheck_command orelse "", .allow_repo_config = policy.allow_repo_config },
         .outside = outside,
+        .allow_repo_memory = policy.allow_repo_memory,
     });
     defer result.deinit(gpa);
     var js: std.json.Stringify = .{ .writer = w };
