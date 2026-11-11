@@ -147,8 +147,6 @@ pub const Session = struct {
         if (disk.Step.stops(step)) return abandon(pendings);
         if (!git_commit.publishHeld(gpa, io, head, lock.?)) {
             for (pendings) |*p| p.discard(null);
-            lock.?.deleteSelf() catch {};
-            lock = null;
             plan.unfinished = commit_intent.index_not_published;
             return;
         }
