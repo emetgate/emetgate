@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **2998**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3000**
 - Mutations declared in `tests/mutations.json`: **2029**
   - killed: **1979**
   - equivalent: **9**
@@ -16,14 +16,14 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **3**
   - survives, not yet classified: **19** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
-- Red-team suites: **16** files, **197** tests total
+- Red-team suites: **16** files, **198** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
   - `tests/redteam_commit.zig`: 50
   - `tests/redteam_commit2.zig`: 32
   - `tests/redteam_gate_tree.zig`: 9
-  - `tests/redteam_git.zig`: 3
+  - `tests/redteam_git.zig`: 4
   - `tests/redteam_ledger.zig`: 11
   - `tests/redteam_link_tree.zig`: 5
   - `tests/redteam_memory.zig`: 17
@@ -987,7 +987,7 @@ python tools/verification_page.py --check
 | `SW7-file-list-change-forces-a-full-refresh` | `src/platform/search_session.zig` | `if (reason.len != 0) {             self.last.mode = .full;` -> `if (reason.len != 0 or list_changed) {             self.last.mo...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `SW8-git-index-stamp-never-trusted` | `src/platform/search_session.zig` | `return c.mtime_ns == saved.mtime_ns and c.size == saved.size an...` -> `return false and c.mtime_ns == saved.mtime_ns and c.size == sav...` | search freshness: after a committed write and a git commit the file list is lis... | killed |
 | `GI1-git-index-checksum-not-verified` | `src/platform/git_index.zig` | `if (std.mem.eql(u8, &sha1, bytes[bytes.len - 20 ..])) return 20;` -> `_ = &sha1;         return 20;` | git index reader: a split index, a flipped byte or a cut file is not read | killed |
-| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (std.ascii.isLower(signature[0])) return null;` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
+| `GI2-split-git-index-read-as-complete` | `src/platform/git_index.zig` | `if (signature[0] < 'A' or signature[0] > 'Z') return null;` -> `if (std.mem.eql(u8, signature, "sdir")) return null;` | an index whose entries live partly in a shared index is not read as the whole l... | killed |
 | `GI3-v4-prefix-not-stripped` | `src/platform/git_index.zig` | `previous.shrinkRetainingCapacity(previous.items.len - strip);` -> `previous.shrinkRetainingCapacity(0);` | git index reader: version 4 prefix compression and an intent-to-add entry read ... | killed |
 | `ANS1-partial-answer-reported-complete` | `src/engine/answer.zig` | `if (missing.len == 0) return .{ .complete = .{ .value = value, ...` -> `if (missing.len != std.math.maxInt(usize)) return .{ .complete ...` | a missing file makes the answer partial and never complete | killed |
 | `ANS2-unaccounted-file-accepted` | `src/engine/answer.zig` | `if (accounted != in_scope) return "evaluated and missing files ...` -> `if (accounted != in_scope and false) return "evaluated and miss...` | an answer whose evaluated and missing files do not add up to the scope is refus... | killed |

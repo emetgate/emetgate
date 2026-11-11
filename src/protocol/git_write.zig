@@ -402,6 +402,18 @@ fn localPath(text: []const u8) []const u8 {
     return rest;
 }
 
+fn validRev(text: []const u8) bool {
+    if (text.len == 0 or text.len > 80) return false;
+    const base = std.mem.indexOfAny(u8, text, "^~") orelse text.len;
+    const head = text[0..base];
+    if (!std.mem.eql(u8, head, "HEAD")) {
+        if (head.len < 4 or head.len > 64) return false;
+        for (head) |c| if (!std.ascii.isHex(c)) return false;
+    }
+    for (text[base..]) |c| if (c != '^' and c != '~' and !std.ascii.isDigit(c)) return false;
+    return true;
+}
+
 fn remoteRefusal(arena: Allocator, root_abs: []const u8, text: []const u8) !?Refusal {
     if (std.mem.indexOf(u8, text, "::") != null) return .{ .reason = "unsupported_url", .arg = text };
     if (!std.ascii.startsWithIgnoreCase(text, "file:") and isRemoteUrl(text)) return null;
@@ -433,12 +445,18 @@ fn configRefusal(arena: Allocator, root_abs: []const u8, ok: *const Ok) !?Refusa
     var key: ?[]const u8 = null;
     var value: ?[]const u8 = null;
     if (pos.len != 0 and listed(config_actions, pos[0])) {
-        const sets = std.mem.eql(u8, pos[0], "set");
-        if (sets or std.mem.eql(u8, pos[0], "unset")) {
-            if (pos.len > 1) key = pos[1];
+        const action = pos[0];
+        if (std.mem.eql(u8, action, "list")) return .{ .reason = "unsupported_config_key", .arg = action };
+        const sets = std.mem.eql(u8, action, "set");
+        if (sets or std.mem.eql(u8, action, "unset") or std.mem.eql(u8, action, "get")) {
+            if (pos.len < 2) return .{ .reason = "unsupported_config_key", .arg = action };
+            key = pos[1];
             if (sets and pos.len > 2) value = pos[2];
         }
-    } else if (!ok.reads) {
+    } else if (ok.reads) {
+        if (pos.len == 0) return .{ .reason = "unsupported_config_key", .arg = "--list" };
+        key = pos[0];
+    } else {
         if (pos.len != 0 and std.mem.indexOfScalar(u8, pos[0], '.') == null) return .{ .reason = "unsupported_action", .arg = pos[0] };
         if (ok.unsets or ok.writes or pos.len >= 2) {
             key = pos[0];
@@ -590,6 +608,13 @@ fn renderRead(arena: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, 
         event.fail("GitReadRefused");
         try writeRefused(w, "not_read_only", argv[0]);
         return true;
+    }
+    if (std.mem.eql(u8, sub, "show") or std.mem.eql(u8, sub, "cat-file")) {
+        for (ok.positionals()) |p| if (!validRev(p)) {
+            event.fail("GitReadRefused");
+            try writeRefused(w, "invalid_revision", p);
+            return true;
+        };
     }
     if (try confine(arena, root_abs, &ok)) |why| {
         event.fail("GitReadRefused");
@@ -973,9 +998,10 @@ fn fixFor(reason: []const u8) []const u8 {
     if (std.mem.eql(u8, reason, "missing_value")) return "give the flag its value as the next element or as --flag=value";
     if (std.mem.eql(u8, reason, "outside_root")) return "paths, clone targets and local remotes must be inside the served root";
     if (std.mem.eql(u8, reason, "unsupported_url")) return "use an https, ssh or git URL; a transport helper (::) does not run";
-    if (std.mem.eql(u8, reason, "unsupported_config_key")) return "writable keys: " ++ config_list;
+    if (std.mem.eql(u8, reason, "unsupported_config_key")) return "config reads and writes are limited to these keys: " ++ config_list;
     if (std.mem.eql(u8, reason, "unsupported_value")) return "the strategy is one of ort, recursive, resolve, octopus, ours, subtree";
     if (std.mem.eql(u8, reason, "not_read_only")) return "this form changes the repository; run it with emetgate_git_write";
+    if (std.mem.eql(u8, reason, "invalid_revision")) return "show and cat-file take a 4-64 character hex object id or HEAD (optionally with ~N or ^N); resolve a name with rev-parse first";
     if (std.mem.eql(u8, reason, "too_many_args")) return "give at most 32 arguments";
     if (std.mem.eql(u8, reason, "rule_check_failed")) return "the frozen rules could not be checked, so nothing was committed; emetgate doctor says why";
     return "use a supported flag; file edits go through the gate";
@@ -1140,7 +1166,13 @@ test "git write keeps paths, clone targets, local remotes and config keys inside
     try expectConfined(&.{ "format-patch", "-o", "..\\out", "-1" }, "outside_root");
     try expectConfined(&.{ "format-patch", "--output-directory=patches", "-1" }, null);
     try expectConfined(&.{ "config", "user.email", "a@b.c" }, null);
-    try expectConfined(&.{ "config", "--get", "core.hooksPath" }, null);
+    try expectConfined(&.{ "config", "--get", "core.hooksPath" }, "unsupported_config_key");
+    try expectConfined(&.{ "config", "--get", "user.email" }, null);
+    try expectConfined(&.{ "config", "-l" }, "unsupported_config_key");
+    try expectConfined(&.{ "config", "--list" }, "unsupported_config_key");
+    try expectConfined(&.{ "config", "--get-regexp", "url" }, "unsupported_config_key");
+    try expectConfined(&.{ "config", "get", "core.sshCommand" }, "unsupported_config_key");
+    try expectConfined(&.{ "config", "list" }, "unsupported_config_key");
     try expectConfined(&.{ "config", "core.hooksPath", "x" }, "unsupported_config_key");
     try expectConfined(&.{ "config", "set", "core.sshCommand", "calc" }, "unsupported_config_key");
     try expectConfined(&.{ "config", "--add", "alias.x", "!calc" }, "unsupported_config_key");

@@ -119,7 +119,7 @@ pub fn entries(arena: Allocator, bytes: []const u8) !?[]Raw {
         if (body.len < pos + 8) return null;
         const signature = body[pos..][0..4];
         const size = std.mem.readInt(u32, body[pos + 4 ..][0..4], .big);
-        if (std.ascii.isLower(signature[0])) return null;
+        if (signature[0] < 'A' or signature[0] > 'Z') return null;
         if (body.len - pos - 8 < size) return null;
         pos += 8 + size;
     }

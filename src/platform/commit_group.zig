@@ -14,6 +14,7 @@
 const std = @import("std");
 const receipt = @import("../verify/receipt.zig");
 const receipts = @import("receipts.zig");
+const commit_guard = @import("commit_guard.zig");
 const jcs = @import("../verify/jcs.zig");
 const shadow = @import("shadow.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -47,6 +48,7 @@ pub const Options = struct {
     tests: ?Tests = null,
     guard_config: bool = false,
     outside: bool = false,
+    allow_repo_memory: bool = false,
 };
 
 pub const Tests = struct {
@@ -297,6 +299,18 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         .ok => {},
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },
+    }
+    if (options.runtime) |runtime| {
+        var staged: commit_guard.Staged = .{};
+        defer staged.deinit(gpa);
+        for (changes.items) |change| {
+            try commit_guard.addWorking(arena, gpa, io, runtime, root, change.rel, change.content, &staged);
+        }
+        switch (try rules.judge(gpa, io, root, staged.changes.items, options.allow_repo_memory)) {
+            .ok => {},
+            .violated => |report| return .{ .rule_violation = report },
+            .failed => |failure| return .{ .rule_check_failed = failure },
+        }
     }
     commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));
     var session: commit_plan.Session = .{ .request = &request, .head = try git_commit.preflightWritten(gpa, io, root, rels.items, written.items) };

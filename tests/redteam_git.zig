@@ -148,6 +148,33 @@ test "redteam git: argument injection through path or commit is refused, not run
     try testing.expect(std.mem.indexOf(u8, outside, "isError\":true") != null);
 }
 
+test "redteam git: raw show and cat-file are held to hex or HEAD revisions" {
+    var clone = try Clone.init();
+    defer clone.deinit();
+    try clone.writeRepoFile("a.txt", "one\n");
+    try clone.git(&.{ "add", "." });
+    try clone.git(&.{ "commit", "-q", "-m", "init" });
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const refused = [_][]const []const u8{
+        &.{ "show", "refs/stash" },
+        &.{ "show", "HEAD:a.txt" },
+        &.{ "cat-file", "-p", "HEAD:a.txt" },
+    };
+    for (refused) |raw| {
+        const out = try callTool(runtime, clone.root_abs, .{ .sub = raw[0], .args = raw });
+        defer gpa.free(out);
+        errdefer std.debug.print("{s}\n", .{out});
+        try testing.expect(std.mem.indexOf(u8, out, "invalid_revision") != null);
+    }
+
+    const ok = try callTool(runtime, clone.root_abs, .{ .sub = "show", .args = &[_][]const u8{ "show", "HEAD", "--stat" } });
+    defer gpa.free(ok);
+    try testing.expect(std.mem.indexOf(u8, ok, "\"isError\":true") == null);
+}
+
 test "redteam git: a malformed commit id and an unknown subcommand never reach git" {
     var clone = try Clone.init();
     defer clone.deinit();
