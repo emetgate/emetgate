@@ -1931,8 +1931,11 @@ tools/accept.ps1 <ref>      # the tests three times, then the mutations on lines
 
 `zig build test` compiles one test binary, `test-all`, from `test_root.zig`: the `src` tests and
 every file under `tests/`. Its runner, `tools/test_runner.zig`, chooses the tests at run time
-(`--filter`, `--skip`, `--shard`, `--jobs`, `--slow`, `--mutant`), so `-Dtest-filter` does not
-recompile anything, and a filter that matches no test fails the run. With `--jobs` the binary
+(`--filter`, `--skip`, `--shard`, `--jobs`, `--slow`, `--mutant`), and a filter that matches no
+test fails the run. `-Dtest-filter` compiles a second binary, `test-selected`, with only the tests
+whose name matches. That binary does not hold the tests of a `src` file that only other tests
+reach, nor a test that another test runs by starting the binary again, so `-Dtest-whole=true` runs
+the filters against `test-all` instead; the mutation harness always passes it. With `--jobs` the binary
 starts itself as shards that take the tests from one queue, slowest first by the times of the
 last run kept in `.zig-cache/test-all/times.tsv`, and fails unless together they ran every
 selected test exactly once. `-Dtest-part=I/N` (`--part I/N`) runs only part I of N: the selected

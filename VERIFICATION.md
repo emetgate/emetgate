@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3000**
-- Mutations declared in `tests/mutations.json`: **2029**
-  - killed: **1979**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3002**
+- Mutations declared in `tests/mutations.json`: **2030**
+  - killed: **1980**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -16,11 +16,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **3**
   - survives, not yet classified: **19** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
-- Red-team suites: **16** files, **198** tests total
+- Red-team suites: **16** files, **199** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
   - `tests/redteam_batch_delete.zig`: 9
-  - `tests/redteam_commit.zig`: 50
+  - `tests/redteam_commit.zig`: 51
   - `tests/redteam_commit2.zig`: 32
   - `tests/redteam_gate_tree.zig`: 9
   - `tests/redteam_git.zig`: 4
@@ -278,7 +278,7 @@ python tools/verification_page.py --check
 | `SR1-cleanup-follows-a-linked-workspace` | `src/platform/shadow.zig` | `try ensureNoLinks(base_abs, shadow_abs);     const tree = (try ...` -> `try ensureNoLinks(base_abs, shadow_abs[0..base_abs.len]);     c...` | a shadow root or repo workspace that is a junction is refused and the directory... | killed |
 | `SV1-service-integrity-not-verified` | `src/platform/sandbox.zig` | `try requireLowIntegrity(child.id.?);     try job.assign(child.i...` -> `try job.assign(child.id.?);     try resumeMainThread(child.thre...` | a service whose token is not low integrity is refused before it runs | killed |
 | `AC1-app-container-falls-back-to-low-integrity` | `src/platform/sandbox.zig` | `.app_container => \|profile\| .{ .app = profile },` -> `.app_container => .{ .low = LowToken.create() catch return erro...` | redteam appcontainer: the sandboxed process runs inside an app container, a low...; redte... | killed |
-| `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `try argv.append(gpa, git);` -> `try argv.append(gpa, "git");` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `EP1-tracked-files-run-bare-git` | `src/platform/shadow.zig` | `try argv.append(gpa, git);` -> `try argv.append(gpa, "git");` | process launch: a linked worktree, which only git itself can list, never runs a... | killed |
 | `SL18-lockdown-launches-without-the-hook` | `src/platform/lockdown.zig` | `const hooked = try lockdown_slash.extend(gpa, locked, slash);` -> `const hooked = try gpa.dupe([]const u8, locked);` | lockdown slash: the launched claude gets the hook settings and the command dire...; lockd... | killed |
 | `LM7-lockdown-launches-without-the-marks` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (false and marks.wanted) try lockdo...` | lockdown marks: the launched claude gets the plugin directory right after the l... | killed |
 | `LM8-lockdown-loads-the-marks-when-told-not-to` | `src/platform/lockdown.zig` | `const marks_dir: ?[]u8 = if (marks.wanted) try lockdown_marks.i...` -> `const marks_dir: ?[]u8 = if (true or marks.wanted) try lockdown...` | lockdown marks: with --no-marks claude gets no plugin directory, no plugin file... | killed |
@@ -763,7 +763,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1365 mutation(s).
+1366 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1111,7 +1111,7 @@ python tools/verification_page.py --check
 | `SA6-unknown-kind-accepted` | `src/protocol/search_v1.zig` | `set.insert(std.meta.stringToEnum(Kind, v.string) orelse return ...` -> `set.insert(std.meta.stringToEnum(Kind, v.string) orelse continu...` | search answers: an unknown kind name is refused instead of filtering everything... | killed |
 | `SA7-empty-answer-without-a-note` | `src/protocol/search_v1.zig` | `if (result.groups.items.len == 0) {` -> `if (false) {` | search answers: a complete answer with no match states how many files it evalua...; searc... | killed |
 | `EP3-git-tool-runs-bare-git` | `src/protocol/git_tools.zig` | `argv[0] = git;` -> `_ = &argv;` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
-| `EP4-program-files-run-bare-git` | `src/platform/tsserver.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a repository that plants git, rg, node and claude scripts or a ... | killed |
+| `EP4-program-files-run-bare-git` | `src/platform/tsserver.zig` | `.argv = &.{ git, "ls-files", "-z" },` -> `.argv = &.{ "git", "ls-files", "-z" },` | process launch: a linked worktree, which only git itself can list, never runs a... | killed |
 | `EP5-working-directory-entry-searched` | `src/platform/exe_path.zig` | `if (search.cwd) \|cwd\| planted = planted or inside(dir, dir_fi...` -> `if (search.cwd) \|cwd\| planted = planted or (inside(dir, dir_f...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
 | `EP6-repository-entry-searched` | `src/platform/exe_path.zig` | `if (search.repo_root) \|root\| planted = planted or inside(dir,...` -> `if (search.repo_root) \|root\| planted = planted or (inside(dir...` | exe path: only fully qualified PATH entries outside the working directory and t... | killed |
 | `EP7-relative-entry-searched` | `src/platform/exe_path.zig` | `if (dir.len == 0 or !fullyQualified(dir)) continue;` -> `if (dir.len == 0) continue;` | exe path: a name found nowhere else, a relative name and a relative path entry ... | killed |
@@ -1287,7 +1287,8 @@ python tools/verification_page.py --check
 | `PV2-staged-target-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.eql(u8, index_entry.oid, head_entry.oid) or !std.m...` -> `if (false and (!std.mem.eql(u8, index_entry.oid, head_entry.oid...` | git commit: a target whose staged entry differs from HEAD is refused though the... | killed |
 | `PV3-untracked-target-accepted` | `src/platform/git_commit.zig` | `if (!pre_written) return error.TargetNotInHead;` -> `if (false) return error.TargetNotInHead;` | commit write_doc: a target git does not track yet is refused and stays as it was | killed |
 | `PV4-deleted-tracked-path-accepted-as-new` | `src/platform/git_commit.zig` | `if (!(pre_written and in_head != null and in_index != null and ...` -> `if (false and !(pre_written and in_head != null and in_index !=...` | git commit: a tracked file deleted by hand is not a free path to create on | killed |
-| `PV5-head-on-a-tag-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, branch, branch_prefix)) return erro...` -> `if (!std.mem.startsWith(u8, branch, branch_prefix) and std.mem....` | redteam commit: a HEAD that points at a tag is refused and the tag does not move | killed |
+| `PV5-head-on-a-tag-accepted` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, branch, branch_prefix)) return erro...` -> `if (!std.mem.startsWith(u8, branch, branch_prefix) and std.mem....` | redteam commit: a HEAD that points at a tag only git itself can resolve is refu... | killed |
+| `PV5b-head-on-a-tag-accepted-from-the-git-directory` | `src/platform/git_commit.zig` | `if (!std.mem.startsWith(u8, known.branch, branch_prefix)) retur...` -> `` | redteam commit: a HEAD that points at a tag is refused and the tag does not move | killed |
 | `PV6-locked-index-found-after-the-gate` | `src/platform/git_commit.zig` | `if (try exists(io, try std.fmt.allocPrint(arena, "{s}.lock", .{...` -> `if (false and try exists(io, try std.fmt.allocPrint(arena, "{s}...` | commit protocol: an index lock is refused before the gate runs, so a failing te... | killed |
 | `PV7-commit-encoding-taken-from-config` | `src/platform/git_commit.zig` | `"-c", "i18n.commitEncoding=UTF-8", "commit-tree", tree, "-p"` -> `"commit-tree", tree, "-p"` | redteam commit: a commit encoding setting does not mislabel the UTF-8 message | killed |
 | `PV8-any-index-lock-treated-as-ours` | `src/platform/git_commit.zig` | `return if (std.mem.eql(u8, &found, &expected)) .ours else .fore...` -> `return if (std.mem.eql(u8, &found, &expected) or true) .ours el...` | commit protocol: recover never removes or replaces an index lock it does not ow...; git c... | killed |
@@ -2099,9 +2100,9 @@ python tools/verification_page.py --check
 | `LR4-no-credential-exception` | `src/protocol/open_run.zig` | `const low = !request.as_user and !try command_danger.usesCreden...` -> `const low = !request.as_user;` | lockdown run: a plain git fetch runs with the user's rights for the credential ... | killed |
 | `LR5-as-user-ignored` | `src/protocol/open_run.zig` | `.bool => \|flag\| request.as_user = flag,` -> `.bool => {},` | lockdown run: as_user writes outside the repository with the user's rights | killed |
 | `LR6-hook-as-user-passes` | `src/protocol/pretool_hook.zig` | `.bool => \|flag\| flag,` -> `.bool => false,` | pretool hook: as_user asks even for an everyday command, and as_user false or a... | killed |
-| `LR7-denial-unexplained` | `src/protocol/open_run.zig` | `if (low) if (low_run.note(ran.report)) \|text\| {` -> `if (!low) if (low_run.note(ran.report)) \|text\| {` | lockdown run: a command cannot write outside the repository but writes inside i...; lockd... | killed |
-| `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: powershell and git start at low integrity through cmd | killed |
-| `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | lockdown run: an MSYS program that cannot start at low integrity is named in th... | killed |
+| `LR7-denial-unexplained` | `src/protocol/open_run.zig` | `if (low) if (low_run.note(ran.report)) \|text\| {` -> `if (!low) if (low_run.note(ran.report)) \|text\| {` | lockdown run: a command cannot write outside the repository but writes inside i... | killed |
+| `LR8-low-run-in-git-bash` | `src/protocol/open_run.zig` | `const shell = if (low) try open_shell.cmd(gpa) else try open_sh...` -> `const shell = try open_shell.find(gpa, root_abs);` | lockdown run: a command cannot write outside the repository but writes inside i... | killed |
+| `LR9-msys-crash-unexplained` | `src/platform/low_run.zig` | `if (mentions(report, &msys_markers)) return msys_note;` -> `` | low run: a fatal start of the MSYS runtime is named as an MSYS program, other f... | killed |
 | `LR10-fix-missing` | `src/platform/low_run.zig` | `error.LowRootOnNetwork => "the command did not run: the reposit...` -> `error.LowRootOnNetwork => "the repository is on a network drive` | lockdown run: each failure to prepare the sandbox has its own fix that offers a... | killed |
 | `MC1-explore-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &addr...` -> `return out.written();` | map tools: explore ends with a closure that lists by signature the called defin... | killed |
 | `MC2-evidence-closure-dropped` | `src/protocol/map_tools.zig` | `try self.closure(arena, &out.writer, &texts, shown.items, &none...` -> `_ = &none;` | map tools: evidence ends with a closure of the definitions its code calls | killed |
