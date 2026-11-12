@@ -111,6 +111,10 @@ test "the stem of a backslash path drops the folder and only the last extension"
     try testing.expectEqualStrings("Makefile", stemOf("Makefile"));
 }
 
+test "the stem of an empty path is empty" {
+    try testing.expectEqualStrings("", stemOf(""));
+}
+
 test "a path with a shell metacharacter or a quote is not put into a command" {
     try testing.expect(safeInCommand("src/auth/login.ts"));
     try testing.expect(safeInCommand("src/my file.ts"));
