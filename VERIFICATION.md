@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3002**
-- Mutations declared in `tests/mutations.json`: **2030**
-  - killed: **1980**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3011**
+- Mutations declared in `tests/mutations.json`: **2035**
+  - killed: **1985**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **4**
@@ -198,7 +198,7 @@ python tools/verification_page.py --check
 
 ### Sandbox and the test/typecheck gate
 
-182 mutation(s).
+183 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -384,10 +384,11 @@ python tools/verification_page.py --check
 | `LD2-project-config-without-tool-prefix` | `src/platform/lockdown.zig` | `if (!namesFlag(args.items, tool_prefix_flag)) {` -> `if (namesFlag(args.items, tool_prefix_flag)) {` | lockdown gives each project emetgate server the prefix of its own name and keep... | killed |
 | `CE10-launch-keeps-the-parent-context` | `src/platform/lockdown.zig` | `try env.put(lockdown_slash.context_variable, context);` -> `` | lockdown gives each claude launch its own context file under the state folder a... | killed |
 | `CE11-launch-leaves-its-context-file` | `src/platform/lockdown.zig` | `defer std.Io.Dir.cwd().deleteFile(io, context) catch {};` -> `` | lockdown gives each claude launch its own context file under the state folder a... | killed |
+| `SCP3-ran-command-reported-as-the-full-one` | `src/platform/runner.zig` | `return trace.scoped_command orelse test_command;` -> `_ = trace;     return test_command;` | gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran | killed |
 
 ### Disk, repository boundary and atomic commit
 
-78 mutation(s).
+80 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -469,10 +470,12 @@ python tools/verification_page.py --check
 | `FE2-line-range-under-file-hash-refused` | `src/platform/batch_plan.zig` | `error.HashMismatch => if (std.mem.eql(u8, &wanted, &symbol.file...` -> `error.HashMismatch => if (false)` | forgiving edits: a line range is accepted under the whole file's hash too; textAfter keep... | killed |
 | `JS8-require-delete-is-effect` | `src/platform/batch_plan.zig` | `and !requires(base, removed.span);` -> `;` | deleting a require binding or a class member has no top-level effect, a bare st... | killed |
 | `SL11-recover-exits-0-on-stale-failure` | `src/platform/disk.zig` | `return if (stale_failed or report.failed > 0` -> `_ = stale_failed;     return if (report.failed > 0` | purple recover: a stale shadow of a removed repository that cannot be removed e... | killed |
+| `SCP1-unsafe-path-put-into-a-command` | `src/platform/gate.zig` | `if (run_command.hasShellMetacharacter(rel)) return false;` -> `` | a path with a shell metacharacter or a quote is not put into a command | killed |
+| `SCP2-stem-placeholder-left-unfilled` | `src/platform/gate.zig` | `try out.appendSlice(gpa, stem);` -> `try out.appendSlice(gpa, stem[0..0]);` | a scoped command gets the file in place of {file} and its name without folder o...; gate:... | killed |
 
 ### Rules and the q: query engine
 
-153 mutation(s).
+155 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -629,6 +632,8 @@ python tools/verification_page.py --check
 | `FW6-write-leaves-find-session-fresh` | `src/protocol/policy.zig` | `if (self.find_session) \|session\| session.invalidate();` -> `_ = self;` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |
 | `CE13-mirror-flag-is-not-trust` | `src/protocol/policy.zig` | `policy.mirror_trusted = policy.mirror_enabled;` -> `` | context epoch: --mirror trusts the mirror without an epoch, the default and --n... | killed |
 | `NT1-no-typecheck-ignored` | `src/protocol/policy.zig` | `if (policy.no_typecheck) return "";` -> `` | typecheck detection: --no-typecheck turns the detected type checker off and ref... | killed |
+| `SCP4-model-may-name-the-scoped-command` | `src/protocol/policy.zig` | `or tool_result.getField(a, "test_scoped_cmd") != null` -> `` | a scoped test command comes only from the operator, next to a full one, once an... | killed |
+| `SCP5-scoped-command-without-a-full-one` | `src/protocol/policy.zig` | `if (policy.test_scoped_command != null and policy.test_command ...` -> `` | a scoped test command comes only from the operator, next to a full one, once an... | killed |
 
 ### Scan
 
