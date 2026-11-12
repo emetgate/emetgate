@@ -4842,7 +4842,8 @@
       "from": "try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);",
       "to": "try session.land(gpa, io, root, changes, pendings, null, options.commit_step);",
       "kills": [
-        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new"
+        "batch crash through the tool: a crash in the middle of the finalize loop recovers every file new",
+        "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content"
       ]
     },
     {
@@ -6208,15 +6209,6 @@
       "to": "",
       "kills": [
         "doc_writer: a binary file is refused before any parse or sandbox run"
-      ]
-    },
-    {
-      "id": "DW4-doc-write-skips-journal",
-      "file": "src/platform/doc_writer.zig",
-      "from": "try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n            return .{ .committed = applied.hash };",
-      "to": "try session.land(gpa, io, root, &change, &pendings, if (applied.source.len == 0) &journal else null, options.commit_step);\n            return .{ .committed = applied.hash };",
-      "kills": [
-        "doc_writer: a crash right after the journal is written leaves a journal entry, and recover restores the old content"
       ]
     },
     {
@@ -9728,26 +9720,6 @@
       "note": "the operator would turn commits on and no write would be committed"
     },
     {
-      "id": "DC2-write-doc-commits-the-old-bytes",
-      "file": "src/platform/doc_writer.zig",
-      "from": ".content = applied.source }};",
-      "to": ".content = source }};",
-      "kills": [
-        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
-      ],
-      "note": "the commit would not hold the bytes the gate tested"
-    },
-    {
-      "id": "DC3-write-doc-written-but-not-published",
-      "file": "src/platform/doc_writer.zig",
-      "from": "            try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n",
-      "to": "            for (&pendings) |*p| p.discard(null);\n            if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n",
-      "kills": [
-        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
-      ],
-      "note": "the file would be written and the branch left where it was"
-    },
-    {
       "id": "DC4-write-doc-handler-drops-the-commit",
       "file": "src/protocol/handlers.zig",
       "from": "        .commit = if (commit) |*request| request else null,\n        .gate_tree = policy.treeChoice(),\n    }, &doc_trace);",
@@ -9756,20 +9728,6 @@
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
       "note": "with commits on write_doc would write to the tree and commit nothing"
-    },
-    {
-      "id": "DC5-write-doc-message-kept-from-the-command-gate",
-      "file": "src/platform/doc_writer.zig",
-      "from": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits",
-      "to": "runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), null, options.limits",
-      "kills": [
-        "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
-        "message command: the same file redirected to standard input serves a checker that reads the message there",
-        "message command: a command that cannot be found is a failed check, not a verdict, and nothing is written",
-        "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
-        "message command: a tracked file where the message file goes is refused by name and stays as it was"
-      ],
-      "note": "a write_doc commit would never be shown to the user's message checker"
     },
     {
       "id": "MC1-try-message-kept-from-the-command-gate",
@@ -9875,7 +9833,8 @@
         "commit batch: a node try is one commit of the edited file",
         "commit batch: a rename across three files is one commit of the three files",
         "commit batch: a move into a new file is one commit of the source, the new file and the user",
-        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers"
+        "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers",
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
       "note": "every file of a batch would be written and the branch would never get the commit"
     },
@@ -9925,7 +9884,8 @@
       "from": "    for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
       "to": "    for (doc_prepared) |p| if (false) try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });\n    return changes.toOwnedSlice(gpa);",
       "kills": [
-        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files"
+        "commit batch: try_batch that edits, creates, deletes and rewrites a doc is one commit of exactly those files",
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
       "note": "the doc edit of a batch would be written and left outside the commit"
     },
@@ -10344,7 +10304,12 @@
       "kills": [
         "commit batch: a message command judges the message of a try_batch, refuses one and accepts another",
         "commit batch: a message command judges the message of a node try",
-        "commit batch: a message command judges the message of a rename, a move and a file move"
+        "commit batch: a message command judges the message of a rename, a move and a file move",
+        "message command: the command reads the message from the file named on its command line, refuses one message and accepts another",
+        "message command: the same file redirected to standard input serves a checker that reads the message there",
+        "message command: a command that cannot be found is a failed check, not a verdict, and nothing is written",
+        "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
+        "message command: a tracked file where the message file goes is refused by name and stays as it was"
       ],
       "note": "a batch commit would skip the message commands"
     },
@@ -10492,21 +10457,13 @@
       ]
     },
     {
-      "id": "MB2-doc-edit-in-place-before-its-message-command",
-      "file": "src/platform/doc_writer.zig",
-      "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
-      "to": "    try workspace.writeFile(rel, applied.source);\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {\n",
-      "kills": [
-        "redteam2 commit: a call cannot loosen the file its message command reads in the same commit that message is judged for"
-      ]
-    },
-    {
       "id": "MB3-batch-in-place-before-its-message-command",
       "file": "src/platform/batch.zig",
       "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "kills": [
-        "message base: a batch cannot add to the file its message command reads what that command looks for"
+        "message base: a batch cannot add to the file its message command reads what that command looks for",
+        "redteam2 commit: a call cannot loosen the file its message command reads in the same commit that message is judged for"
       ]
     },
     {
@@ -11739,15 +11696,6 @@
       "to": "options, &session, command, &.{})) {",
       "kills": [
         "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
-      ]
-    },
-    {
-      "id": "EW19-command-rule-gets-no-target-from-write-doc",
-      "file": "src/platform/doc_writer.zig",
-      "from": "runner.gateDir(location, &session), &.{rel}, null, options.limits",
-      "to": "runner.gateDir(location, &session), &.{}, null, options.limits",
-      "kills": [
-        "documents: a command rule runs on write_doc and on a document edit of a batch, and the syntax forms do not"
       ]
     },
     {
