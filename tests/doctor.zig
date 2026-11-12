@@ -69,12 +69,18 @@ test "doctor: the test command lockdown will use comes from the emetgate server'
         \\ "gate": {"command": "C:\\tools\\emetgate.exe", "args": ["mcp", "--test", "npm test", "--allow-repo-config"]}}}
     ;
     const found = try doctor.serverTest(testing.allocator, config);
-    defer testing.allocator.free(found.given);
+    defer found.deinit(testing.allocator);
     try testing.expectEqualStrings("npm test", found.given);
     try testing.expect(found.names_test);
     try testing.expect(found.allow_repo_config);
+    try testing.expectEqualStrings("C:\\tools\\emetgate.exe", found.command);
+    try testing.expectEqual(@as(usize, 4), found.args.len);
+    try testing.expectEqualStrings("mcp", found.args[0]);
+    try testing.expectEqualStrings("--allow-repo-config", found.args[3]);
 
     const bare = try doctor.serverTest(testing.allocator, "{\"mcpServers\": {\"emetgate\": {\"command\": \"emetgate\", \"args\": [\"mcp\"]}}}");
+    defer bare.deinit(testing.allocator);
+    try testing.expectEqualStrings("emetgate", bare.command);
     try testing.expectEqualStrings("", bare.given);
     try testing.expect(!bare.names_test);
     try testing.expect(!bare.allow_repo_config);
@@ -250,4 +256,64 @@ test "doctor: an .mcp.json with two emetgate servers fails before the test comma
     const text = out.written();
     try testing.expect(hasLine(text, "FAIL  .mcp.json SeveralEmetgateServers  -> fix: "));
     try testing.expect(hasLine(text, "FAIL  tests     skipped: .mcp.json must be fixed first"));
+}
+
+test "doctor: the server's initialize reply is read for its name and version, and anything else is no answer" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const reply = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"emetgate\",\"version\":\"0.9.0\"}}}\r\n";
+    try testing.expectEqualStrings("0.9.0", doctor.serverAnswer(a, reply).?);
+    try testing.expectEqualStrings("0.9.0", doctor.serverAnswer(a, "starting\n" ++ reply).?);
+    try testing.expectEqual(@as(?[]const u8, null), doctor.serverAnswer(a, ""));
+    try testing.expectEqual(@as(?[]const u8, null), doctor.serverAnswer(a, "error: InvalidArguments\n"));
+    try testing.expectEqual(@as(?[]const u8, null), doctor.serverAnswer(a, "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"other\",\"version\":\"1\"}}}"));
+    try testing.expectEqual(@as(?[]const u8, null), doctor.serverAnswer(a, "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32600}}"));
+}
+
+test "doctor: a server that is missing, does not start or does not answer blocks lockdown, an older one warns" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const self = "C:\\Programs\\emetgate\\emetgate.exe";
+    const reply = "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"serverInfo\":{\"name\":\"emetgate\",\"version\":\"0.8.0\"}}}\n";
+
+    const missing = doctor.serverCheck(a, "C:\\old\\emetgate.exe", .missing, "0.9.0", self);
+    try testing.expectEqual(doctor.Status.fail, missing.status);
+    try testing.expect(std.mem.indexOf(u8, missing.detail, "C:\\old\\emetgate.exe is not there") != null);
+    try testing.expect(std.mem.indexOf(u8, missing.fix, self) != null);
+
+    const failed = doctor.serverCheck(a, "emetgate", .{ .failed = error.AccessDenied }, "0.9.0", self);
+    try testing.expectEqual(doctor.Status.fail, failed.status);
+    try testing.expect(std.mem.indexOf(u8, failed.detail, "AccessDenied") != null);
+
+    const silent = doctor.serverCheck(a, "emetgate", .{ .finished = .{ .stdout = "", .stderr = "error: unknown flag --tset\nusage: ...\n" } }, "0.9.0", self);
+    try testing.expectEqual(doctor.Status.fail, silent.status);
+    try testing.expect(std.mem.indexOf(u8, silent.detail, "did not answer initialize: error: unknown flag --tset") != null);
+    try testing.expect(std.mem.indexOf(u8, silent.detail, "usage") == null);
+
+    const older = doctor.serverCheck(a, "emetgate", .{ .finished = .{ .stdout = reply, .stderr = "" } }, "0.9.0", self);
+    try testing.expectEqual(doctor.Status.warn, older.status);
+    try testing.expect(std.mem.indexOf(u8, older.detail, "is emetgate 0.8.0, this is 0.9.0") != null);
+
+    const same = doctor.serverCheck(a, "emetgate", .{ .finished = .{ .stdout = reply, .stderr = "" } }, "0.8.0", self);
+    try testing.expectEqual(doctor.Status.ok, same.status);
+    try testing.expectEqualStrings("answers as emetgate 0.8.0", same.detail);
+}
+
+test "doctor: an .mcp.json whose emetgate server is not on disk fails the server check and is not ready" {
+    var place = try Place.make("moved server");
+    defer place.deinit();
+    try git_fixture.initRepo(place.dir);
+    var dir = try std.Io.Dir.cwd().openDir(testing.io, place.dir, .{});
+    defer dir.close(testing.io);
+    try dir.writeFile(testing.io, .{ .sub_path = ".mcp.json", .data = "{\"mcpServers\": {\"emetgate\": {\"command\": \"C:\\\\no\\\\such\\\\folder\\\\emetgate.exe\", \"args\": [\"mcp\", \"--test\", \"cmd /c exit 0\"]}}}" });
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try testing.expectEqual(@as(u8, 1), try place.run(&out.writer));
+    const text = out.written();
+    try testing.expect(hasLine(text, "ok    .mcp.json one emetgate server"));
+    try testing.expect(hasLine(text, "FAIL  server    C:\\no\\such\\folder\\emetgate.exe is not there"));
+    try testing.expect(std.mem.indexOf(u8, text, "C:\\nowhere\\emetgate.exe") != null);
+    try testing.expect(hasLine(text, "not ready: "));
 }

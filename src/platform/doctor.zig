@@ -74,6 +74,15 @@ pub const ServerTest = struct {
     given: []const u8 = "",
     names_test: bool = false,
     allow_repo_config: bool = false,
+    command: []const u8 = "",
+    args: []const []const u8 = &.{},
+
+    pub fn deinit(self: ServerTest, gpa: Allocator) void {
+        gpa.free(self.given);
+        gpa.free(self.command);
+        for (self.args) |arg| gpa.free(arg);
+        gpa.free(self.args);
+    }
 };
 
 pub fn serverTest(gpa: Allocator, mcp_config: []const u8) !ServerTest {
@@ -88,6 +97,12 @@ pub fn serverTest(gpa: Allocator, mcp_config: []const u8) !ServerTest {
         if (!std.mem.eql(u8, part, name)) continue;
         const args = (entry.value_ptr.object.get("args") orelse return .{}).array.items;
         var found: ServerTest = .{};
+        if (entry.value_ptr.object.get("command")) |command| {
+            if (command == .string) found.command = try gpa.dupe(u8, command.string);
+        }
+        var given_args: std.ArrayList([]const u8) = .empty;
+        for (args) |arg| if (arg == .string) try given_args.append(gpa, try gpa.dupe(u8, arg.string));
+        found.args = try given_args.toOwnedSlice(gpa);
         for (args, 0..) |arg, i| {
             if (arg != .string) continue;
             if (std.mem.eql(u8, arg.string, "--allow-repo-config")) found.allow_repo_config = true;
@@ -248,6 +263,7 @@ fn mcpAndTests(arena: Allocator, io: std.Io, probe: Probe, root: ?[]const u8, ch
             return .{ .name = "tests", .status = .fail, .detail = "skipped: .mcp.json must be fixed first" };
         };
         try checks.append(arena, .{ .name = ".mcp.json", .status = .ok, .detail = "one emetgate server" });
+        try checks.append(arena, serverStart(arena, io, probe, server));
     } else |err| switch (err) {
         error.FileNotFound => try checks.append(arena, .{ .name = ".mcp.json", .status = .ok, .detail = "none here; lockdown uses its own and finds the tests itself" }),
         else => {
@@ -264,6 +280,83 @@ fn mcpAndTests(arena: Allocator, io: std.Io, probe: Probe, root: ?[]const u8, ch
         return .{ .name = "tests", .status = .warn, .detail = std.fmt.allocPrint(arena, "\"{s}\": {s} is not on PATH", .{ command, program }) catch command, .fix = name_test_command };
     };
     return .{ .name = "tests", .status = .ok, .detail = std.fmt.allocPrint(arena, "\"{s}\"", .{command}) catch command };
+}
+
+pub const initialize_request = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\",\"capabilities\":{},\"clientInfo\":{\"name\":\"emetgate-doctor\",\"version\":\"0\"}}}\n";
+
+pub const Started = union(enum) {
+    missing,
+    failed: anyerror,
+    finished: struct { stdout: []const u8, stderr: []const u8 },
+};
+
+fn serverStart(arena: Allocator, io: std.Io, probe: Probe, server: ServerTest) Check {
+    const program = locateServer(arena, io, server.command) orelse return serverCheck(arena, server.command, .missing, probe.version, probe.self_exe);
+    const argv = arena.alloc([]const u8, server.args.len + 1) catch return serverCheck(arena, server.command, .{ .failed = error.OutOfMemory }, probe.version, probe.self_exe);
+    argv[0] = program;
+    @memcpy(argv[1..], server.args);
+    const timeout: std.Io.Timeout = .{ .duration = .{ .raw = .{ .nanoseconds = 20 * std.time.ns_per_s }, .clock = .awake } };
+    const started: Started = if (bounded_run.runFed(arena, io, .{ .argv = argv, .cwd = .{ .path = probe.cwd }, .stdout_limit = .limited(256 * 1024), .stderr_limit = .limited(64 * 1024), .timeout = timeout }, initialize_request)) |result|
+        .{ .finished = .{ .stdout = result.stdout, .stderr = result.stderr } }
+    else |err|
+        .{ .failed = err };
+    return serverCheck(arena, server.command, started, probe.version, probe.self_exe);
+}
+
+fn locateServer(arena: Allocator, io: std.Io, command: []const u8) ?[]const u8 {
+    if (command.len == 0) return null;
+    if (std.mem.indexOfAny(u8, command, "\\/") != null) {
+        std.Io.Dir.cwd().access(io, command, .{}) catch return null;
+        return command;
+    }
+    return exe_path.resolve(arena, command, null) catch null;
+}
+
+pub fn serverAnswer(arena: Allocator, stdout: []const u8) ?[]const u8 {
+    var lines = std.mem.splitScalar(u8, stdout, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \r\t");
+        if (line.len == 0) continue;
+        const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, line, .{}) catch continue;
+        if (parsed != .object) continue;
+        const result = parsed.object.get("result") orelse continue;
+        if (result != .object) continue;
+        const info = result.object.get("serverInfo") orelse continue;
+        if (info != .object) continue;
+        const name = info.object.get("name") orelse continue;
+        if (name != .string or !std.mem.eql(u8, name.string, "emetgate")) continue;
+        const version = info.object.get("version") orelse return "";
+        return if (version == .string) version.string else "";
+    }
+    return null;
+}
+
+fn firstLine(text: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, text, " \r\n\t");
+    const end = std.mem.indexOfAny(u8, trimmed, "\r\n") orelse trimmed.len;
+    return trimmed[0..@min(end, 160)];
+}
+
+pub fn serverCheck(arena: Allocator, command: []const u8, started: Started, version: []const u8, self_exe: []const u8) Check {
+    const fix = std.fmt.allocPrint(arena, "set the emetgate server's \"command\" in .mcp.json to {s}", .{self_exe}) catch self_exe;
+    switch (started) {
+        .missing => return .{ .name = "server", .status = .fail, .detail = std.fmt.allocPrint(arena, "{s} is not there, so lockdown would start claude with no tools", .{command}) catch command, .fix = fix },
+        .failed => |err| return .{ .name = "server", .status = .fail, .detail = std.fmt.allocPrint(arena, "{s} did not start ({t})", .{ command, err }) catch command, .fix = fix },
+        .finished => |done| {
+            const answered = serverAnswer(arena, done.stdout) orelse {
+                const said = firstLine(done.stderr);
+                const detail = if (said.len != 0)
+                    std.fmt.allocPrint(arena, "{s} did not answer initialize: {s}", .{ command, said }) catch command
+                else
+                    std.fmt.allocPrint(arena, "{s} did not answer initialize", .{command}) catch command;
+                return .{ .name = "server", .status = .fail, .detail = detail, .fix = "fix the arguments of the emetgate server in .mcp.json" };
+            };
+            if (!std.mem.eql(u8, answered, version)) {
+                return .{ .name = "server", .status = .warn, .detail = std.fmt.allocPrint(arena, "{s} is emetgate {s}, this is {s}", .{ command, answered, version }) catch command, .fix = fix };
+            }
+            return .{ .name = "server", .status = .ok, .detail = std.fmt.allocPrint(arena, "answers as emetgate {s}", .{answered}) catch answered };
+        },
+    }
 }
 
 pub fn firstWord(command: []const u8) []const u8 {
