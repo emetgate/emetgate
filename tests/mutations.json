@@ -19445,6 +19445,43 @@
       "kills": [
         "write kernel seal: disk.zig used without a name is refused, so no call can hide from the scan"
       ]
+    },
+    {
+      "id": "DR1-doctor-calls-a-missing-server-ok",
+      "file": "src/platform/doctor.zig",
+      "from": "        .missing => return .{ .name = \"server\", .status = .fail, .detail = std.fmt.allocPrint(arena, \"{s} is not there, so lockdown would start claude with no tools\", .{command}) catch command, .fix = fix },",
+      "to": "        .missing => return .{ .name = \"server\", .status = .ok, .detail = std.fmt.allocPrint(arena, \"{s} is not there, so lockdown would start claude with no tools\", .{command}) catch command, .fix = fix },",
+      "kills": [
+        "doctor: a server that is missing, does not start or does not answer blocks lockdown, an older one warns",
+        "doctor: an .mcp.json whose emetgate server is not on disk fails the server check and is not ready"
+      ]
+    },
+    {
+      "id": "DR2-doctor-takes-any-server-reply",
+      "file": "src/platform/doctor.zig",
+      "from": "        if (name != .string or !std.mem.eql(u8, name.string, \"emetgate\")) continue;",
+      "to": "        if (name != .string) continue;",
+      "kills": [
+        "doctor: the server's initialize reply is read for its name and version, and anything else is no answer"
+      ]
+    },
+    {
+      "id": "DR3-doctor-ignores-an-older-server",
+      "file": "src/platform/doctor.zig",
+      "from": "            if (!std.mem.eql(u8, answered, version)) {",
+      "to": "            if (false) {",
+      "kills": [
+        "doctor: a server that is missing, does not start or does not answer blocks lockdown, an older one warns"
+      ]
+    },
+    {
+      "id": "DR4-doctor-never-starts-the-server",
+      "file": "src/platform/doctor.zig",
+      "from": "        try checks.append(arena, serverStart(arena, io, probe, server));\n",
+      "to": "",
+      "kills": [
+        "doctor: an .mcp.json whose emetgate server is not on disk fails the server check and is not ready"
+      ]
     }
   ]
 }

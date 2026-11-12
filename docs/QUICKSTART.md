@@ -63,6 +63,7 @@ ok    login     signed in
 ok    git       C:\Program Files\Git\cmd\git.exe
 ok    repo      C:/Users/you/proje
 ok    .mcp.json one emetgate server
+ok    server    answers as emetgate 0.9.0
 ok    tests     "npm test"
 ok    write     C:/Users/you/proje
 ok    state     C:\Users\you\AppData\Local\emetgate\lockdown\...
@@ -73,6 +74,8 @@ ready: run `emetgate lockdown` here
 ```
 
 It exits 1 while anything would stop lockdown from working. `warn` lines do not block.
+
+The `server` line starts the emetgate server your `.mcp.json` names, with its arguments, and sends it the first message Claude Code would. A `command` that points at a moved or deleted emetgate, or arguments the server refuses, is a `FAIL`: lockdown takes Claude Code's own tools away, so without a working server the session would have no tools at all. The fix names the emetgate you ran `doctor` with. A server of another version than that emetgate is a `warn`.
 
 ## 5. Start a locked session
 
