@@ -1147,21 +1147,14 @@
       ]
     },
     {
-      "id": "G1-rules-gate-skipped-for-single-edit",
-      "file": "src/platform/runner.zig",
-      "from": ".holes = &.{applied.hole} }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },",
-      "to": ".holes = &.{applied.hole} }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| report.deinit(gpa),",
-      "kills": [
-        "rules: an enforced no_comment rule rejects a commented body before the tests run"
-      ]
-    },
-    {
       "id": "G2-rules-gate-skipped-for-batch",
       "file": "src/platform/batch.zig",
       "from": "judged, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| return .{ .rule_violation = report },",
       "to": "judged, options.allow_repo_memory)) {\n            .ok => {},\n            .violated => |report| report.deinit(gpa),",
       "kills": [
-        "rules: one violating edit rejects the whole batch and leaves disk untouched"
+        "rules: one violating edit rejects the whole batch and leaves disk untouched",
+        "rules: an enforced no_comment rule rejects a commented body before the tests run",
+        "new file: a body that breaks a forbid rule is rejected even when the tests pass"
       ]
     },
     {
@@ -2061,15 +2054,6 @@
       ]
     },
     {
-      "id": "NF1-create-not-added-to-index",
-      "file": "src/platform/runner.zig",
-      "from": "    try repo.addToIndex(gpa, io, root, rel);\n",
-      "to": "",
-      "kills": [
-        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
-      ]
-    },
-    {
       "id": "NF2-create-ignored-path-accepted",
       "file": "src/platform/create.zig",
       "from": "    if (try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;\n",
@@ -2131,33 +2115,6 @@
       "to": "    replacement.renameReplacing(gpa, path_abs) catch |err| switch (err) {\n        error.PathAlreadyExists => return error.FileExists,",
       "kills": [
         "create never overwrites an existing file and cleans up its temp"
-      ]
-    },
-    {
-      "id": "NF8-create-not-routed",
-      "file": "src/platform/runner.zig",
-      "from": "if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(",
-      "to": "if (false and options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(",
-      "kills": [
-        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
-      ]
-    },
-    {
-      "id": "NF9-create-rules-gate-skipped",
-      "file": "src/platform/runner.zig",
-      "from": "    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .after = created.snapshot }}, options.allow_repo_memory)) {\n        .ok => {},\n        .violated => |report| return .{ .rule_violation = report },\n        .failed => |failure| return .{ .rule_check_failed = failure },\n    }\n",
-      "to": "",
-      "kills": [
-        "new file: a body that breaks a forbid rule is rejected even when the tests pass"
-      ]
-    },
-    {
-      "id": "NF10-create-failed-tests-committed",
-      "file": "src/platform/runner.zig",
-      "from": "    if (!report.passed()) return .{ .rejected = report };\n    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};",
-      "to": "    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;\n    defer report.deinit(gpa);\n\n    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};",
-      "kills": [
-        "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
       ]
     },
     {
@@ -3496,15 +3453,6 @@
       ]
     },
     {
-      "id": "CMD3-command-cwd-is-the-real-repo",
-      "file": "src/platform/runner.zig",
-      "from": "if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
-      "to": "if (try runCommandRulesFor(gpa, io, root, root, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;",
-      "kills": [
-        "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
-      ]
-    },
-    {
       "id": "CMD4-command-scope-ignored",
       "file": "src/platform/rules.zig",
       "from": "        if (w.coversFile(path)) return path;\n    }\n    return null;",
@@ -3680,24 +3628,6 @@
       ]
     },
     {
-      "id": "RM8-runner-forces-trust",
-      "file": "src/platform/runner.zig",
-      "from": "targets, null, options.limits, options.allow_repo_memory)) |gated|",
-      "to": "targets, null, options.limits, true)) |gated|",
-      "kills": [
-        "redteam ledger: a cmd rule in a committed ledger never runs without --allow-repo-memory"
-      ]
-    },
-    {
-      "id": "RM9-runner-drops-the-flag",
-      "file": "src/platform/runner.zig",
-      "from": "targets, null, options.limits, options.allow_repo_memory)) |gated|",
-      "to": "targets, null, options.limits, false)) |gated|",
-      "kills": [
-        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run"
-      ]
-    },
-    {
       "id": "RM10-command-gate-forces-trust",
       "file": "src/platform/runner.zig",
       "from": ".allow_repo_memory = allow_repo_memory, .message = message });",
@@ -3721,7 +3651,8 @@
       "from": "targets[0..built], null, options.limits, options.allow_repo_memory)) |gated|",
       "to": "targets[0..built], null, options.limits, false)) |gated|",
       "kills": [
-        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a batch"
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run in a batch",
+        "redteam ledger: --allow-repo-memory lets a committed ledger's cmd rule run"
       ]
     },
     {
@@ -9679,26 +9610,6 @@
       "note": "no test can take the identity away: git falls back to the user's global configuration and the login name, which a test repository does not control. Without the guard commit-tree fails later with GitFailed, so the write is still refused; the guard only gives the refusal its own name."
     },
     {
-      "id": "RC1-edit-written-but-not-published",
-      "file": "src/platform/runner.zig",
-      "from": "    try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n    return .{ .committed = applied.hash };",
-      "to": "    for (&pendings) |*p| p.discard(null);\n    if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n    return .{ .committed = applied.hash };",
-      "kills": [
-        "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it"
-      ],
-      "note": "the file would be written and the branch would never get the commit"
-    },
-    {
-      "id": "RC2-created-file-written-but-not-published",
-      "file": "src/platform/runner.zig",
-      "from": "        try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n        return .{ .committed = created.hash };",
-      "to": "        for (&pendings) |*p| p.discard(null);\n        if (false) try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);\n        return .{ .committed = created.hash };",
-      "kills": [
-        "commit on write: a new file is created and committed in the same call"
-      ],
-      "note": "a created file would stay untracked while the reply names a commit"
-    },
-    {
       "id": "MR8-message-violations-dropped",
       "file": "src/platform/rules.zig",
       "from": "    if (list.items.len != 0) return .{ .violated",
@@ -9728,16 +9639,6 @@
         "commit write_doc: an accepted write is one commit with the given message and the written bytes"
       ],
       "note": "with commits on write_doc would write to the tree and commit nothing"
-    },
-    {
-      "id": "MC1-try-message-kept-from-the-command-gate",
-      "file": "src/platform/runner.zig",
-      "from": "if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits",
-      "to": "if (try runMessageRules(gpa, io, root, gate_abs, null, options.limits",
-      "kills": [
-        "commit on write: a message command judges the message of a try, and a refusal writes nothing"
-      ],
-      "note": "a try commit would never be shown to the user's message checker"
     },
     {
       "id": "MC2-message-command-run-as-a-text-check",
@@ -9834,7 +9735,9 @@
         "commit batch: a rename across three files is one commit of the three files",
         "commit batch: a move into a new file is one commit of the source, the new file and the user",
         "commit batch: a file move is one commit that removes the old path, adds the new one and rewrites the importers",
-        "commit write_doc: an accepted write is one commit with the given message and the written bytes"
+        "commit write_doc: an accepted write is one commit with the given message and the written bytes",
+        "commit on write: an accepted try is one commit with the given message and bytes, and its receipt rides on it",
+        "commit on write: a new file is created and committed in the same call"
       ],
       "note": "every file of a batch would be written and the branch would never get the commit"
     },
@@ -10237,9 +10140,9 @@
     },
     {
       "id": "PV18-pending-commit-not-finished-before-the-next",
-      "file": "src/platform/commit_plan.zig",
-      "from": "        const found = try recoverFound(gpa, io, root);\n",
-      "to": "        const found: commit_intent.Report = .{};\n",
+      "file": "src/platform/batch.zig",
+      "from": "    if (commit != null) commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));\n",
+      "to": "",
       "kills": [
         "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after"
       ],
@@ -10309,7 +10212,8 @@
         "message command: the same file redirected to standard input serves a checker that reads the message there",
         "message command: a command that cannot be found is a failed check, not a verdict, and nothing is written",
         "message command: from a committed ledger it never runs without --allow-repo-memory, and runs with it",
-        "message command: a tracked file where the message file goes is refused by name and stays as it was"
+        "message command: a tracked file where the message file goes is refused by name and stays as it was",
+        "commit on write: a message command judges the message of a try, and a refusal writes nothing"
       ],
       "note": "a batch commit would skip the message commands"
     },
@@ -10448,21 +10352,13 @@
       ]
     },
     {
-      "id": "MB1-symbol-edit-in-place-before-its-message-command",
-      "file": "src/platform/runner.zig",
-      "from": "    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n    try workspace.writeFile(rel, patched);\n",
-      "to": "    try workspace.writeFile(rel, patched);\n    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
-      "kills": [
-        "message base: a symbol edit cannot add to the file its message command reads what that command looks for"
-      ]
-    },
-    {
       "id": "MB3-batch-in-place-before-its-message-command",
       "file": "src/platform/batch.zig",
       "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "kills": [
-        "message base: a batch cannot add to the file its message command reads what that command looks for"
+        "message base: a batch cannot add to the file its message command reads what that command looks for",
+        "message base: a symbol edit cannot add to the file its message command reads what that command looks for"
       ]
     },
     {
@@ -11684,7 +11580,8 @@
       "to": "    for (prepared) |p| {\n        if (false) targets[built] = p.rel;\n        if (false) built += 1;\n    }",
       "kills": [
         "command rules: one with no scope runs on a rename and on a symbol move",
-        "command rules: one scoped to another symbol of the file runs on a rename"
+        "command rules: one scoped to another symbol of the file runs on a rename",
+        "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
       ]
     },
     {
@@ -11694,15 +11591,6 @@
       "to": "        const w = scope orelse continue;\n        if (w.coversFile(path)) return path;",
       "kills": [
         "command rules: one with no scope runs on a file move",
-        "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
-      ]
-    },
-    {
-      "id": "EW18-command-rule-gets-no-target-from-a-symbol-edit",
-      "file": "src/platform/runner.zig",
-      "from": "options, &session, command, &.{rel})) {",
-      "to": "options, &session, command, &.{})) {",
-      "kills": [
         "cmd rule: a non-zero exit is a violation carrying the output of the command, and nothing is written"
       ]
     },
@@ -19480,8 +19368,8 @@
     {
       "id": "KS1-kernel-scope-ignores-text-after-the-body",
       "file": "src/platform/gate.zig",
-      "from": "    return std.mem.eql(u8, base.source[old_end..], after.source[new_end..]);",
-      "to": "    _ = .{ old_end, new_end };\n    return true;",
+      "from": "    if (!std.mem.eql(u8, base.source[old_end..], after.source[new_end..])) return escaped;\n",
+      "to": "",
       "kills": [
         "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command"
       ]
@@ -19489,8 +19377,8 @@
     {
       "id": "KS2-kernel-scope-ignores-boundedness",
       "file": "src/platform/gate.zig",
-      "from": "    if (frame.confidence != .bounded) return false;\n",
-      "to": "",
+      "from": "    const found: Scope = .{ .confidence = frame.confidence,",
+      "to": "    const found: Scope = .{ .confidence = .bounded,",
       "kills": [
         "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command"
       ]
@@ -19502,6 +19390,33 @@
       "to": "    if (doc_count != 0 or prepared.len == 0) return null;\n    const p = prepared[0];",
       "kills": [
         "gate: a batch over two files runs the full command even when each edit is BOUNDED"
+      ]
+    },
+    {
+      "id": "KM1-kernel-create-not-indexed",
+      "file": "src/platform/batch.zig",
+      "from": "    if (options.commit == null) batch.root = root;\n",
+      "to": "",
+      "kills": [
+        "new file: absent on a missing file creates it, the shadow sees it, and it is committed, parsed, listed and indexed"
+      ]
+    },
+    {
+      "id": "KM2-kernel-failed-tests-written",
+      "file": "src/platform/batch.zig",
+      "from": "    if (!report.passed()) return .{ .rejected = report };\n",
+      "to": "    if (false) return .{ .rejected = report };\n",
+      "kills": [
+        "new file: a creation whose tests fail leaves no file on disk and nothing in the index"
+      ]
+    },
+    {
+      "id": "KM3-kernel-command-rule-runs-in-the-real-tree",
+      "file": "src/platform/batch.zig",
+      "from": "runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, session), targets[0..built]",
+      "to": "runner.runCommandRulesFor(gpa, io, root, root, targets[0..built]",
+      "kills": [
+        "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
     }
   ]

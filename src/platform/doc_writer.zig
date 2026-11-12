@@ -59,7 +59,7 @@ pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace)
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try batch.enter(gpa, io, root, options.commit);
     defer lock.release();
 
     const edit = [_]batch.DocEdit{.{ .file_abs = options.file_abs, .selector = options.selector, .expected_hash = options.expected_hash, .new_text = options.new_text }};

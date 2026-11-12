@@ -163,7 +163,6 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
         .rejected => try w.print("✗ rejected · {s}", .{event.reason orelse "rejected"}),
         .failed => try w.print("✗ {s}", .{event.resultName()}),
     }
-    if (event.trace.confidence) |c| try w.writeAll(if (c == .bounded) " · BOUNDED" else " · UNBOUNDED");
     if (event.trace.gate) |g| try w.print(" · gate {s}", .{@tagName(g)});
     if (event.outcome == .ok or event.outcome == .committed) {
         if (event.chars_emetgate) |sent| {

@@ -82,6 +82,13 @@ pub const Planned = struct {
     }
 };
 
+pub fn enter(gpa: Allocator, io: std.Io, root: []const u8, commit: ?*commit_plan.Request) !shadow.Lock {
+    const lock = try shadow.Lock.acquire(io, root);
+    errdefer lock.release();
+    if (commit != null) commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));
+    return lock;
+}
+
 pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !Planned {
     if (options.test_command.len == 0) return error.NoTestCommand;
     if (options.edits.len == 0 and options.doc_edits.len == 0) return error.EmptyBatch;
@@ -91,7 +98,7 @@ pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOp
     const dir0 = @import("file_edit.zig").existingAncestor(io, first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
     errdefer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try enter(gpa, io, root, options.commit);
     errdefer lock.release();
 
     var prepared: std.ArrayList(Prepared) = .empty;
@@ -166,13 +173,20 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
-    const scoped = try scopedCommand(gpa, prepared, doc_prepared.items.len, options);
+    const scope = scopeOf(gpa, prepared, doc_prepared.items.len);
+    const scoped = try scopedCommand(gpa, prepared, scope, options);
     if (options.trace) |t| {
         var new_total: usize = 0;
         for (prepared) |p| new_total += p.source().len;
         for (doc_prepared.items) |p| new_total += p.source().len;
         t.* = .{ .gate = if (scoped != null) .scoped else .full, .new_len = new_total, .scoped_command = scoped };
-        if (scoped != null) t.confidence = .bounded;
+        if (scope) |found| {
+            t.confidence = found.confidence;
+            t.provenance = found.provenance;
+            t.class = found.class;
+            t.base_len = prepared[0].base.?.source.len;
+            t.old_body_len = prepared[0].holes.?[0].old.end - prepared[0].holes.?[0].old.start;
+        }
     }
     defer if (scoped) |command| if (options.trace == null) gpa.free(command);
     const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, options, &session, scoped)) {
@@ -232,8 +246,7 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     return .{ .committed = committed };
 }
 
-fn scopedCommand(gpa: Allocator, prepared: []const Prepared, doc_count: usize, options: BatchOptions) !?[]u8 {
-    const template = options.test_scoped_cmd orelse return null;
+fn scopeOf(gpa: Allocator, prepared: []const Prepared, doc_count: usize) ?gate_mod.Scope {
     if (doc_count != 0 or prepared.len != 1) return null;
     const p = prepared[0];
     if (p.action != .write or p.source_rel != null) return null;
@@ -241,9 +254,15 @@ fn scopedCommand(gpa: Allocator, prepared: []const Prepared, doc_count: usize, o
     const after = p.snapshot orelse return null;
     const holes = p.holes orelse return null;
     if (holes.len != 1) return null;
-    if (!gate_mod.safeInCommand(p.rel)) return null;
-    if (!gate_mod.boundedChange(gpa, base, after, holes[0])) return null;
-    return try gate_mod.substituteFile(gpa, template, p.rel);
+    return gate_mod.scopeOf(gpa, base, after, holes[0]);
+}
+
+fn scopedCommand(gpa: Allocator, prepared: []const Prepared, scope: ?gate_mod.Scope, options: BatchOptions) !?[]u8 {
+    const template = options.test_scoped_cmd orelse return null;
+    const found = scope orelse return null;
+    if (found.confidence != .bounded) return null;
+    if (!gate_mod.safeInCommand(prepared[0].rel)) return null;
+    return try gate_mod.substituteFile(gpa, template, prepared[0].rel);
 }
 
 fn changeOf(p: Prepared) rules.Change {

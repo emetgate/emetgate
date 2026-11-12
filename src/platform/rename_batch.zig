@@ -574,7 +574,7 @@ pub fn tryRename(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
     const dir = std.fs.path.dirname(options.request.file_abs) orelse return error.InvalidPath;
     const root = try repo.gitToplevel(gpa, io, dir);
     defer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try batch.enter(gpa, io, root, options.commit);
     defer lock.release();
     const planned = try plan(gpa, io, runtime, root, options.request, options.language_service);
     errdefer planned.deinit(gpa);

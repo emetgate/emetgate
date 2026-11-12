@@ -6,21 +6,31 @@ const run_command = @import("run_command.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn boundedChange(gpa: Allocator, base: *Snapshot, after: *Snapshot, hole: symbol.Hole) bool {
-    const before_table = base.symbols() catch return false;
-    const owner = innermostBody(before_table.symbols, hole.old) orelse return false;
-    if (owner.ambiguous) return false;
+pub const Scope = struct {
+    confidence: boundedness.Confidence,
+    provenance: ?boundedness.Provenance = null,
+    class: boundedness.MutationClass,
+};
+
+const escaped: Scope = .{ .confidence = .unbounded, .class = .signature_change };
+
+pub fn scopeOf(gpa: Allocator, base: *Snapshot, after: *Snapshot, hole: symbol.Hole) Scope {
+    const before_table = base.symbols() catch return escaped;
+    const owner = innermostBody(before_table.symbols, hole.old) orelse return escaped;
+    if (owner.ambiguous) return escaped;
     const frame = boundedness.analyze(gpa, base, owner.ref, hole.old);
     defer frame.deinit();
-    if (frame.confidence != .bounded) return false;
-    const after_table = after.symbols() catch return false;
-    const kept = after_table.resolve(owner.ref) catch return false;
+    const found: Scope = .{ .confidence = frame.confidence, .provenance = frame.provenance, .class = frame.mutation_class };
+    if (frame.confidence != .bounded) return found;
+    const after_table = after.symbols() catch return escaped;
+    const kept = after_table.resolve(owner.ref) catch return escaped;
     const old_start = owner.body.startByte();
     const old_end = owner.body.endByte();
     const new_start = kept.body.startByte();
     const new_end = kept.body.endByte();
-    if (!std.mem.eql(u8, base.source[0..old_start], after.source[0..new_start])) return false;
-    return std.mem.eql(u8, base.source[old_end..], after.source[new_end..]);
+    if (!std.mem.eql(u8, base.source[0..old_start], after.source[0..new_start])) return escaped;
+    if (!std.mem.eql(u8, base.source[old_end..], after.source[new_end..])) return escaped;
+    return found;
 }
 
 fn innermostBody(symbols: []const symbol.Symbol, span: symbol.Span) ?*const symbol.Symbol {

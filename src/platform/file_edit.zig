@@ -193,7 +193,7 @@ pub fn apply(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ma
     const anchor = existingAncestor(io, options.file_abs) orelse return error.InvalidPath;
     const root = try repo.gitToplevel(gpa, io, anchor);
     errdefer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try batch.enter(gpa, io, root, options.commit);
     defer lock.release();
     const rel = try repo.relativeUnder(gpa, root, options.file_abs);
     var rel_owned = true;
