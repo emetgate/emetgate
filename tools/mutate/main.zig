@@ -936,6 +936,7 @@ fn runFiltered(arena: Allocator, io: std.Io, filters: []const []const u8, optimi
     if (optimize) |mode| try argv.append(arena, try std.fmt.allocPrint(arena, "-Doptimize={s}", .{mode}));
     if (options.jobs) |n| try argv.append(arena, try std.fmt.allocPrint(arena, "-j{d}", .{n}));
     if (!options.full) {
+        try argv.append(arena, "-Dtest-whole=true");
         for (filters) |f| try argv.append(arena, try std.fmt.allocPrint(arena, "-Dtest-filter={s}", .{f}));
     }
     return job.run(arena, io, argv.items, tree_dir, max_output, options.timeout_s, env);

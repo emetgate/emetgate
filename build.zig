@@ -87,6 +87,7 @@ pub fn build(b: *std.Build) void {
     const run_slow = b.option(bool, "slow", "Also run the tests marked slow") orelse false;
     const test_part = b.option([]const u8, "test-part", "Run only part I of N of the tests, as I/N, split by the times in tests/test_times.tsv; the CLI e2e cases run in part 1") orelse "1/1";
     const test_manifest = b.option([]const u8, "test-manifest", "Write every selected test and every test this part ran to this file") orelse null;
+    const test_whole = b.option(bool, "test-whole", "Run the tests -Dtest-filter names from the whole test binary, test-all, instead of compiling only the tests whose name matches") orelse false;
     if (test_jobs == 0) @panic("-Dtest-jobs must be at least 1");
     const first_part = partIsFirst(test_part) orelse @panic("-Dtest-part must be I/N with 1 <= I <= N");
     const selection: TestSelection = .{ .filters = test_filters, .slow = run_slow };
@@ -101,7 +102,7 @@ pub fn build(b: *std.Build) void {
     test_bin_step.dependOn(&b.addInstallArtifact(probe, .{}).step);
 
     const test_step = b.step("test", "Run every test from one binary in parallel shards, then the CLI end-to-end tests");
-    const test_selected = if (test_filters.len == 0) test_all else b.addTest(.{
+    const test_selected = if (test_filters.len == 0 or test_whole) test_all else b.addTest(.{
         .name = "test-selected",
         .root_module = testModule(b, common),
         .test_runner = .{ .path = b.path("tools/test_runner.zig"), .mode = .simple },

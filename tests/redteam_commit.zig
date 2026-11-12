@@ -1103,6 +1103,23 @@ test "redteam commit: a HEAD that points at a tag is refused and the tag does no
     try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));
 }
 
+test "redteam commit: a HEAD that points at a tag only git itself can resolve is refused and the tag does not move" {
+    try skipOffWindows();
+    var case: Case = undefined;
+    try case.initDefault();
+    defer case.deinit();
+    const before = try case.git(&.{ "rev-parse", "HEAD" });
+    _ = try case.git(&.{ "tag", "v@1" });
+    _ = try case.git(&.{ "symbolic-ref", "HEAD", "refs/tags/v@1" });
+    try testing.expect(try @import("emetgate").git_native.facts(case.arena(), testing.io, case.repo.root_abs) == null);
+
+    const reply = try case.swap("src/util.ts", new_body, "fix: swap", committing);
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expectEqualStrings(before, try case.git(&.{ "rev-parse", "refs/tags/v@1" }));
+    try testing.expect(reply.is_error);
+    try testing.expectEqualStrings(util_src, try case.disk("src/util.ts"));
+}
+
 test "redteam commit: a hook directory and a config file that arrive with the clone do not run" {
     try skipOffWindows();
     var case: Case = undefined;

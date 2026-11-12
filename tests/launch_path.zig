@@ -41,9 +41,7 @@ const Planted = struct {
         try git_fixture.initRepo(root);
         try gitIn(root, &.{ "add", "a.ts" });
         try gitIn(root, &.{ "commit", "-q", "-m", "init" });
-        for ([_][]const u8{ "git.bat", "git.cmd", "rg.bat", "rg.cmd", "node.bat", "claude.cmd" }) |name| {
-            try tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = planted_script });
-        }
+        try plantScripts(tmp.dir);
         return .{ .tmp = tmp, .root = root };
     }
 
@@ -53,20 +51,38 @@ const Planted = struct {
     }
 
     fn plantExe(self: *Planted, name: []const u8) !void {
-        const where = try exe_path.system(gpa, "where.exe");
-        defer gpa.free(where);
-        const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, where, gpa, .limited(4 * 1024 * 1024));
-        defer gpa.free(bytes);
-        try self.tmp.dir.writeFile(testing.io, .{ .sub_path = name, .data = bytes });
+        try plantExeIn(self.tmp.dir, name);
     }
 
     fn expectNoMarker(self: *Planted) !void {
-        try testing.expectError(error.FileNotFound, self.tmp.dir.access(testing.io, marker, .{}));
+        try expectNoMarkerIn(self.tmp.dir);
     }
 };
 
+fn plantScripts(dir: std.Io.Dir) !void {
+    for ([_][]const u8{ "git.bat", "git.cmd", "rg.bat", "rg.cmd", "node.bat", "claude.cmd" }) |name| {
+        try dir.writeFile(testing.io, .{ .sub_path = name, .data = planted_script });
+    }
+}
+
+fn plantExeIn(dir: std.Io.Dir, name: []const u8) !void {
+    const where = try exe_path.system(gpa, "where.exe");
+    defer gpa.free(where);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, where, gpa, .limited(4 * 1024 * 1024));
+    defer gpa.free(bytes);
+    try dir.writeFile(testing.io, .{ .sub_path = name, .data = bytes });
+}
+
+fn expectNoMarkerIn(dir: std.Io.Dir) !void {
+    try testing.expectError(error.FileNotFound, dir.access(testing.io, marker, .{}));
+}
+
 fn exercise(planted: *Planted, runtime: *Runtime) !void {
-    const tracked = try shadow.trackedFiles(gpa, testing.io, planted.root);
+    try exerciseAt(planted.root, runtime);
+}
+
+fn exerciseAt(root: []const u8, runtime: *Runtime) !void {
+    const tracked = try shadow.trackedFiles(gpa, testing.io, root);
     defer {
         shadow.freeFileList(gpa, tracked);
         gpa.free(tracked);
@@ -74,28 +90,28 @@ fn exercise(planted: *Planted, runtime: *Runtime) !void {
     try testing.expectEqual(@as(usize, 1), tracked.len);
     try testing.expectEqualStrings("a.ts", tracked[0]);
 
-    const program_files = try tsserver.programFiles(gpa, testing.io, planted.root);
+    const program_files = try tsserver.programFiles(gpa, testing.io, root);
     defer {
         for (program_files) |f| gpa.free(f);
         gpa.free(program_files);
     }
     try testing.expectEqual(@as(usize, 1), program_files.len);
 
-    try testing.expect(!try repo_mod.isIgnored(gpa, testing.io, planted.root, "a.ts"));
-    const mentioning = try repo_mod.filesMentioning(gpa, testing.io, planted.root, "plantedNeedle");
+    try testing.expect(!try repo_mod.isIgnored(gpa, testing.io, root, "a.ts"));
+    const mentioning = try repo_mod.filesMentioning(gpa, testing.io, root, "plantedNeedle");
     defer gpa.free(mentioning);
     try testing.expect(std.mem.indexOf(u8, mentioning, "a.ts") != null);
-    const top = try repo_mod.gitToplevel(gpa, testing.io, planted.root);
+    const top = try repo_mod.gitToplevel(gpa, testing.io, root);
     defer gpa.free(top);
-    try testing.expect(std.ascii.eqlIgnoreCase(top, planted.root));
+    try testing.expect(std.ascii.eqlIgnoreCase(top, root));
 
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
-    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_git", .arguments = .{ .sub = "log", .n = 1, .path = planted.root } } });
+    try js.write(.{ .jsonrpc = "2.0", .id = 1, .method = "tools/call", .params = .{ .name = "emetgate_git", .arguments = .{ .sub = "log", .n = 1, .path = root } } });
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = planted.root });
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root });
     errdefer std.debug.print("{s}\n", .{out.written()});
     try testing.expect(std.mem.indexOf(u8, out.written(), "init") != null);
 }
@@ -113,4 +129,26 @@ test "process launch: a repository that plants git, rg, node and claude scripts 
     try planted.plantExe("git.exe");
     try exercise(&planted, runtime);
     try planted.expectNoMarker();
+}
+
+test "process launch: a linked worktree, which only git itself can list, never runs a git planted at its root" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var planted = try Planted.init();
+    defer planted.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    try gitIn(planted.root, &.{ "worktree", "add", "-q", "linked" });
+    var linked = try planted.tmp.dir.openDir(testing.io, "linked", .{});
+    defer linked.close(testing.io);
+    const root = try planted.tmp.dir.realPathFileAlloc(testing.io, "linked", gpa);
+    defer gpa.free(root);
+    try plantScripts(linked);
+
+    try exerciseAt(root, runtime);
+    try expectNoMarkerIn(linked);
+
+    try plantExeIn(linked, "git.exe");
+    try exerciseAt(root, runtime);
+    try expectNoMarkerIn(linked);
 }

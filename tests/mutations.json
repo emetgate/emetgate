@@ -7835,7 +7835,7 @@
       "from": "    try argv.append(gpa, git);",
       "to": "    try argv.append(gpa, \"git\");",
       "kills": [
-        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+        "process launch: a linked worktree, which only git itself can list, never runs a git planted at its root"
       ]
     },
     {
@@ -7862,7 +7862,7 @@
       "from": "        .argv = &.{ git, \"ls-files\", \"-z\" },",
       "to": "        .argv = &.{ \"git\", \"ls-files\", \"-z\" },",
       "kills": [
-        "process launch: a repository that plants git, rg, node and claude scripts or a git.exe at its root never runs them"
+        "process launch: a linked worktree, which only git itself can list, never runs a git planted at its root"
       ]
     },
     {
@@ -10147,6 +10147,16 @@
       "file": "src/platform/git_commit.zig",
       "from": "    if (!std.mem.startsWith(u8, branch, branch_prefix)) return error.DetachedHead;\n",
       "to": "    if (!std.mem.startsWith(u8, branch, branch_prefix) and std.mem.eql(u8, branch, \"HEAD\")) return error.DetachedHead;\n",
+      "kills": [
+        "redteam commit: a HEAD that points at a tag only git itself can resolve is refused and the tag does not move"
+      ],
+      "note": "a tag HEAD points at would be moved when git answers for a repository emetgate does not read itself"
+    },
+    {
+      "id": "PV5b-head-on-a-tag-accepted-from-the-git-directory",
+      "file": "src/platform/git_commit.zig",
+      "from": "            if (!std.mem.startsWith(u8, known.branch, branch_prefix)) return error.DetachedHead;\n",
+      "to": "",
       "kills": [
         "redteam commit: a HEAD that points at a tag is refused and the tag does not move"
       ],
@@ -19131,8 +19141,7 @@
       "from": "    if (low) if (low_run.note(ran.report)) |text| {\n",
       "to": "    if (!low) if (low_run.note(ran.report)) |text| {\n",
       "kills": [
-        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity",
-        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
       ],
       "note": "a refused write would look like an ordinary failure"
     },
@@ -19142,9 +19151,9 @@
       "from": "    const shell = if (low) try open_shell.cmd(gpa) else try open_shell.find(gpa, root_abs);\n",
       "to": "    const shell = try open_shell.find(gpa, root_abs);\n",
       "kills": [
-        "lockdown run: powershell and git start at low integrity through cmd"
+        "lockdown run: a command cannot write outside the repository but writes inside it, and the reply says the refusal may come from low integrity"
       ],
-      "note": "Git Bash cannot start at low integrity, so every lockdown run would crash"
+      "note": "a lockdown run would start in Git Bash, which cannot start at low integrity on most machines"
     },
     {
       "id": "LR9-msys-crash-unexplained",
@@ -19152,7 +19161,7 @@
       "from": "    if (mentions(report, &msys_markers)) return msys_note;\n",
       "to": "",
       "kills": [
-        "lockdown run: an MSYS program that cannot start at low integrity is named in the reply"
+        "low run: a fatal start of the MSYS runtime is named as an MSYS program, other fatal errors are not"
       ],
       "note": "an MSYS crash at low integrity would be reported as a refused write"
     },
