@@ -19418,6 +19418,33 @@
       "kills": [
         "cmd rule: the command runs in the shadow copy, so its writes never reach the real tree"
       ]
+    },
+    {
+      "id": "SEAL1-scan-ignores-who-calls",
+      "file": "tests/write_kernel_seal.zig",
+      "from": "        if (std.mem.eql(u8, text[start..end], receiver)) return true;\n",
+      "to": "        _ = .{ start, end, receiver };\n        return true;\n",
+      "kills": [
+        "write kernel seal: a call is found through any name the file gives disk.zig"
+      ]
+    },
+    {
+      "id": "SEAL2-scan-misses-a-renamed-import",
+      "file": "tests/write_kernel_seal.zig",
+      "from": "        try names.append(arena, line[name_start..name_end]);\n",
+      "to": "        if (std.mem.eql(u8, line[name_start..name_end], \"disk\")) try names.append(arena, line[name_start..name_end]);\n",
+      "kills": [
+        "write kernel seal: a call is found through any name the file gives disk.zig"
+      ]
+    },
+    {
+      "id": "SEAL3-scan-skips-an-unnamed-import",
+      "file": "tests/write_kernel_seal.zig",
+      "from": "        const decl = std.mem.indexOf(u8, line[0..at], \"const \") orelse return error.DiskImportedWithoutAName;\n",
+      "to": "        const decl = std.mem.indexOf(u8, line[0..at], \"const \") orelse continue;\n",
+      "kills": [
+        "write kernel seal: disk.zig used without a name is refused, so no call can hide from the scan"
+      ]
     }
   ]
 }
