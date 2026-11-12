@@ -10462,7 +10462,15 @@
       "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "to": "    for (prepared) |p| {\n        if (p.action != .delete_file) try workspace.writeFile(p.rel, p.source());\n    }\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
       "kills": [
-        "message base: a batch cannot add to the file its message command reads what that command looks for",
+        "message base: a batch cannot add to the file its message command reads what that command looks for"
+      ]
+    },
+    {
+      "id": "MB4-batch-document-in-place-before-its-message-command",
+      "file": "src/platform/batch.zig",
+      "from": "    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "to": "    for (doc_prepared) |p| try workspace.writeFile(p.rel, p.source());\n    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;\n",
+      "kills": [
         "redteam2 commit: a call cannot loosen the file its message command reads in the same commit that message is judged for"
       ]
     },
