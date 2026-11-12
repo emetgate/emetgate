@@ -14,6 +14,7 @@ const batch_plan = @import("batch_plan.zig");
 const commit_plan = @import("commit_plan.zig");
 const docnode = @import("../engine/docnode.zig");
 const tsserver = @import("tsserver.zig");
+const gate_mod = @import("gate.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -36,6 +37,7 @@ pub const BatchOptions = struct {
     edits: []const Edit = &.{},
     doc_edits: []const DocEdit = &.{},
     test_command: []const u8,
+    test_scoped_cmd: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     linked: []const []const u8 = &shadow.dependency_dirs,
     limits: sandbox.Limits = .{},
@@ -80,6 +82,13 @@ pub const Planned = struct {
     }
 };
 
+pub fn enter(gpa: Allocator, io: std.Io, root: []const u8, commit: ?*commit_plan.Request) !shadow.Lock {
+    const lock = try shadow.Lock.acquire(io, root);
+    errdefer lock.release();
+    if (commit != null) commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));
+    return lock;
+}
+
 pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOptions) !Planned {
     if (options.test_command.len == 0) return error.NoTestCommand;
     if (options.edits.len == 0 and options.doc_edits.len == 0) return error.EmptyBatch;
@@ -89,7 +98,7 @@ pub fn planBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, options: BatchOp
     const dir0 = @import("file_edit.zig").existingAncestor(io, first_file) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir0);
     errdefer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try enter(gpa, io, root, options.commit);
     errdefer lock.release();
 
     var prepared: std.ArrayList(Prepared) = .empty;
@@ -164,13 +173,23 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     const location = try shadow_root.locate(gpa, root, options.shadow_root);
     defer location.deinit(gpa);
 
+    const scope = scopeOf(gpa, prepared, doc_prepared.items.len);
+    const scoped = try scopedCommand(gpa, prepared, scope, options);
     if (options.trace) |t| {
         var new_total: usize = 0;
         for (prepared) |p| new_total += p.source().len;
         for (doc_prepared.items) |p| new_total += p.source().len;
-        t.* = .{ .gate = .full, .new_len = new_total };
+        t.* = .{ .gate = if (scoped != null) .scoped else .full, .new_len = new_total, .scoped_command = scoped };
+        if (scope) |found| {
+            t.confidence = found.confidence;
+            t.provenance = found.provenance;
+            t.class = found.class;
+            t.base_len = prepared[0].base.?.source.len;
+            t.old_body_len = prepared[0].holes.?[0].old.end - prepared[0].holes.?[0].old.start;
+        }
     }
-    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, options, &session)) {
+    defer if (scoped) |command| if (options.trace == null) gpa.free(command);
+    const report = switch (try runBatchInShadow(gpa, io, root, location, prepared, doc_prepared.items, options, &session, scoped)) {
         .typecheck => |failed| return .{ .typecheck_failed = failed },
         .rule_violation => |violated| return .{ .rule_violation = violated },
         .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
@@ -227,6 +246,25 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     return .{ .committed = committed };
 }
 
+fn scopeOf(gpa: Allocator, prepared: []const Prepared, doc_count: usize) ?gate_mod.Scope {
+    if (doc_count != 0 or prepared.len != 1) return null;
+    const p = prepared[0];
+    if (p.action != .write or p.source_rel != null) return null;
+    const base = p.base orelse return null;
+    const after = p.snapshot orelse return null;
+    const holes = p.holes orelse return null;
+    if (holes.len != 1) return null;
+    return gate_mod.scopeOf(gpa, base, after, holes[0]);
+}
+
+fn scopedCommand(gpa: Allocator, prepared: []const Prepared, scope: ?gate_mod.Scope, options: BatchOptions) !?[]u8 {
+    const template = options.test_scoped_cmd orelse return null;
+    const found = scope orelse return null;
+    if (found.confidence != .bounded) return null;
+    if (!gate_mod.safeInCommand(prepared[0].rel)) return null;
+    return try gate_mod.substituteFile(gpa, template, prepared[0].rel);
+}
+
 fn changeOf(p: Prepared) rules.Change {
     return .{ .rel = p.rel, .from = p.source_rel, .base = p.base, .after = p.snapshot, .removed = p.action == .delete_file, .holes = p.holes };
 }
@@ -281,7 +319,7 @@ fn classifyAll(gpa: Allocator, io: std.Io, root: []const u8, prepared: []const P
     return committed;
 }
 
-fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, options: BatchOptions, session: *commit_plan.Session) !runner.ShadowRun {
+fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, prepared: []const Prepared, doc_prepared: []const Prepared, options: BatchOptions, session: *commit_plan.Session, scoped: ?[]const u8) !runner.ShadowRun {
     var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
     defer workspace.finish();
     if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, session), session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
@@ -316,6 +354,6 @@ fn runBatchInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shad
         try changes.append(gpa, .{ .rel = p.rel, .content = if (p.action == .delete_file) null else p.source() });
     }
     for (doc_prepared) |p| try changes.append(gpa, .{ .rel = p.rel, .content = p.source() });
-    const tests = try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));
+    const tests = scoped orelse try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));
     return baseline.run(gpa, io, &workspace, changes.items, .{ .root = root, .gate_dir = runner.gateDir(location, session), .typecheck_command = options.typecheck_command, .test_command = tests, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null, .commits = session.committing() });
 }

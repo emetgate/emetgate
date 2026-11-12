@@ -1,21 +1,17 @@
 const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const docnode = @import("../engine/docnode.zig");
-const ts = @import("../engine/tree_sitter.zig");
 const shadow = @import("shadow.zig");
-const shadow_root = @import("shadow_root.zig");
 const sandbox = @import("sandbox.zig");
 const disk = @import("disk.zig");
 const repo = @import("repo.zig");
 const runner = @import("runner.zig");
-const baseline = @import("baseline.zig");
+const batch = @import("batch.zig");
 const rules = @import("rules.zig");
 const commit_plan = @import("commit_plan.zig");
-const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
 const gitToplevel = repo.gitToplevel;
-const relativeUnder = repo.relativeUnder;
 
 pub const Selector = docnode.Selector;
 
@@ -37,8 +33,6 @@ pub const Options = struct {
 };
 
 pub const Trace = struct {
-    base_len: usize = 0,
-    new_len: usize = 0,
     gate: runner.Trace = .{},
 };
 
@@ -59,85 +53,38 @@ pub const Result = union(enum) {
     }
 };
 
-fn applyDoc(gpa: Allocator, parser: ts.Parser, source: []const u8, options: Options) docnode.Error!docnode.Applied {
-    return docnode.apply(gpa, parser, source, options.selector, options.expected_hash, options.new_text);
-}
-
 pub fn tryWriteDoc(gpa: Allocator, io: std.Io, options: Options, trace: ?*Trace) !Result {
     if (options.test_command.len == 0) return error.NoTestCommand;
     try docnode.refuseSource(options.file_abs);
     const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
     const root = try gitToplevel(gpa, io, dir);
     defer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
+    const lock = try batch.enter(gpa, io, root, options.commit);
     defer lock.release();
-    const rel = try relativeUnder(gpa, root, options.file_abs);
-    defer gpa.free(rel);
-    var session = switch (try commit_plan.Session.open(gpa, io, root, options.guard_config, options.commit, &.{rel})) {
-        .ok => |opened| opened,
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
-    };
-    defer session.deinit(gpa);
 
-    const source = std.Io.Dir.cwd().readFileAlloc(io, options.file_abs, gpa, .limited(docnode.max_bytes + 1)) catch |err| switch (err) {
-        error.StreamTooLong => return error.DocTooLarge,
-        else => |e| return e,
-    };
-    defer gpa.free(source);
-    try docnode.checkReadable(source);
-    const base_hash = symbol.hashOf(source);
-
-    const parser = ts.Parser.create();
-    defer parser.deinit();
-    const applied = try applyDoc(gpa, parser, source, options);
-    defer gpa.free(applied.source);
-
-    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel }}, options.allow_repo_memory)) {
-        .ok => {},
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
-    }
-
-    if (trace) |t| t.* = .{ .base_len = source.len, .new_len = applied.source.len };
-
-    const location = try shadow_root.locate(gpa, root, options.shadow_root);
-    defer location.deinit(gpa);
-
-    var workspace = try runner.openShadow(gpa, io, root, location, options.linked, options.gate_tree, if (trace) |t| &t.gate else null, &session);
-    defer workspace.finish();
-    if (try runner.runMessageRules(gpa, io, root, runner.gateDir(location, &session), session.message(), options.limits, options.allow_repo_memory)) |gated| {
-        return switch (gated) {
-            .rule_violation => |report| .{ .rule_violation = report },
-            .rule_check_failed => |failure| .{ .rule_check_failed = failure },
-            else => unreachable,
-        };
-    }
-    try workspace.writeFile(rel, applied.source);
-    try runner.deriveGate(gpa, io, root, location, &session, &.{.{ .rel = rel, .content = applied.source }});
-    if (try runner.runCommandRulesFor(gpa, io, root, runner.gateDir(location, &session), &.{rel}, null, options.limits, options.allow_repo_memory)) |gated| {
-        return switch (gated) {
-            .rule_violation => |report| .{ .rule_violation = report },
-            .rule_check_failed => |failure| .{ .rule_check_failed = failure },
-            else => unreachable,
-        };
-    }
-
-    const staged = try baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = applied.source }}, .{ .root = root, .gate_dir = runner.gateDir(location, &session), .typecheck_command = options.typecheck_command, .test_command = options.test_command, .limits = options.limits, .note = if (trace) |t| &t.gate.baseline else null, .commits = session.committing() });
-    switch (staged) {
-        .typecheck => |failed| return .{ .typecheck_failed = failed },
-        .rule_violation, .rule_check_failed => unreachable,
-        .tests => |report| {
-            if (!report.passed()) return .{ .rejected = report };
-            defer report.deinit(gpa);
-            const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
-            defer gpa.free(journal_dir);
-            const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.source }};
-            try session.prepare(gpa, io, root, &change);
-            var pendings = [1]disk.Pending{try disk.prepare(gpa, io, options.file_abs, applied.source, base_hash)};
-            const journal = disk.Batch.init(gpa, io, journal_dir);
-            try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
-            return .{ .committed = applied.hash };
+    const edit = [_]batch.DocEdit{.{ .file_abs = options.file_abs, .selector = options.selector, .expected_hash = options.expected_hash, .new_text = options.new_text }};
+    const result = try batch.commitPlanned(gpa, io, root, &.{}, &.{}, .{
+        .doc_edits = &edit,
+        .test_command = options.test_command,
+        .typecheck_command = options.typecheck_command,
+        .linked = options.linked,
+        .limits = options.limits,
+        .allow_repo_memory = options.allow_repo_memory,
+        .guard_config = options.guard_config,
+        .shadow_root = options.shadow_root,
+        .gate_tree = options.gate_tree,
+        .trace = if (trace) |t| &t.gate else null,
+        .commit_step = options.commit_step,
+        .commit = options.commit,
+    });
+    return switch (result) {
+        .committed => |written| blk: {
+            defer gpa.free(written);
+            break :blk .{ .committed = written[0].hash };
         },
-    }
+        .rejected => |report| .{ .rejected = report },
+        .typecheck_failed => |report| .{ .typecheck_failed = report },
+        .rule_violation => |report| .{ .rule_violation = report },
+        .rule_check_failed => |failure| .{ .rule_check_failed = failure },
+    };
 }

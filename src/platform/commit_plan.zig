@@ -95,8 +95,6 @@ pub const Session = struct {
             .violated => |report| return .{ .violated = report },
             .failed => |failure| return .{ .failed = failure },
         }
-        const found = try recoverFound(gpa, io, root);
-        noteFound(found);
         return .{ .ok = .{ .request = plan, .head = try git_commit.preflight(gpa, io, root, rels) } };
     }
 

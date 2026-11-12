@@ -78,7 +78,7 @@ test "commit window: a file renamed over the target after its measurement is kep
     try testing.expectEqualStrings("0", std.mem.trim(u8, try env.read(".git/tap-moved"), " \r\n"));
     try testing.expectEqualStrings(two_hand, try env.read("src/util.ts"));
     try testing.expect(reply.is_error);
-    try testing.expect(contains(reply.text, "TargetHasUncommittedChanges"));
+    try testing.expect(contains(reply.text, "BaseChanged"));
     try testing.expectEqualStrings(before, try env.head());
     try testing.expectEqualStrings("", try env.git(&.{ "diff", "--cached", "--name-only" }));
     try testing.expect(!case.repo.exists(".git/index.lock"));

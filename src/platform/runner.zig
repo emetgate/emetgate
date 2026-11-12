@@ -36,6 +36,15 @@ pub const resolveTestCommand = test_command_mod.resolveTestCommand;
 pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
 pub const Gate = gate_mod.Gate;
 pub const chooseGate = gate_mod.chooseGate;
+
+pub fn ranTestCommand(trace: Trace, test_command: []const u8) []const u8 {
+    return trace.scoped_command orelse test_command;
+}
+
+pub fn releaseTrace(gpa: Allocator, trace: *Trace) void {
+    if (trace.scoped_command) |command| gpa.free(command);
+    trace.scoped_command = null;
+}
 pub const Edit = batch.Edit;
 pub const EditOp = batch.EditOp;
 pub const DocEdit = batch.DocEdit;
@@ -82,6 +91,7 @@ pub const Trace = struct {
     skipped_links: usize = 0,
     tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
+    scoped_command: ?[]u8 = null,
     tests: test_outcome.Summary = .{},
     blocked: gate_tree.Report = .{},
     baseline: baseline.Note = .{},
@@ -223,151 +233,35 @@ pub fn runToolchain(gpa: Allocator, io: std.Io, cwd: []const u8, command: []cons
 }
 
 pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options) !Result {
-    if (options.test_command.len == 0) return error.NoTestCommand;
-    const dir = std.fs.path.dirname(options.file_abs) orelse return error.InvalidPath;
-    const root = try gitToplevel(gpa, io, dir);
-    defer gpa.free(root);
-    const lock = try shadow.Lock.acquire(io, root);
-    defer lock.release();
-    const rel = try relativeUnder(gpa, root, options.file_abs);
-    defer gpa.free(rel);
-    var session = switch (try commit_plan.Session.open(gpa, io, root, options.guard_config, options.commit, &.{rel})) {
-        .ok => |opened| opened,
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
+    const edit = [_]batch.Edit{.{ .file_abs = options.file_abs, .ref_text = options.ref_text, .expected_hash = options.expected_hash, .new_body = options.new_body }};
+    const through: batch.BatchOptions = .{
+        .edits = &edit,
+        .test_command = options.test_command,
+        .test_scoped_cmd = options.test_scoped_cmd,
+        .typecheck_command = options.typecheck_command,
+        .linked = options.linked,
+        .limits = options.limits,
+        .allow_repo_memory = options.allow_repo_memory,
+        .guard_config = options.guard_config,
+        .shadow_root = options.shadow_root,
+        .gate_tree = options.gate_tree,
+        .trace = options.trace,
+        .commit_step = options.commit_step,
+        .commit = options.commit,
     };
-    defer session.deinit(gpa);
-    if (options.expected_hash == .absent and !try fileExists(io, options.file_abs)) return tryCreate(gpa, io, runtime, options, root, rel, &session);
-
-    const base = try Snapshot.load(runtime, io, .cwd(), options.file_abs);
-    defer base.destroy();
-    if (base.tree.root().hasError()) return error.SourceHasErrors;
-    const base_hash = symbol.hashOf(base.source);
-
-    const ref = try symbol.Ref.parse(gpa, options.ref_text);
-    defer ref.deinit(gpa);
-    const applied = try cas.propose(base, ref, options.expected_hash, options.new_body);
-    defer applied.snapshot.destroy();
-    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .base = base, .after = applied.snapshot, .holes = &.{applied.hole} }}, options.allow_repo_memory)) {
-        .ok => {},
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
-    }
-
-    const location = try shadow_root.locate(gpa, root, options.shadow_root);
-    defer location.deinit(gpa);
-
-    var gate: Gate = .full;
-    if (options.expected_hash == .present) {
-        const analysis_target = try (try base.symbols()).item(ref);
-        const shown = analysis_target.body orelse analysis_target.node;
-        const cut: symbol.Span = .{ .start = shown.startByte(), .end = shown.endByte() };
-        const frame = boundedness.analyze(gpa, base, analysis_target.ref, cut);
-        defer frame.deinit();
-        gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
-        if (options.trace) |t| t.* = .{
-            .gate = gate,
-            .confidence = frame.confidence,
-            .provenance = frame.provenance,
-            .class = frame.mutation_class,
-            .base_len = base.source.len,
-            .new_len = applied.snapshot.source.len,
-            .old_body_len = cut.end - cut.start,
-        };
-    } else if (options.trace) |t| t.* = .{
-        .gate = gate,
-        .base_len = base.source.len,
-        .new_len = applied.snapshot.source.len,
+    var planned = try batch.planBatch(gpa, io, runtime, through);
+    defer planned.deinit(gpa);
+    const result = try batch.commitPlanned(gpa, io, planned.root, planned.prepared.items, &edit, through);
+    return switch (result) {
+        .committed => |written| blk: {
+            defer gpa.free(written);
+            break :blk .{ .committed = written[0].hash };
+        },
+        .rejected => |report| .{ .rejected = report },
+        .typecheck_failed => |report| .{ .typecheck_failed = report },
+        .rule_violation => |report| .{ .rule_violation = report },
+        .rule_check_failed => |failure| .{ .rule_check_failed = failure },
     };
-    const scoped_owned: ?[]u8 = if (gate == .scoped)
-        try substituteFile(gpa, options.test_scoped_cmd.?, rel)
-    else
-        null;
-    defer if (scoped_owned) |s| gpa.free(s);
-    const command = scoped_owned orelse options.test_command;
-
-    const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, &session, command, &.{rel})) {
-        .typecheck => |failed| return .{ .typecheck_failed = failed },
-        .rule_violation => |report| return .{ .rule_violation = report },
-        .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
-        .tests => |tests| tests,
-    };
-
-    if (!report.passed()) return .{ .rejected = report };
-    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
-    noteSummary(options.trace, report);
-    defer report.deinit(gpa);
-    const journal_dir = try std.fmt.allocPrint(gpa, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
-    defer gpa.free(journal_dir);
-    const change = [_]commit_plan.Change{.{ .rel = rel, .content = applied.snapshot.source }};
-    try session.prepare(gpa, io, root, &change);
-    if (options.trace) |t| t.commit_attempted = true;
-    var pendings = [1]disk.Pending{try disk.prepare(gpa, io, options.file_abs, applied.snapshot.source, base_hash)};
-    const journal = disk.Batch.init(gpa, io, journal_dir);
-    try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
-    return .{ .committed = applied.hash };
-}
-
-fn tryCreate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, root: []const u8, rel: []const u8, session: *commit_plan.Session) !Result {
-    const ref = try symbol.Ref.parse(gpa, options.ref_text);
-    defer ref.deinit(gpa);
-    const created = try prepareCreate(gpa, io, runtime, root, options.file_abs, rel, ref, options.new_body);
-    defer created.snapshot.destroy();
-    switch (try rules.judge(gpa, io, root, &.{.{ .rel = rel, .after = created.snapshot }}, options.allow_repo_memory)) {
-        .ok => {},
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
-    }
-
-    const location = try shadow_root.locate(gpa, root, options.shadow_root);
-    defer location.deinit(gpa);
-    if (options.trace) |t| t.* = .{ .gate = .full, .base_len = 0, .new_len = created.snapshot.source.len };
-
-    const report = switch (try runInShadow(gpa, io, root, location, rel, created.snapshot.source, options, session, options.test_command, &.{rel})) {
-        .typecheck => |failed| return .{ .typecheck_failed = failed },
-        .rule_violation => |report| return .{ .rule_violation = report },
-        .rule_check_failed => |failure| return .{ .rule_check_failed = failure },
-        .tests => |tests| tests,
-    };
-    if (!report.passed()) return .{ .rejected = report };
-    if (options.trace) |t| t.test_ms = report.duration_ns / std.time.ns_per_ms;
-    defer report.deinit(gpa);
-
-    const change = [_]commit_plan.Change{.{ .rel = rel, .content = created.snapshot.source }};
-    noteSummary(options.trace, report);
-    try session.prepare(gpa, io, root, &change);
-    if (options.trace) |t| t.commit_attempted = true;
-    if (session.committing()) {
-        const journal_dir = try shadow.journalDir(gpa, root);
-        defer gpa.free(journal_dir);
-        var pendings = [1]disk.Pending{try disk.stageCreate(gpa, io, options.file_abs, created.snapshot.source)};
-        const journal = disk.Batch.init(gpa, io, journal_dir);
-        try session.land(gpa, io, root, &change, &pendings, &journal, options.commit_step);
-        return .{ .committed = created.hash };
-    }
-    try disk.create(gpa, io, options.file_abs, created.snapshot.source);
-    try repo.addToIndex(gpa, io, root, rel);
-    return .{ .committed = created.hash };
-}
-
-fn fileExists(io: std.Io, path_abs: []const u8) !bool {
-    std.Io.Dir.cwd().access(io, path_abs, .{}) catch |err| switch (err) {
-        error.FileNotFound => return false,
-        else => |e| return e,
-    };
-    return true;
-}
-
-fn runInShadow(gpa: Allocator, io: std.Io, root: []const u8, location: shadow_root.Location, rel: []const u8, patched: []const u8, options: Options, session: *commit_plan.Session, command: []const u8, targets: []const []const u8) !ShadowRun {
-    var workspace = try openShadow(gpa, io, root, location, options.linked, options.gate_tree, options.trace, session);
-    defer workspace.finish();
-    const gate_abs = gateDir(location, session);
-    if (try runMessageRules(gpa, io, root, gate_abs, session.message(), options.limits, options.allow_repo_memory)) |gated| return gated;
-    try workspace.writeFile(rel, patched);
-    try deriveGate(gpa, io, root, location, session, &.{.{ .rel = rel, .content = patched }});
-
-    if (try runCommandRulesFor(gpa, io, root, gate_abs, targets, null, options.limits, options.allow_repo_memory)) |gated| return gated;
-    return baseline.run(gpa, io, &workspace, &.{.{ .rel = rel, .content = patched }}, .{ .root = root, .gate_dir = gate_abs, .typecheck_command = options.typecheck_command, .test_command = command, .limits = options.limits, .note = if (options.trace) |t| &t.baseline else null, .commits = session.committing() });
 }
 
 fn linkedPath(path: []const u8, linked: []const []const u8) bool {

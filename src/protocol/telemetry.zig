@@ -132,6 +132,10 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
     try js.write(event.trace.provenance);
     try js.objectField("gate");
     try js.write(event.trace.gate);
+    if (event.trace.test_ms) |ms| {
+        try js.objectField("test_ms");
+        try js.write(ms);
+    }
     try js.objectField("result");
     try js.write(event.resultName());
     try js.objectField("reason");
@@ -159,7 +163,6 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
         .rejected => try w.print("✗ rejected · {s}", .{event.reason orelse "rejected"}),
         .failed => try w.print("✗ {s}", .{event.resultName()}),
     }
-    if (event.trace.confidence) |c| try w.writeAll(if (c == .bounded) " · BOUNDED" else " · UNBOUNDED");
     if (event.trace.gate) |g| try w.print(" · gate {s}", .{@tagName(g)});
     if (event.outcome == .ok or event.outcome == .committed) {
         if (event.chars_emetgate) |sent| {
@@ -222,7 +225,7 @@ test "footer gate always equals chooseGate for every confidence and scoped combi
             defer testing.allocator.free(text);
             const expected = if (confidence == .bounded and has_scoped) " · gate scoped" else " · gate full";
             try expectContains(text, expected);
-            try expectContains(text, if (confidence == .bounded) " · BOUNDED" else " · UNBOUNDED");
+            try testing.expect(std.mem.indexOf(u8, text, "BOUNDED") == null);
         }
     }
 }
@@ -251,7 +254,7 @@ test "footer never prints a ratio, a saving or a token claim" {
 test "rejected footer names the reason, says disk untouched and shows no saving" {
     const text = try footer(.{ .tool = "emetgate_try", .outcome = .rejected, .reason = "tests_failed", .mutating = true, .chars_emetgate = 10, .chars_fullfile = 100, .trace = .{ .gate = .full, .confidence = .bounded } }, .{ .edits = 2 });
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 2 edits", text);
+    try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · gate full · disk untouched · session 2 edits", text);
 }
 
 test "a failure after the commit began never claims disk untouched" {
@@ -308,4 +311,12 @@ test "event line carries the runner trace as strings" {
     try expectContains(line, "\"provenance\":\"exported_escape\"");
     try expectContains(line, "\"class\":\"signature_change\"");
     try expectContains(line, "\"result\":\"HashMismatch\"");
+    try testing.expect(std.mem.indexOf(u8, line, "test_ms") == null);
+}
+
+test "event line carries how long the gate's tests ran, when they ran" {
+    var buffer: Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeEvent(&buffer.writer, 1, .{ .tool = "emetgate_try", .outcome = .committed, .trace = .{ .gate = .full, .test_ms = 466210 } });
+    try expectContains(buffer.written(), "\"gate\":\"full\",\"test_ms\":466210");
 }

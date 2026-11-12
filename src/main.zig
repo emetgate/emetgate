@@ -42,8 +42,8 @@ const usage =
     \\       emetgate symbols <file.ts> [--json]
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
-    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command> | --detect-test] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools]
+    \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--test-scoped <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
+    \\       emetgate mcp [--test <command> | --detect-test] [--test-scoped <command>] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
@@ -395,7 +395,7 @@ const exitCodeFor = wire.exitCode;
 
 const rejected_exit_code: u8 = 10;
 
-const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck", "--shadow-root", "--shadow-tree", "--shadow-private" };
+const try_flags = [_][]const u8{ "--symbol", "--hash", "--body", "--body-file", "--test", "--typecheck", "--shadow-root", "--shadow-tree", "--shadow-private", "--test-scoped" };
 
 const TryRequest = struct {
     path: []const u8,
@@ -403,6 +403,7 @@ const TryRequest = struct {
     hash: []const u8,
     body: union(enum) { inline_text: []const u8, file: []const u8 },
     test_command: []const u8,
+    test_scoped_command: ?[]const u8,
     typecheck_command: []const u8,
     shadow_root: ?[]const u8,
     shadow_tree: shadow.TreeMode,
@@ -428,12 +429,14 @@ const TryRequest = struct {
         const inline_body = values[2];
         const body_file = values[3];
         if ((inline_body == null) == (body_file == null)) return null;
+        if (values[9]) |scoped| if (std.mem.trim(u8, scoped, " \t").len == 0) return null;
         return .{
             .path = args[0],
             .symbol = values[0] orelse return null,
             .hash = values[1] orelse return null,
             .body = if (inline_body) |text| .{ .inline_text = text } else .{ .file = body_file.? },
             .test_command = values[4] orelse "",
+            .test_scoped_command = values[9],
             .typecheck_command = values[5] orelse "",
             .shadow_root = values[6],
             .shadow_tree = tree,
@@ -441,6 +444,12 @@ const TryRequest = struct {
         };
     }
 };
+
+fn printGate(trace: runner.Trace, test_command: []const u8) void {
+    const gate = trace.gate orelse return;
+    const ms = trace.test_ms orelse return;
+    std.debug.print("gate {s} · tests {d} ms: {s}\n", .{ @tagName(gate), ms, runner.ranTestCommand(trace, test_command) });
+}
 
 fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *std.Io.Writer, trust: Trust) !u8 {
     const gpa = runtime.gpa;
@@ -469,6 +478,7 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .test_scoped_cmd = request.test_scoped_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
         .shadow_root = request.shadow_root,
@@ -479,9 +489,11 @@ fn tryRun(init: std.process.Init, runtime: *Runtime, request: TryRequest, out: *
         return err;
     };
     defer result.deinit(gpa);
+    defer runner.releaseTrace(gpa, &trace);
 
     _ = out;
     printShadowNote(gpa, request.shadow_root, trace);
+    printGate(trace, test_command);
     switch (result) {
         .committed => |new_hash| {
             var old_buf: [symbol.hash_hex_len]u8 = undefined;
@@ -581,6 +593,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .test_scoped_cmd = request.test_scoped_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = trust.repo_memory,
         .shadow_root = request.shadow_root,
@@ -588,6 +601,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
         .trace = trace,
     });
     defer result.deinit(gpa);
+    defer runner.releaseTrace(gpa, trace);
     const note_root = try shadow_root.displayRoot(gpa, request.shadow_root);
     defer gpa.free(note_root);
     const note = wire.shadowNote(note_root, trace.*);
@@ -598,7 +612,7 @@ fn emitTryJson(init: std.process.Init, runtime: *Runtime, request: TryRequest, o
             return 0;
         },
         .rejected => |report| {
-            try wire.writeRejected(gpa, out, test_command, report, note);
+            try wire.writeRejected(gpa, out, runner.ranTestCommand(trace.*, test_command), report, note);
             return rejected_exit_code;
         },
         .typecheck_failed => |report| {
