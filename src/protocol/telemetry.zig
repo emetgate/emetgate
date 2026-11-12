@@ -132,6 +132,10 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
     try js.write(event.trace.provenance);
     try js.objectField("gate");
     try js.write(event.trace.gate);
+    if (event.trace.test_ms) |ms| {
+        try js.objectField("test_ms");
+        try js.write(ms);
+    }
     try js.objectField("result");
     try js.write(event.resultName());
     try js.objectField("reason");
@@ -308,4 +312,12 @@ test "event line carries the runner trace as strings" {
     try expectContains(line, "\"provenance\":\"exported_escape\"");
     try expectContains(line, "\"class\":\"signature_change\"");
     try expectContains(line, "\"result\":\"HashMismatch\"");
+    try testing.expect(std.mem.indexOf(u8, line, "test_ms") == null);
+}
+
+test "event line carries how long the gate's tests ran, when they ran" {
+    var buffer: Writer.Allocating = .init(testing.allocator);
+    defer buffer.deinit();
+    try writeEvent(&buffer.writer, 1, .{ .tool = "emetgate_try", .outcome = .committed, .trace = .{ .gate = .full, .test_ms = 466210 } });
+    try expectContains(buffer.written(), "\"gate\":\"full\",\"test_ms\":466210");
 }

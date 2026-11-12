@@ -24,6 +24,7 @@ const Value = std.json.Value;
 
 pub const Policy = struct {
     test_command: ?[]const u8 = null,
+    test_scoped_command: ?[]const u8 = null,
     typecheck_command: ?[]const u8 = null,
     no_typecheck: bool = false,
     allow_repo_config: bool = false,
@@ -118,6 +119,12 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (command.len == 0) return null;
             policy.test_command = command;
+        } else if (std.mem.eql(u8, arg, "--test-scoped")) {
+            if (policy.test_scoped_command != null or i + 1 >= args.len) return null;
+            i += 1;
+            const command: []const u8 = args[i];
+            if (std.mem.trim(u8, command, " \t").len == 0) return null;
+            policy.test_scoped_command = command;
         } else if (std.mem.eql(u8, arg, "--detect-test")) {
             if (policy.detect_test) return null;
             policy.detect_test = true;
@@ -196,10 +203,11 @@ pub fn parsePolicy(args: anytype) ?Policy {
             policy.shadow_private_len += 1;
         } else return null;
     }
+    if (policy.test_scoped_command != null and policy.test_command == null and !policy.detect_test) return null;
     return policy;
 }
 
-pub const model_policy_fields = [_][]const u8{ "test_cmd", "typecheck_cmd", "allow_repo_config", "allow_repo_memory", "shadow_root", "allow_run", "shadow_tree", "shadow_private" };
+pub const model_policy_fields = [_][]const u8{ "test_cmd", "test_scoped_cmd", "typecheck_cmd", "allow_repo_config", "allow_repo_memory", "shadow_root", "allow_run", "shadow_tree", "shadow_private" };
 
 pub fn refuseModelPolicy(args: ?Value) error{ModelSuppliedTestPolicy}!void {
     const a = args orelse return;
@@ -210,7 +218,7 @@ pub fn refuseModelPolicy(args: ?Value) error{ModelSuppliedTestPolicy}!void {
 
 pub fn trustedTestCommand(args: ?Value, policy: Policy) error{ModelSuppliedTestPolicy}![]const u8 {
     if (args) |a| {
-        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null or tool_result.getField(a, "shadow_root") != null) return error.ModelSuppliedTestPolicy;
+        if (tool_result.getField(a, "test_cmd") != null or tool_result.getField(a, "test_scoped_cmd") != null or tool_result.getField(a, "typecheck_cmd") != null or tool_result.getField(a, "allow_repo_config") != null or tool_result.getField(a, "allow_repo_memory") != null or tool_result.getField(a, "shadow_root") != null) return error.ModelSuppliedTestPolicy;
     }
     return policy.test_command orelse if (policy.detect_test) test_command_mod.detect else "";
 }
@@ -279,6 +287,26 @@ test "commit policy: with commits on every call needs a message, and the message
     const good = try parsedArgs("{\"message\":\"fix: one\"}");
     defer good.deinit();
     try testing.expectEqualStrings("fix: one", (try commitMessage(good.value, on)).?);
+}
+
+test "a scoped test command comes only from the operator, next to a full one, once and not blank" {
+    const given = parsePolicy(&[_][]const u8{ "--test", "zig build test", "--test-scoped", "zig build test -Dtest-filter={stem}" }).?;
+    try testing.expectEqualStrings("zig build test -Dtest-filter={stem}", given.test_scoped_command.?);
+    const detected = parsePolicy(&[_][]const u8{ "--test-scoped", "npx vitest run {file}", "--detect-test" }).?;
+    try testing.expectEqualStrings("npx vitest run {file}", detected.test_scoped_command.?);
+    try testing.expectEqual(@as(?[]const u8, null), parsePolicy(&[_][]const u8{ "--test", "npm test" }).?.test_scoped_command);
+
+    for ([_][]const []const u8{
+        &.{ "--test-scoped", "npm test -- {file}" },
+        &.{ "--test", "npm test", "--test-scoped" },
+        &.{ "--test", "npm test", "--test-scoped", "  " },
+        &.{ "--test", "npm test", "--test-scoped", "a", "--test-scoped", "b" },
+    }) |bad| try testing.expect(parsePolicy(bad) == null);
+
+    const named = try parsedArgs("{\"file\":\"a.ts\",\"test_scoped_cmd\":\"echo ok\"}");
+    defer named.deinit();
+    try testing.expectError(error.ModelSuppliedTestPolicy, trustedTestCommand(named.value, given));
+    try testing.expectError(error.ModelSuppliedTestPolicy, refuseModelPolicy(named.value));
 }
 
 test "the tree choice comes from the operator's flags: kept by default, copy on request, private prefixes in order" {

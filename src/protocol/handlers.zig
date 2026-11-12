@@ -674,6 +674,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .expected_hash = expected,
         .new_body = body,
         .test_command = test_command,
+        .test_scoped_cmd = policy.test_scoped_command,
         .typecheck_command = typecheck_command,
         .allow_repo_memory = policy.allow_repo_memory,
         .guard_config = policy.open_run,
@@ -683,6 +684,8 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .commit = if (commit) |*request| request else null,
     });
     defer result.deinit(gpa);
+    defer runner.releaseTrace(gpa, &event.trace);
+    const ran_test = runner.ranTestCommand(event.trace, test_command);
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
     const note = wire.shadowNote(note_root, event.trace);
@@ -703,7 +706,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
                 .evidence = "test",
                 .files = &.{.{ .rel = place.rel, .before = before_hash, .after_abs = file_abs }},
                 .symbols = &.{.{ .path = place.rel, .ref = sym, .before = if (expected == .present) expected.present else null, .after = new_hash }},
-                .test_command = test_command,
+                .test_command = ran_test,
                 .typecheck_command = typecheck_command,
                 .test_ms = event.trace.test_ms,
                 .version = receipt_note.version,
@@ -714,7 +717,7 @@ fn tryInto(gpa: Allocator, io: std.Io, runtime: *Runtime, file: []const u8, sym:
         .rejected => |report| {
             event.outcome = .rejected;
             event.reason = wire.rejectionReason(report);
-            try wire.writeRejected(gpa, w, test_command, report, note);
+            try wire.writeRejected(gpa, w, ran_test, report, note);
             return true;
         },
         .typecheck_failed => |report| {

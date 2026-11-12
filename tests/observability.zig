@@ -254,6 +254,7 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
     };
     for (cases) |c| {
         var trace: runner.Trace = .{};
+        defer runner.releaseTrace(testing.allocator, &trace);
         const result = try runner.tryMutate(testing.allocator, testing.io, runtime, .{
             .file_abs = c.file,
             .ref_text = "add",
@@ -268,6 +269,8 @@ test "gate-consistency: the footer shows exactly the gate the runner chose" {
         try testing.expect(result == .committed);
         try testing.expectEqual(runner.chooseGate(trace.confidence.?, c.scoped != null), trace.gate.?);
         try testing.expectEqual(c.expected, trace.gate.?);
+        const ran = runner.ranTestCommand(trace, "cmd /c exit 0");
+        try testing.expectEqualStrings(if (c.expected == .scoped) c.scoped.? else "cmd /c exit 0", ran);
 
         var buffer: Allocating = .init(testing.allocator);
         defer buffer.deinit();

@@ -3727,8 +3727,8 @@
     {
       "id": "RM13-mcp-try-forces-trust",
       "file": "src/protocol/handlers.zig",
-      "from": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
-      "to": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = true,\n",
+      "from": ".new_body = body,\n        .test_command = test_command,\n        .test_scoped_cmd = policy.test_scoped_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".new_body = body,\n        .test_command = test_command,\n        .test_scoped_cmd = policy.test_scoped_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = true,\n",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -3736,8 +3736,8 @@
     {
       "id": "RM14-mcp-try-drops-the-flag",
       "file": "src/protocol/handlers.zig",
-      "from": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
-      "to": ".new_body = body,\n        .test_command = test_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = false,\n",
+      "from": ".new_body = body,\n        .test_command = test_command,\n        .test_scoped_cmd = policy.test_scoped_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = policy.allow_repo_memory,\n",
+      "to": ".new_body = body,\n        .test_command = test_command,\n        .test_scoped_cmd = policy.test_scoped_command,\n        .typecheck_command = typecheck_command,\n        .allow_repo_memory = false,\n",
       "kills": [
         "redteam ledger: over mcp only the flag emetgate was started with trusts a committed ledger"
       ]
@@ -19474,6 +19474,53 @@
         "typecheck detection: --no-typecheck turns the detected type checker off and refuses a --typecheck beside it"
       ],
       "note": "a project whose type check is too slow for every write could not turn it off"
+    },
+    {
+      "id": "SCP1-unsafe-path-put-into-a-command",
+      "file": "src/platform/gate.zig",
+      "from": "    if (run_command.hasShellMetacharacter(rel)) return false;\n",
+      "to": "",
+      "kills": [
+        "a path with a shell metacharacter or a quote is not put into a command"
+      ]
+    },
+    {
+      "id": "SCP2-stem-placeholder-left-unfilled",
+      "file": "src/platform/gate.zig",
+      "from": "            try out.appendSlice(gpa, stem);",
+      "to": "            try out.appendSlice(gpa, stem_placeholder);",
+      "kills": [
+        "a scoped command gets the file in place of {file} and its name without folder or extension in place of {stem}",
+        "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran"
+      ]
+    },
+    {
+      "id": "SCP3-ran-command-reported-as-the-full-one",
+      "file": "src/platform/runner.zig",
+      "from": "    return trace.scoped_command orelse test_command;",
+      "to": "    _ = trace;\n    return test_command;",
+      "kills": [
+        "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran",
+        "gate-consistency: the footer shows exactly the gate the runner chose"
+      ]
+    },
+    {
+      "id": "SCP4-model-may-name-the-scoped-command",
+      "file": "src/protocol/policy.zig",
+      "from": " or tool_result.getField(a, \"test_scoped_cmd\") != null",
+      "to": "",
+      "kills": [
+        "a scoped test command comes only from the operator, next to a full one, once and not blank"
+      ]
+    },
+    {
+      "id": "SCP5-scoped-command-without-a-full-one",
+      "file": "src/protocol/policy.zig",
+      "from": "    if (policy.test_scoped_command != null and policy.test_command == null and !policy.detect_test) return null;\n",
+      "to": "",
+      "kills": [
+        "a scoped test command comes only from the operator, next to a full one, once and not blank"
+      ]
     }
   ]
 }

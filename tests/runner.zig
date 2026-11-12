@@ -193,6 +193,35 @@ test "gate: a BOUNDED mutation runs the scoped command against {file}, not the f
     try testing.expectEqualStrings("function add(a: number, b: number): number {\n  return a - b;\n}\nadd(1, 2);\n", on_disk);
 }
 
+test "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n" });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+    const hash = try hashOfRef(testing.allocator, testing.io, runtime, file, "add");
+
+    var trace: runner.Trace = .{};
+    defer runner.releaseTrace(testing.allocator, &trace);
+    const result = try tryMutate(testing.allocator, testing.io, runtime, .{
+        .file_abs = file,
+        .ref_text = "add",
+        .expected_hash = .{ .present = hash },
+        .new_body = "{\n  return a - b;\n}",
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type src\\{stem}.ts",
+        .trace = &trace,
+    });
+    defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
+    try testing.expect(result == .committed);
+    try testing.expectEqual(Gate.scoped, trace.gate.?);
+    try testing.expectEqualStrings("type src\\math.ts", runner.ranTestCommand(trace, "exit 1"));
+}
+
 test "gate: an empty test command aborts before touching disk" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();

@@ -36,6 +36,15 @@ pub const resolveTestCommand = test_command_mod.resolveTestCommand;
 pub const resolveTypecheckCommand = test_command_mod.resolveTypecheckCommand;
 pub const Gate = gate_mod.Gate;
 pub const chooseGate = gate_mod.chooseGate;
+
+pub fn ranTestCommand(trace: Trace, test_command: []const u8) []const u8 {
+    return trace.scoped_command orelse test_command;
+}
+
+pub fn releaseTrace(gpa: Allocator, trace: *Trace) void {
+    if (trace.scoped_command) |command| gpa.free(command);
+    trace.scoped_command = null;
+}
 pub const Edit = batch.Edit;
 pub const EditOp = batch.EditOp;
 pub const DocEdit = batch.DocEdit;
@@ -82,6 +91,7 @@ pub const Trace = struct {
     skipped_links: usize = 0,
     tree: ?shadow.TreeUse = null,
     test_ms: ?u64 = null,
+    scoped_command: ?[]u8 = null,
     tests: test_outcome.Summary = .{},
     blocked: gate_tree.Report = .{},
     baseline: baseline.Note = .{},
@@ -264,7 +274,7 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
         const cut: symbol.Span = .{ .start = shown.startByte(), .end = shown.endByte() };
         const frame = boundedness.analyze(gpa, base, analysis_target.ref, cut);
         defer frame.deinit();
-        gate = chooseGate(frame.confidence, options.test_scoped_cmd != null);
+        gate = chooseGate(frame.confidence, options.test_scoped_cmd != null and gate_mod.safeInCommand(rel));
         if (options.trace) |t| t.* = .{
             .gate = gate,
             .confidence = frame.confidence,
@@ -283,7 +293,8 @@ pub fn tryMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options
         try substituteFile(gpa, options.test_scoped_cmd.?, rel)
     else
         null;
-    defer if (scoped_owned) |s| gpa.free(s);
+    if (options.trace) |t| t.scoped_command = scoped_owned;
+    defer if (scoped_owned) |s| if (options.trace == null) gpa.free(s);
     const command = scoped_owned orelse options.test_command;
 
     const report = switch (try runInShadow(gpa, io, root, location, rel, applied.snapshot.source, options, &session, command, &.{rel})) {
