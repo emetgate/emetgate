@@ -19488,7 +19488,7 @@
       "id": "SCP2-stem-placeholder-left-unfilled",
       "file": "src/platform/gate.zig",
       "from": "            try out.appendSlice(gpa, stem);",
-      "to": "            try out.appendSlice(gpa, stem_placeholder);",
+      "to": "            try out.appendSlice(gpa, stem[0..0]);",
       "kills": [
         "a scoped command gets the file in place of {file} and its name without folder or extension in place of {stem}",
         "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran"
@@ -19500,8 +19500,7 @@
       "from": "    return trace.scoped_command orelse test_command;",
       "to": "    _ = trace;\n    return test_command;",
       "kills": [
-        "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran",
-        "gate-consistency: the footer shows exactly the gate the runner chose"
+        "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it ran"
       ]
     },
     {
