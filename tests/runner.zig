@@ -222,6 +222,98 @@ test "gate: a BOUNDED mutation fills {stem} and hands back the scoped command it
     try testing.expectEqualStrings("type src\\math.ts", runner.ranTestCommand(trace, "exit 1"));
 }
 
+const private_math = "function add(a: number, b: number): number {\n  return a + b;\n}\nadd(1, 2);\n";
+
+fn batchGate(runtime: *Runtime, edits: []const Edit, trace: *runner.Trace) !runner.BatchResult {
+    return tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = edits,
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type src\\{stem}.ts",
+        .trace = trace,
+    });
+}
+
+fn replaceIn(file: []const u8, old: []const u8, new: []const u8) Edit {
+    return .{ .file_abs = file, .ref_text = "", .expected_hash = .absent, .text = .{ .replace = .{ .old = old, .new = new } } };
+}
+
+test "gate: a text edit inside the body of a BOUNDED function runs the scoped command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = private_math });
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const file = try repo.filePath(&buf);
+
+    var trace: runner.Trace = .{};
+    defer runner.releaseTrace(testing.allocator, &trace);
+    const result = try batchGate(runtime, &.{replaceIn(file, "a + b", "a - b")}, &trace);
+    defer result.deinit(testing.allocator);
+    errdefer diagnostics.printResult(result);
+    try testing.expect(result == .committed);
+    try testing.expectEqual(Gate.scoped, trace.gate.?);
+    try testing.expectEqualStrings("type src\\math.ts", runner.ranTestCommand(trace, "exit 1"));
+}
+
+test "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const Case = struct { source: []const u8, old: []const u8, new: []const u8 };
+    const cases = [_]Case{
+        .{ .source = private_math, .old = "a + b;\n}", .new = "a + b;\n}\nexport function leak(): number {\n  return 0;\n}" },
+        .{ .source = Repo.source, .old = "a + b", .new = "a - b" },
+        .{ .source = private_math, .old = "add(1, 2);", .new = "add(2, 1);" },
+    };
+    for (cases) |case| {
+        var repo = try Repo.init();
+        defer repo.deinit();
+        const runtime = try Runtime.create(testing.allocator);
+        defer runtime.destroy() catch @panic("live snapshots");
+        try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/math.ts", .data = case.source });
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
+        const file = try repo.filePath(&buf);
+
+        var trace: runner.Trace = .{};
+        defer runner.releaseTrace(testing.allocator, &trace);
+        const result = try batchGate(runtime, &.{replaceIn(file, case.old, case.new)}, &trace);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .rejected);
+        try testing.expectEqual(Gate.full, trace.gate.?);
+        try testing.expectEqual(@as(?[]u8, null), trace.scoped_command);
+
+        const on_disk = try repo.read();
+        defer testing.allocator.free(on_disk);
+        try testing.expectEqualStrings(case.source, on_disk);
+    }
+}
+
+test "gate: a batch over two files runs the full command even when each edit is BOUNDED" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try TwoFile.init();
+    defer repo.deinit();
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/a.ts", .data = "function add(a: number, b: number): number { return a + b; }\nadd(1, 2);\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/b.ts", .data = "function twice(x: number): number { return x * 2; }\ntwice(1);\n" });
+    var buf_a: [std.fs.max_path_bytes]u8 = undefined;
+    var buf_b: [std.fs.max_path_bytes]u8 = undefined;
+    const file_a = try repo.pathA(&buf_a);
+    const file_b = try repo.pathB(&buf_b);
+
+    var trace: runner.Trace = .{};
+    defer runner.releaseTrace(testing.allocator, &trace);
+    const result = try tryMutateBatch(testing.allocator, testing.io, runtime, .{
+        .edits = &.{ replaceIn(file_a, "a + b", "a - b"), replaceIn(file_b, "x * 2", "x * 3") },
+        .test_command = "exit 1",
+        .test_scoped_cmd = "type src\\{stem}.ts",
+        .trace = &trace,
+    });
+    defer result.deinit(testing.allocator);
+    try testing.expect(result == .rejected);
+    try testing.expectEqual(Gate.full, trace.gate.?);
+}
+
 test "gate: an empty test command aborts before touching disk" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();

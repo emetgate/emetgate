@@ -1530,12 +1530,13 @@ fn batchInto(gpa: Allocator, io: std.Io, runtime: *Runtime, items: []const Value
     const before_hashes = try gpa.alloc(?symbol.Hash, code_used);
     defer gpa.free(before_hashes);
     for (edits[0..code_used], before_hashes) |edit, *slot| slot.* = disk.hashFile(gpa, io, edit.file_abs) catch null;
-    const options: batch_mod.BatchOptions = .{ .edits = edits[0..code_used], .doc_edits = doc_edits, .test_command = resolved, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .guard_config = policy.open_run, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
+    const options: batch_mod.BatchOptions = .{ .edits = edits[0..code_used], .doc_edits = doc_edits, .test_command = resolved, .test_scoped_cmd = policy.test_scoped_command, .typecheck_command = typecheck_command, .allow_repo_memory = policy.allow_repo_memory, .guard_config = policy.open_run, .shadow_root = policy.shadow_root, .gate_tree = policy.treeChoice(), .trace = &event.trace, .language_service = policy.language_service, .commit = if (commit) |*request| request else null, .created_dirs = @ptrCast(new_dirs.items) };
     var planned = try batch_mod.planBatch(gpa, io, runtime, options);
     defer planned.deinit(gpa);
     const result = try batch_mod.commitPlanned(gpa, io, planned.root, planned.prepared.items, edits[0..code_used], options);
     defer result.deinit(gpa);
-    const gated = test_command_mod.takeLate() orelse resolved;
+    defer runner.releaseTrace(gpa, &event.trace);
+    const gated = event.trace.scoped_command orelse test_command_mod.takeLate() orelse resolved;
     const note_root = try shadow_root.displayRoot(gpa, policy.shadow_root);
     defer gpa.free(note_root);
     const note = wire.shadowNote(note_root, event.trace);

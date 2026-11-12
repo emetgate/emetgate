@@ -1,8 +1,39 @@
 const std = @import("std");
 const boundedness = @import("../engine/boundedness.zig");
+const symbol = @import("../engine/symbol.zig");
+const Snapshot = @import("../engine/loader.zig").Snapshot;
 const run_command = @import("run_command.zig");
 
 const Allocator = std.mem.Allocator;
+
+pub fn boundedChange(gpa: Allocator, base: *Snapshot, after: *Snapshot, hole: symbol.Hole) bool {
+    const before_table = base.symbols() catch return false;
+    const owner = innermostBody(before_table.symbols, hole.old) orelse return false;
+    if (owner.ambiguous) return false;
+    const frame = boundedness.analyze(gpa, base, owner.ref, hole.old);
+    defer frame.deinit();
+    if (frame.confidence != .bounded) return false;
+    const after_table = after.symbols() catch return false;
+    const kept = after_table.resolve(owner.ref) catch return false;
+    const old_start = owner.body.startByte();
+    const old_end = owner.body.endByte();
+    const new_start = kept.body.startByte();
+    const new_end = kept.body.endByte();
+    if (!std.mem.eql(u8, base.source[0..old_start], after.source[0..new_start])) return false;
+    return std.mem.eql(u8, base.source[old_end..], after.source[new_end..]);
+}
+
+fn innermostBody(symbols: []const symbol.Symbol, span: symbol.Span) ?*const symbol.Symbol {
+    var best: ?*const symbol.Symbol = null;
+    for (symbols) |*candidate| {
+        const start = candidate.body.startByte();
+        const end = candidate.body.endByte();
+        if (span.start < start or span.end > end) continue;
+        if (best) |b| if (end - start >= b.body.endByte() - b.body.startByte()) continue;
+        best = candidate;
+    }
+    return best;
+}
 
 pub const Gate = enum { full, scoped };
 

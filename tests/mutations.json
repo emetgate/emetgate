@@ -17025,7 +17025,7 @@
     {
       "id": "REDET1-batch-detects-on-disk-only",
       "file": "src/platform/batch.zig",
-      "from": "    const tests = try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));\n",
+      "from": "    const tests = scoped orelse try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));\n",
       "to": "    const tests = options.test_command;\n",
       "kills": [
         "test detection: a batch that creates the project file runs the test command it names",
@@ -17035,8 +17035,8 @@
     {
       "id": "REDET2-late-command-not-reported",
       "file": "src/protocol/handlers.zig",
-      "from": "    const gated = test_command_mod.takeLate() orelse resolved;\n",
-      "to": "    const gated = resolved;\n",
+      "from": "    const gated = event.trace.scoped_command orelse test_command_mod.takeLate() orelse resolved;\n",
+      "to": "    const gated = event.trace.scoped_command orelse resolved;\n",
       "kills": [
         "test detection: a batch that creates the project file with a failing test is rejected and writes nothing"
       ]
@@ -19475,6 +19475,33 @@
       "to": "",
       "kills": [
         "a scoped test command comes only from the operator, next to a full one, once and not blank"
+      ]
+    },
+    {
+      "id": "KS1-kernel-scope-ignores-text-after-the-body",
+      "file": "src/platform/gate.zig",
+      "from": "    return std.mem.eql(u8, base.source[old_end..], after.source[new_end..]);",
+      "to": "    _ = .{ old_end, new_end };\n    return true;",
+      "kills": [
+        "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command"
+      ]
+    },
+    {
+      "id": "KS2-kernel-scope-ignores-boundedness",
+      "file": "src/platform/gate.zig",
+      "from": "    if (frame.confidence != .bounded) return false;\n",
+      "to": "",
+      "kills": [
+        "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command"
+      ]
+    },
+    {
+      "id": "KS3-kernel-scope-spans-several-files",
+      "file": "src/platform/batch.zig",
+      "from": "    if (doc_count != 0 or prepared.len != 1) return null;\n    const p = prepared[0];",
+      "to": "    if (doc_count != 0 or prepared.len == 0) return null;\n    const p = prepared[0];",
+      "kills": [
+        "gate: a batch over two files runs the full command even when each edit is BOUNDED"
       ]
     }
   ]
