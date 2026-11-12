@@ -261,7 +261,7 @@ test "gate: a text edit that leaves the body, touches an exported function or la
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const Case = struct { source: []const u8, old: []const u8, new: []const u8 };
     const cases = [_]Case{
-        .{ .source = private_math, .old = "a + b;\n}", .new = "a + b;\n}\nexport function leak(): number {\n  return 0;\n}" },
+        .{ .source = private_math, .old = "a + b;\n}", .new = "a - b;\n}\nexport function leak(): number {\n  return 0;\n}" },
         .{ .source = Repo.source, .old = "a + b", .new = "a - b" },
         .{ .source = private_math, .old = "add(1, 2);", .new = "add(2, 1);" },
     };

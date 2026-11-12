@@ -17026,7 +17026,7 @@
       "id": "REDET1-batch-detects-on-disk-only",
       "file": "src/platform/batch.zig",
       "from": "    const tests = scoped orelse try test_command_mod.redetect(gpa, io, options.test_command, runner.gateDir(location, session));\n",
-      "to": "    const tests = options.test_command;\n",
+      "to": "    const tests = scoped orelse options.test_command;\n",
       "kills": [
         "test detection: a batch that creates the project file runs the test command it names",
         "test detection: a batch that creates the project file with a failing test is rejected and writes nothing"
