@@ -10142,7 +10142,7 @@
       "id": "PV18-pending-commit-not-finished-before-the-next",
       "file": "src/platform/batch.zig",
       "from": "    if (commit != null) commit_plan.noteFound(try commit_plan.recoverFound(gpa, io, root));\n",
-      "to": "",
+      "to": "    _ = .{ gpa, commit };\n",
       "kills": [
         "commit protocol: recover never removes or replaces an index lock it does not own, before the branch moved or after"
       ],
@@ -19369,7 +19369,7 @@
       "id": "KS1-kernel-scope-ignores-text-after-the-body",
       "file": "src/platform/gate.zig",
       "from": "    if (!std.mem.eql(u8, base.source[old_end..], after.source[new_end..])) return escaped;\n",
-      "to": "",
+      "to": "    _ = .{ old_end, new_end };\n",
       "kills": [
         "gate: a text edit that leaves the body, touches an exported function or lands outside every body runs the full command"
       ]

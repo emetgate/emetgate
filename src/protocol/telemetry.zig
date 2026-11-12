@@ -225,7 +225,7 @@ test "footer gate always equals chooseGate for every confidence and scoped combi
             defer testing.allocator.free(text);
             const expected = if (confidence == .bounded and has_scoped) " · gate scoped" else " · gate full";
             try expectContains(text, expected);
-            try expectContains(text, if (confidence == .bounded) " · BOUNDED" else " · UNBOUNDED");
+            try testing.expect(std.mem.indexOf(u8, text, "BOUNDED") == null);
         }
     }
 }
@@ -254,7 +254,7 @@ test "footer never prints a ratio, a saving or a token claim" {
 test "rejected footer names the reason, says disk untouched and shows no saving" {
     const text = try footer(.{ .tool = "emetgate_try", .outcome = .rejected, .reason = "tests_failed", .mutating = true, .chars_emetgate = 10, .chars_fullfile = 100, .trace = .{ .gate = .full, .confidence = .bounded } }, .{ .edits = 2 });
     defer testing.allocator.free(text);
-    try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · BOUNDED · gate full · disk untouched · session 2 edits", text);
+    try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · gate full · disk untouched · session 2 edits", text);
 }
 
 test "a failure after the commit began never claims disk untouched" {
