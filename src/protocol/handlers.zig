@@ -232,7 +232,10 @@ fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     const within = if (args) |a| getString(a, "within") else null;
-    renderSymbols(gpa, io, runtime, root, file, tree_cache, tool_result.wantsFull(args), within, budget, &buffer.writer) catch |err| {
+    const offset = if (args) |a| getInt(a, "offset") else null;
+    if (offset) |n| if (n < 0) return tool_result.missing("offset (integer, 0 or more)", .{});
+    const page: ?usize = if (offset) |n| @intCast(n) else if (tool_result.wantsFull(args)) 0 else null;
+    renderSymbols(gpa, io, runtime, root, file, tree_cache, page, within, budget, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -257,7 +260,7 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     return .{ .place = place, .snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs), .owned = true };
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, full: bool, within: ?[]const u8, budget: usize, w: *Writer) !void {
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, page: ?usize, within: ?[]const u8, budget: usize, w: *Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -266,8 +269,47 @@ fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u
     defer loaded.deinit(gpa);
     const table = try wire.symbolsWithin(arena, (try loaded.snapshot.symbols()).*, prefix);
     if (table.symbols.len + table.declarations.len + table.statements.len == 0 and prefix.len != 0) return error.NoSymbolsWithin;
-    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);
-    try wire.writeSymbols(gpa, w, file, table);
+    if (page == null and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);
+    try writeSymbolsPage(gpa, w, file, table, within, page orelse 0);
+}
+
+const symbols_entry_cost: usize = 128;
+
+fn symbolsRefAt(table: symbol.Table, index: usize) symbol.Ref {
+    if (index < table.symbols.len) return table.symbols[index].ref;
+    const after = index - table.symbols.len;
+    if (after < table.declarations.len) return table.declarations[after].ref;
+    return table.statements[after - table.declarations.len].ref;
+}
+
+fn pageOf(comptime T: type, items: []T, base: usize, from: usize, end: usize) []T {
+    const lo = std.math.clamp(from, base, base + items.len) - base;
+    const hi = std.math.clamp(end, base, base + items.len) - base;
+    return items[lo..hi];
+}
+
+fn writeSymbolsPage(gpa: Allocator, w: *Writer, file: []const u8, table: symbol.Table, within: ?[]const u8, offset: usize) !void {
+    const total = table.symbols.len + table.declarations.len + table.statements.len;
+    const from = @min(offset, total);
+    const limit = reply_contract.room(.symbols) -| (2 * file.len + 64);
+    var used: usize = 0;
+    var end = from;
+    while (end < total) : (end += 1) {
+        const cost = symbols_entry_cost + std.fmt.count("{f}", .{symbolsRefAt(table, end)});
+        if (end != from and used + cost > limit) break;
+        used += cost;
+    }
+    const declared_base = table.symbols.len;
+    const statement_base = declared_base + table.declarations.len;
+    const shown: symbol.Table = .{
+        .arena = table.arena,
+        .symbols = pageOf(symbol.Symbol, table.symbols, 0, from, end),
+        .declarations = pageOf(symbol.Declaration, table.declarations, declared_base, from, end),
+        .statements = pageOf(symbol.Statement, table.statements, statement_base, from, end),
+        .short_refs = table.short_refs,
+    };
+    try wire.writeSymbols(gpa, w, file, shown);
+    if (end < total) try reply_contract.writeTrailer(w, "symbols {d}-{d} of {d}", .{ end + 1, total, total }, "emetgate_symbols", .{ .file = file, .within = within, .offset = end });
 }
 
 fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
@@ -418,6 +460,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
     const table = try snapshot.symbols();
+    try requireSymbols(gpa, table.*, file, &.{sym});
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const found = try table.item(ref);
@@ -507,6 +550,29 @@ const LinesCut = struct {
     }
 };
 
+fn requireSymbols(gpa: Allocator, table: symbol.Table, file: []const u8, refs: []const []const u8) !void {
+    var names_buf: [400]u8 = undefined;
+    var names: std.Io.Writer = .fixed(&names_buf);
+    var missing: usize = 0;
+    for (refs) |sym| {
+        const ref = symbol.Ref.parse(gpa, sym) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => continue,
+        };
+        defer ref.deinit(gpa);
+        _ = table.item(ref) catch |err| switch (err) {
+            error.SymbolNotFound => {
+                names.print("{s}{s}", .{ if (missing == 0) "" else ", ", utf8Head(sym, 120) }) catch {};
+                missing += 1;
+            },
+            else => {},
+        };
+    }
+    if (missing == 0) return;
+    wire.setFix("{s} has no symbol {s}; call {s}emetgate_symbols with this file for the exact symbol refs", .{ utf8Head(file, 200), names.buffered(), tool_names.prefix() });
+    return error.SymbolNotFound;
+}
+
 /// Approximate reply size of one entry of a symbols or range reply.
 fn entryCost(ref: []const u8, text: ?[]const u8) usize {
     return 200 + 2 * ref.len + if (text) |t| reply_contract.encodedLen(t, .json) else 0;
@@ -530,6 +596,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         .string => |s| s,
         else => return tool_result.missing("symbols[{d}] (string)", .{i}),
     };
+    try requireSymbols(gpa, table.*, file, refs);
     var owned: std.ArrayList([]u8) = .empty;
     defer {
         for (owned.items) |t| gpa.free(t);
@@ -708,20 +775,26 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
         const text = if (docs) |d| d.text else snapshot.source[found.declaration.start..found.declaration.end];
         const folds = reading.folds(text.len);
-        // Decide whether the entry fits before the mirror records it as sent.
-        const cost = if (folds) entryCost(ref_text[i], null) + reading.budget + reading.budget / 4 else entryCost(ref_text[i], text);
-        if (used + cost > room and i != 0) {
-            shown_count = i;
-            stop_line = @intCast(start_line);
-            break;
+        var view: ?read_budget.View = null;
+        if (folds) {
+            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
+            view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
         }
-        if (used + cost > room and !folds) {
-            const cut = LinesCut.of(snapshot.source, text, found.declaration.start, found.declaration.end, entryCost(ref_text[i], null));
+        const cost = entryCost(ref_text[i], if (view) |v| v.text else text);
+        if (used + cost > room) {
+            if (view) |v| v.deinit(gpa);
+            if (i != 0) {
+                shown_count = i;
+                stop_line = @intCast(start_line);
+                break;
+            }
+            const span: symbol.Span = if (folds) .{ .start = @max(found.declaration.start, requested.start), .end = @min(found.declaration.end, requested.end) } else found.declaration;
+            const cut = LinesCut.of(snapshot.source, if (folds) snapshot.source[span.start..span.end] else text, span.start, span.end, entryCost(ref_text[i], null));
             first_cut = cut;
-            cut_form = if (docs == null) .source else .folded;
-            entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = cut.c.kept, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
+            cut_form = if (folds or docs == null) .source else .folded;
+            entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = cut.c.kept, .start_line = @intCast(cut.first), .end_line = @intCast(end_line), .docs = if (docs != null and !folds) docs.?.spans else &.{} };
             views = i + 1;
-            try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, .dense);
+            try reading.note(loaded.place.rel).shown(snapshot.source, span.start, span.end, .dense);
             chars += cut.c.kept.len;
             shown_count = 1;
             break;
@@ -735,16 +808,15 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
         if (unchanged) {
+            if (view) |v| v.deinit(gpa);
             used += entryCost(ref_text[i], null);
             continue;
         }
         try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, if (folds or docs != null) .dense else .exact);
-        if (folds) {
-            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
-            const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
-            entries[i].folded = .{ .view = view, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
-            chars += view.text.len;
-            used += entryCost(ref_text[i], view.text);
+        if (view) |v| {
+            entries[i].folded = .{ .view = v, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
+            chars += v.text.len;
+            used += cost;
             continue;
         }
         chars += text.len;

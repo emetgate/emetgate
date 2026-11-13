@@ -1091,6 +1091,30 @@ test "a truncated read_file does not cover a later line range read" {
     try testing.expect(std.mem.indexOf(u8, tail.text, "TAIL_MARK") != null);
 }
 
+test "read_symbol names every symbol it did not find in the fix" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const Case = struct { args: []const u8, missing: []const []const u8 };
+    for ([_]Case{
+        .{ .args = "{\"file\":\"src/protocol/tool_result.zig\",\"symbol\":\"nope_alpha\"}", .missing = &.{"nope_alpha"} },
+        .{ .args = "{\"file\":\"src/protocol/tool_result.zig\",\"symbols\":[\"failure\",\"nope_alpha\",\"nope_beta\"]}", .missing = &.{ "nope_alpha", "nope_beta" } },
+    }) |case| {
+        const args = try std.json.parseFromSlice(Value, testing.allocator, case.args, .{});
+        defer args.deinit();
+        var reply = try callTool(runtime, "emetgate_read_symbol", args.value);
+        defer reply.deinit();
+        errdefer std.debug.print("{s}\n", .{reply.text});
+        try testing.expect(reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expectEqualStrings("SymbolNotFound", body.value.object.get("error").?.string);
+        const fix = body.value.object.get("fix").?.string;
+        for (case.missing) |name| try testing.expect(std.mem.indexOf(u8, fix, name) != null);
+        try testing.expect(std.mem.indexOf(u8, fix, "emetgate_symbols") != null);
+        try testing.expect(std.mem.indexOf(u8, fix, "failure,") == null);
+    }
+}
+
 test "read_symbol over a line range that holds no symbol returns the raw lines instead of an error" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();

@@ -121,6 +121,38 @@ test "arg check: dry_run is refused on emetgate_change and emetgate_git_write, a
     }
 }
 
+test "arg check: search kinds outside code, comment and string is refused once with the kinds fix" {
+    const policy: Policy = .{};
+    for ([_][]const u8{ "{\"pattern\":\"a\",\"kinds\":[\"bogus\"]}", "{\"pattern\":\"a\",\"kinds\":[\"code\",7]}" }) |text| {
+        var args = try std.json.parseFromSlice(Value, gpa, text, .{});
+        defer args.deinit();
+        const refused = (try arg_check.check(gpa, "emetgate_search", args.value, policy)) orelse return error.NotRefused;
+        defer gpa.free(refused);
+        errdefer std.debug.print("{s}\n", .{refused});
+        var reply = try errorOf(refused);
+        defer reply.deinit();
+        try testing.expectEqualStrings("UnknownKind", reply.value.object.get("error").?.string);
+        const fix = reply.value.object.get("fix").?.string;
+        inline for (.{ "code", "comment", "string" }) |kind| try testing.expect(std.mem.indexOf(u8, fix, kind) != null);
+    }
+    var bogus = try std.json.parseFromSlice(Value, gpa, "{\"pattern\":\"a\",\"kinds\":[\"bogus\"]}", .{});
+    defer bogus.deinit();
+    const named = (try arg_check.check(gpa, "emetgate_search", bogus.value, policy)).?;
+    defer gpa.free(named);
+    try testing.expect(std.mem.indexOf(u8, named, "bogus") != null);
+    var good = try std.json.parseFromSlice(Value, gpa, "{\"pattern\":\"a\",\"kinds\":[\"code\",\"comment\",\"string\"]}", .{});
+    defer good.deinit();
+    try testing.expect(try arg_check.check(gpa, "emetgate_search", good.value, policy) == null);
+    var empty = try std.json.parseFromSlice(Value, gpa, "{\"pattern\":\"\"}", .{});
+    defer empty.deinit();
+    const no_pattern = (try arg_check.check(gpa, "emetgate_search", empty.value, policy)) orelse return error.NotRefused;
+    defer gpa.free(no_pattern);
+    var empty_reply = try errorOf(no_pattern);
+    defer empty_reply.deinit();
+    try testing.expectEqualStrings("EmptyPattern", empty_reply.value.object.get("error").?.string);
+    try testing.expect(empty_reply.value.object.get("fix") != null);
+}
+
 test "arg check: documented aliases, item shapes, null and policy fields" {
     const policy: Policy = .{};
     inline for (.{

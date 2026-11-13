@@ -23,6 +23,7 @@ const answer = @import("../engine/answer.zig");
 const trigram = @import("../engine/trigram.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const tool_result = @import("tool_result.zig");
+const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const read_tools = @import("read_tools.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -711,11 +712,10 @@ fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event
 
 fn textFailure(gpa: Allocator, err: anyerror, detail: []const u8, event: *telemetry.Event) !ToolResult {
     event.fail(@errorName(err));
-    const text = if (detail.len != 0)
-        try std.fmt.allocPrint(gpa, "error: {s}: {s}", .{ @errorName(err), detail })
-    else
-        try std.fmt.allocPrint(gpa, "error: {s}", .{@errorName(err)});
-    return .{ .text = text, .is_error = true };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try wire.writeErrorText(&out.writer, @errorName(err), detail);
+    return .{ .text = try out.toOwnedSlice(), .is_error = true };
 }
 
 fn parseDetail(args: ?Value) !bool {

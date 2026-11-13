@@ -1655,6 +1655,14 @@ fn takeFix(name: []const u8) ?Fix {
     return .{ .text = fixFor(name) orelse unexpected_fix, .dynamic = false };
 }
 
+pub fn writeErrorText(writer: *Writer, name: []const u8, detail: []const u8) !void {
+    try writer.print("error: {s}", .{name});
+    if (detail.len != 0) try writer.print(": {s}", .{detail});
+    const fix = takeFix(name) orelse return;
+    try writer.writeAll("\nfix: ");
+    if (fix.dynamic) try writer.writeAll(fix.text) else try tool_names.write(writer, fix.text);
+}
+
 fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
     const fix = takeFix(name) orelse return;
     try js.objectField("fix");

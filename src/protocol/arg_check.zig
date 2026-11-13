@@ -9,6 +9,7 @@ const policy_mod = @import("policy.zig");
 const forgive = @import("forgive.zig");
 const wire = @import("wire.zig");
 const tool_result = @import("tool_result.zig");
+const search_v1 = @import("search_v1.zig");
 
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
@@ -70,7 +71,7 @@ const write_doc_extras = [_]Prop{ detail_prop, message_prop } ++ edit_item_props
 
 /// Keys a tool honors that its served schema leaves out.
 fn extras(name: []const u8, policy: Policy) []const Prop {
-    if (eql(name, "emetgate_symbols")) return &.{ .{ .name = "within", .desc = "", .optional = true }, detail_prop };
+    if (eql(name, "emetgate_symbols")) return &.{detail_prop};
     if (eql(name, "emetgate_try") or eql(name, "emetgate_edit") or eql(name, "emetgate_write") or eql(name, "emetgate_try_batch")) return &.{ detail_prop, message_prop };
     if (eql(name, "emetgate_write_doc")) return &write_doc_extras;
     if (eql(name, "emetgate_change") and policy.commit) return &.{message_prop};
@@ -124,6 +125,8 @@ pub fn check(gpa: Allocator, name: []const u8, arguments: ?Value, policy: Policy
             return try reply(gpa, "UnknownArgument", 2, "{s} has no parameter {s}", .{ name, key }, "{s} takes {s}; remove {s}", .{ name, names.text(), key });
         };
         if (!typeFits(spec, name, value)) return typeRefusal("", key, spec);
+        if (try checkChoice(gpa, name, key, value)) |refused| return refused;
+        if (eql(name, "emetgate_search") and eql(key, "pattern") and value == .string and value.string.len == 0) return try reply(gpa, "EmptyPattern", wire.exitCode(error.EmptyPattern), "emetgate_search pattern is empty", .{}, null, .{});
         if (eql(key, "edits") and (eql(name, "emetgate_change") or eql(name, "emetgate_try_batch"))) {
             if (try checkItems(gpa, "edits", value, &edit_item_props, &forgive.item_aliases)) |refused| return refused;
             if (try checkItemRules(gpa, "edits", value, &edit_item_rules, &forgive.item_aliases)) |refused| return refused;
@@ -269,6 +272,44 @@ fn checkItems(gpa: Allocator, field: []const u8, list: Value, props: []const Pro
                 const where = std.fmt.bufPrint(&where_buf, "{s}[{d}].", .{ field, i }) catch field;
                 return typeRefusal(where, key, spec);
             }
+        }
+    }
+    return null;
+}
+
+const Choice = struct { tool: []const u8, key: []const u8, err: []const u8, values: []const []const u8 };
+
+fn namesOf(comptime E: type) []const []const u8 {
+    const fields = std.meta.fieldNames(E);
+    comptime var out: [fields.len][]const u8 = undefined;
+    inline for (fields, 0..) |field, i| out[i] = field;
+    const final = out;
+    return &final;
+}
+
+pub const choices = [_]Choice{
+    .{ .tool = "emetgate_search", .key = "kinds", .err = "UnknownKind", .values = namesOf(search_v1.Kind) },
+};
+
+fn checkChoice(gpa: Allocator, name: []const u8, key: []const u8, value: Value) !?[]u8 {
+    for (choices) |choice| {
+        if (!eql(choice.tool, name) or !eql(choice.key, key)) continue;
+        const items: []const Value = switch (value) {
+            .array => |a| a.items,
+            .null => &.{},
+            else => (&value)[0..1],
+        };
+        for (items) |item| {
+            if (item == .string) {
+                const known = for (choice.values) |allowed| {
+                    if (eql(allowed, item.string)) break true;
+                } else false;
+                if (known) continue;
+                var shown = @min(item.string.len, 120);
+                while (shown > 0 and shown < item.string.len and (item.string[shown] & 0xC0) == 0x80) shown -= 1;
+                return try reply(gpa, choice.err, 2, "{s} has no {s} value \"{s}\"", .{ name, key, item.string[0..shown] }, null, .{});
+            }
+            return try reply(gpa, choice.err, 2, "{s} {s} holds a value that is not a string", .{ name, key }, null, .{});
         }
     }
     return null;

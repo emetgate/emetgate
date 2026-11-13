@@ -47,13 +47,17 @@ const cases = [_]Case{
     .{ .tool = "emetgate_list", .args = "{\"dir\":\"@/flat\"}", .budget = .list, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/big.ts\",\"line_start\":1,\"line_end\":6000}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/big.ts\",\"line_start\":1,\"line_end\":6000,\"nodes\":true}", .budget = .read_symbol, .cut = true },
+    .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/bigfn.ts\",\"line_start\":1,\"line_end\":20010}", .budget = .read_symbol, .cut = true },
+    .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/bigfn.ts\",\"line_start\":3,\"line_end\":20010}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/bigfn.ts\",\"symbol\":\"big\",\"nodes\":true}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/bigfn.ts\",\"symbol\":\"big\",\"detail\":\"full\"}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/bigfn.ts\",\"symbols\":[\"big\",\"small\"],\"detail\":\"full\"}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_read_symbol", .args = "{\"file\":\"@/big.ts\",\"symbols\":[" ++ symbolList(400) ++ "],\"detail\":\"full\"}", .budget = .read_symbol, .cut = true },
     .{ .tool = "emetgate_skeleton", .args = "{\"file\":\"@/big.ts\"}", .budget = .skeleton, .cut = true },
     .{ .tool = "emetgate_symbols", .args = "{\"file\":\"@/big.ts\"}", .budget = .symbols, .cut = false },
+    .{ .tool = "emetgate_symbols", .args = "{\"file\":\"@/big.ts\",\"detail\":\"full\"}", .budget = .symbols, .cut = true },
     .{ .tool = "emetgate_expand", .args = "{\"handle\":\"$H\"}", .budget = .expand, .cut = true },
+    .{ .tool = "emetgate_git", .args = "{\"sub\":\"diff\",\"path\":\"@/diffme.txt\",\"detail\":\"full\"}", .budget = .git, .cut = true },
     // Bounded by their own changes, which use reply_contract; flip `enforced`
     // when they land.
     .{ .tool = "emetgate_search", .args = "{\"pattern\":\"id=\"}", .budget = .search, .cut = true, .enforced = false },
@@ -101,6 +105,7 @@ const Fixture = struct {
         try self.build("bigfn.ts", 20_000, "  total += {d} * {d};\n", .{}, "export function big(): number {\n  let total = 0;\n", "  return total;\n}\nexport function small(): number {\n  return 1;\n}\n");
         try self.build("big.json", 6_000, "  \"k{d}\": {{ \"a\": {d}, \"b\": \"value\" }},\n", .{}, "{\n", "  \"end\": 0\n}\n");
         try self.build("min.json", 8_000, "\"k{d}\":{d},", .{}, "{", "\"end\":0}");
+        try self.build("diffme.txt", 20_000, "line {d} of {d}\n", .{}, "", "");
         try self.build("big.md", 1_500, "## Section {d}\n\nParagraph {d} of the document, long enough to matter.\n\n", .{}, "# Root\n\n", "");
         var name_buf: [64]u8 = undefined;
         for (0..35) |d| {
@@ -116,6 +121,7 @@ const Fixture = struct {
         errdefer testing.allocator.free(self.root);
         try git_fixture.initRepo(self.root);
         try git_fixture.commitInit(self.root, false);
+        try self.build("diffme.txt", 20_000, "changed line {d} of {d}\n", .{}, "", "");
         return self;
     }
 

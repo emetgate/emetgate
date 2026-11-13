@@ -106,7 +106,11 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_symbols",
         .read_only = true,
         .description = "Lists a source file's symbols.",
-        .props = &.{.{ .name = "file", .desc = "" }},
+        .props = &.{
+            .{ .name = "file", .desc = "" },
+            .{ .name = "within", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
+        },
     },
     .{
         .name = "emetgate_skeleton",
@@ -130,7 +134,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "nodes", .desc = "", .optional = true, .ty = "boolean" },
-            .{ .name = "detail", .desc = "\"full\" or \"budgeted\"", .optional = true },
+            .{ .name = "detail", .desc = "", .optional = true },
         },
     },
     .{
