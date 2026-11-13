@@ -103,7 +103,7 @@ def em5(ctx):
     check("x * 2" in r.body, "R4: after the context changed the body was not sent again: " + r.short())
 
 
-@scenario("EM9", "E1", "an unknown server flag is named in the error", xfail=UNOWNED)
+@scenario("EM9", "E1", "an unknown server flag is named in the error")
 def em9(ctx):
     root = ctx.fresh("small")
     p = ctx.run_exe(["mcp", "--bogus-flag"], root, input_text="", timeout=30)

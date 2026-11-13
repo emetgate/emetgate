@@ -409,8 +409,7 @@ def ex06(ctx):
 
 
 @scenario("EX08", "E1", "explore on a repository with a minified file answers within the call timeout",
-          slow=True, timeout=60,
-          xfail="explore indexing of a 15,000-function minified file is not named in the current fixes")
+          slow=True, timeout=60)
 def ex08(ctx):
     root = ctx.fixture("minjs")
     s = ctx.server(root, shared=True)

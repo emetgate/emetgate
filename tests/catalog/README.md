@@ -64,8 +64,7 @@ A scenario is marked `xfail` only when its fix is outside the current work:
 | concurrency and cancellation | EL4, EL5, EC3 |
 | the Low integrity label left by `--open-run` | EC5 |
 | hooks that fail open | EK3 |
-| explore on a minified file does not answer in 60 s | EX08 |
-| no fix named yet | ER4, EM5, EM9 |
+| no fix named yet | ER4, EM5 |
 
 Every other scenario is expected to pass. A failing one names, in brackets, the
 branch whose change it waits for.
