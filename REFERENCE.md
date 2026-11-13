@@ -642,7 +642,7 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 | `emetgate_move` | Move a top-level declaration, a C# type or a static C# member to another file or type; the kernel derives and checks every import and reference and commits source, target and users as one batch |
 | `emetgate_move_file` | Move or rename a TS, JS, Python or C# file and rewrite every import to and from it as one batch |
 | `emetgate_write_doc` | Verify, gate and commit a hash-checked write to one node of a non-code file: a JSON pointer's value, a Markdown section or a text line range; a file of a registered language is refused (`UseSymbolToolsForSource`); can commit together with a code edit in `emetgate_try_batch` |
-| `emetgate_read_file` | For one file, or up to 32 in one call: a JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any other text file, or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
+| `emetgate_read_file` | For one file, or up to 32 in one call: a JSON key tree or one pointer's value, a Markdown heading tree or one section, a line range of any text file (a range wins over `heading`, `pointer` and the default view), or (with `raw:true`) the file verbatim or a line range of it, source files included; confined to the repository |
 | `emetgate_list`, `emetgate_search` | Reads confined to the repository |
 | `emetgate_find` | Every place a literal text occurs in the project's files, from a prebuilt index (see Find) |
 | `emetgate_scan` | Measure one check expression against the repository, optionally within a `where` scope; writes nothing |
@@ -970,6 +970,13 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
 - **Any other text file**: `line_start`/`line_end` reads just that line range with its
   own hash, the `cat`/`sed -n` replacement; without them the file is returned whole, up
   to 16 KiB.
+- **Which view a read gets**: one order holds for every file type. A line range
+  (`line_start`/`line_end`) wins and returns those lines, in the same reply shape as for
+  any other file, also for `.md` and `.json` and also when `heading` or `pointer` is
+  given; next `heading` (Markdown) or `pointer` (JSON) returns that section or value;
+  otherwise the file gets its default view: the heading tree, the key tree, the outline
+  of a source file over 8 KiB, or the first 16 KiB. In `files`, an entry that names its
+  own `heading` or `pointer` and no range does not inherit a top-level range.
 - **Several files in one call**: `files` takes up to 32 entries, each a path or an
   object `{file, raw, pointer, heading, line_start, line_end, force}` whose fields
   override the same fields given at the top level; `file`, if also given, is read

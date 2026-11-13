@@ -182,7 +182,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Reads up to 32 files: .json key tree or pointer value; .md headings or heading section; else 16 KiB or lines.",
+        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files 16 KiB.",
         .props = &.{
             .{ .name = "file", .desc = "", .optional = true },
             .{ .name = "files", .desc = "", .optional = true, .ty = "array" },

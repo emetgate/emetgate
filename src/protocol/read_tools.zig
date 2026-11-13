@@ -83,13 +83,20 @@ pub const Options = struct {
     line_end: ?i64 = null,
 
     fn over(base: Options, value: Value) Options {
+        const pointer = tool_result.getString(value, "pointer");
+        const heading = tool_result.getString(value, "heading");
+        const line_start = tool_result.getInt(value, "line_start");
+        const line_end = tool_result.getInt(value, "line_end");
+        // A range wins over heading and pointer only when it was asked for this
+        // entry: an entry naming its own heading or pointer drops an inherited range.
+        const own_selector = (pointer != null or heading != null) and line_start == null and line_end == null;
         return .{
             .raw = tool_result.getBool(value, "raw") orelse base.raw,
             .force = tool_result.getBool(value, "force") orelse base.force,
-            .pointer = tool_result.getString(value, "pointer") orelse base.pointer,
-            .heading = tool_result.getString(value, "heading") orelse base.heading,
-            .line_start = tool_result.getInt(value, "line_start") orelse base.line_start,
-            .line_end = tool_result.getInt(value, "line_end") orelse base.line_end,
+            .pointer = pointer orelse base.pointer,
+            .heading = heading orelse base.heading,
+            .line_start = line_start orelse if (own_selector) null else base.line_start,
+            .line_end = line_end orelse if (own_selector) null else base.line_end,
         };
     }
 };
@@ -222,14 +229,16 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     if (looksBinary(bytes)) return error.BinaryFile;
     const force = options.force;
 
+    // One precedence for every file type: a line range wins, then heading
+    // (Markdown) or pointer (JSON), then the type's default view.
+    if (options.line_start != null or options.line_end != null) {
+        return renderRange(gpa, file, bytes, options.line_start, options.line_end, force, mirror, w, event);
+    }
     if (!options.raw and hasExtension(file, ".json")) {
         return renderJson(gpa, file, bytes, options.pointer, force, mirror, w, event);
     }
     if (!options.raw and hasExtension(file, ".md")) {
         return renderMarkdown(gpa, file, bytes, options.heading, force, mirror, w, event);
-    }
-    if (options.line_start != null or options.line_end != null) {
-        return renderRange(gpa, file, bytes, options.line_start, options.line_end, force, mirror, w, event);
     }
     if (profile != null and bytes.len > outline.threshold) {
         if (source) |s| {

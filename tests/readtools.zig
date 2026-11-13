@@ -307,6 +307,50 @@ test "read_file with raw skips the JSON key tree" {
     try testing.expect(std.mem.indexOf(u8, reply.text, "dependencies") != null);
 }
 
+test "read_file with a line range on a Markdown file returns those lines, not the heading tree, even with heading given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    inline for (.{ false, true }) |with_heading| {
+        var reply = if (with_heading)
+            try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .heading = "Other", .line_start = 5, .line_end = 7 })
+        else
+            try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.md", .line_start = 5, .line_end = 7 });
+        defer reply.deinit();
+        errdefer std.debug.print("reply: {s}\n", .{reply.text});
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(body.value.object.get("headings") == null);
+        try testing.expect(body.value.object.get("section") == null);
+        try testing.expectEqual(@as(i64, 5), body.value.object.get("start_line").?.integer);
+        try testing.expectEqual(@as(i64, 7), body.value.object.get("end_line").?.integer);
+        try testing.expect(body.value.object.get("hash") != null);
+        try testing.expect(body.value.object.get("file_hash") != null);
+        try testing.expectEqualStrings("## Setup\n\nsetup details\n", body.value.object.get("content").?.string);
+    }
+}
+
+test "read_file with a line range on a JSON file returns those lines, not the key tree, even with pointer given" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    inline for (.{ false, true }) |with_pointer| {
+        var reply = if (with_pointer)
+            try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .pointer = "/name", .line_start = 4, .line_end = 6 })
+        else
+            try callTool(runtime, "emetgate_read_file", .{ .file = "tests/fixtures/sample.json", .line_start = 4, .line_end = 6 });
+        defer reply.deinit();
+        errdefer std.debug.print("reply: {s}\n", .{reply.text});
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(body.value.object.get("keys") == null);
+        try testing.expect(body.value.object.get("value") == null);
+        try testing.expectEqual(@as(i64, 4), body.value.object.get("start_line").?.integer);
+        try testing.expectEqual(@as(i64, 6), body.value.object.get("end_line").?.integer);
+        try testing.expectEqualStrings("  \"dependencies\": {\n    \"express\": \"^4.0.0\"\n  },\n", body.value.object.get("content").?.string);
+    }
+}
+
 test "read_file with a line range returns just that range and its hash" {
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
@@ -1437,6 +1481,42 @@ test "read many: files returns each file under its own heading with its usual re
     try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(again.text, cfg).?));
     try testing.expectEqualStrings("unchanged", try sectionStatus(sectionOf(again.text, doc).?));
     try testing.expectEqualStrings("error", try sectionStatus(sectionOf(again.text, missing).?));
+}
+
+test "read many: a line range on a Markdown or JSON entry returns those lines, and an entry with its own heading does not inherit the top-level range" {
+    var repo = try ReadRepo.init(&.{
+        .{ "cfg.json", "{\n  \"name\": \"x\",\n  \"deps\": {\"a\": 1}\n}\n" },
+        .{ "doc.md", "# One\n\ntext one\n\n# Two\n\ntext two\n" },
+        .{ "other.md", "# Alpha\n\nalpha text\n\n# Beta\n\nbeta text\n" },
+    });
+    defer repo.deinit();
+    var b1: [512]u8 = undefined;
+    var b2: [512]u8 = undefined;
+    var b3: [512]u8 = undefined;
+    const cfg = repo.path(&b1, "cfg.json");
+    const doc = repo.path(&b2, "doc.md");
+    const other = repo.path(&b3, "other.md");
+
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const policy: server.Policy = .{ .root = repo.root };
+
+    var reply = try callToolServedPolicy(runtime, "emetgate_read_file", .{ .line_start = 2, .line_end = 3, .files = .{ .{ .file = doc, .line_start = 5, .line_end = 7 }, cfg, .{ .file = other, .heading = "Beta" } } }, policy);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    const doc_part = sectionOf(reply.text, doc).?;
+    try testing.expect(std.mem.indexOf(u8, doc_part, "\"start_line\":5") != null);
+    try testing.expect(std.mem.indexOf(u8, doc_part, "# Two\\n\\ntext two\\n") != null);
+    try testing.expect(std.mem.indexOf(u8, doc_part, "\"headings\"") == null);
+    const cfg_part = sectionOf(reply.text, cfg).?;
+    try testing.expect(std.mem.indexOf(u8, cfg_part, "\"start_line\":2") != null);
+    try testing.expect(std.mem.indexOf(u8, cfg_part, "\\\"name\\\": \\\"x\\\",\\n  \\\"deps\\\"") != null);
+    try testing.expect(std.mem.indexOf(u8, cfg_part, "\"keys\"") == null);
+    const other_part = sectionOf(reply.text, other).?;
+    try testing.expect(std.mem.indexOf(u8, other_part, "beta text") != null);
+    try testing.expect(std.mem.indexOf(u8, other_part, "alpha text") == null);
+    try testing.expect(std.mem.indexOf(u8, other_part, "\"start_line\"") == null);
 }
 
 test "read many: files over the reply cap are named as not sent, are not remembered as sent, and come in a later call" {
