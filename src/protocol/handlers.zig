@@ -17,6 +17,7 @@ const read_tools = @import("read_tools.zig");
 const sent_ledger = @import("../engine/sent_ledger.zig");
 const read_budget = @import("read_budget.zig");
 const read_cache = @import("read_cache.zig");
+const reply_contract = @import("reply_contract.zig");
 const raw_reply = @import("raw_reply.zig");
 const outline = @import("outline.zig");
 const search_v1 = @import("search_v1.zig");
@@ -275,14 +276,16 @@ fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSkeleton(gpa, io, runtime, root, file, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+    const offset = if (args) |a| tool_result.getInt(a, "offset") orelse 0 else 0;
+    renderSkeleton(gpa, io, runtime, root, file, force, offset, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, offset_arg: i64, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+    if (offset_arg < 0) return error.InvalidOffset;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const place = loaded.place;
@@ -296,11 +299,15 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     };
     const docs: ?doc_fold.Folded = if (whole) try doc_fold.fold(gpa, snapshot.profile, snapshot.tree, 0, @intCast(snapshot.source.len)) else null;
     defer if (docs) |d| d.deinit(gpa);
-    const text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
-    defer gpa.free(text);
+    const full_text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
+    defer gpa.free(full_text);
+    // The skeleton from byte `offset`, cut at a line end to the reply budget.
+    const from = reply_contract.charStart(full_text, @intCast(offset_arg));
+    const cut = reply_contract.cut(full_text[from..], reply_contract.room(.skeleton), .json);
+    const text = cut.kept;
     const hash = symbol.hashOf(text);
     if (mirror) |m| {
-        const key = try std.fmt.allocPrint(gpa, "skeleton:{s}", .{file});
+        const key = try std.fmt.allocPrint(gpa, "skeleton:{s}@{d}", .{ file, from });
         defer gpa.free(key);
         if (try m.seen(key, hash, file_hash, force)) |since| {
             event.chars_emetgate = 0;
@@ -313,7 +320,11 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items, if (docs) |d| d.spans else &.{});
-    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    if (whole and from == 0 and cut.whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    if (!cut.whole) {
+        const next = from + text.len;
+        try reply_contract.writeTrailer(w, "skeleton bytes {d}-{d}", .{ next, full_text.len }, "emetgate_skeleton", .{ .file = file, .offset = next });
+    }
 }
 
 fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize, ledger: ?*sent_ledger.Ledger) !ToolResult {
@@ -434,9 +445,11 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     if (nodes) {
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
         defer gpa.free(annotated);
+        const cut = LinesCut.of(snapshot.source, annotated, found.span.start, found.span.end, 0);
         try note.shown(snapshot.source, found.span.start, found.span.end, .dense);
-        event.chars_emetgate = annotated.len;
-        return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
+        event.chars_emetgate = cut.c.kept.len;
+        try wire.writeSymbolNodes(w, file, sym, found.hash, cut.c.kept);
+        return cut.trailer(w, file, .nodes, "");
     }
     if (folds) {
         const lines = try read_budget.Lines.init(gpa, snapshot.source);
@@ -447,9 +460,59 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         event.chars_emetgate = view.text.len;
         return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
     }
+    // detail:"full" sends the body unfolded, still within the reply budget.
+    const cut = LinesCut.of(snapshot.source, body, shown.start, shown.end, 0);
     try note.shown(snapshot.source, shown.start, shown.end, if (docs == null) .exact else .dense);
-    event.chars_emetgate = body.len;
-    try wire.writeSymbolBody(w, file, sym, found.hash, body, if (docs) |d| d.spans else &.{});
+    event.chars_emetgate = cut.c.kept.len;
+    try wire.writeSymbolBody(w, file, sym, found.hash, cut.c.kept, if (docs) |d| d.spans else &.{});
+    return cut.trailer(w, file, if (docs == null) .source else .folded, "");
+}
+
+/// A symbol's text (source, docs-folded or node-annotated) that starts at byte
+/// `start` of the source, cut to the read_symbol budget; `trailer` then names
+/// the call returning the lines left out.
+const LinesCut = struct {
+    c: reply_contract.Cut,
+    first: i64,
+    last: i64,
+    column: usize,
+
+    const Form = enum { source, folded, nodes };
+
+    fn of(source: []const u8, text: []const u8, start: usize, end: usize, used: usize) LinesCut {
+        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |nl| nl + 1 else 0;
+        return .{
+            .c = reply_contract.cut(text, reply_contract.room(.read_symbol) -| used, .json),
+            .first = @intCast(std.mem.count(u8, source[0..start], "\n") + 1),
+            .last = @intCast(std.mem.count(u8, source[0..@max(start, end -| 1)], "\n") + 1),
+            .column = start - line_start,
+        };
+    }
+
+    fn trailer(self: LinesCut, w: *Writer, file: []const u8, form: Form, also: []const u8) !void {
+        if (self.c.whole) return;
+        if (form == .folded) {
+            // Folded text has fewer lines than the source: resume at its start.
+            return reply_contract.writeTrailer(w, "the rest of lines {d}-{d}{s}", .{ self.first, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last });
+        }
+        if (self.c.split_line) {
+            if (form == .nodes) return reply_contract.writeTrailer(w, "the rest of lines {d}-{d} (line {d} is longer than the reply){s}", .{ self.first, self.last, self.first, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last });
+            const resume_at = self.column + self.c.kept.len;
+            return reply_contract.writeTrailer(w, "bytes {d}- of line {d} and lines {d}-{d}{s}", .{ resume_at, self.first, self.first + 1, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last, .offset = resume_at });
+        }
+        const next = self.first + @as(i64, @intCast(self.c.lines));
+        if (form == .nodes) return reply_contract.writeTrailer(w, "lines {d}-{d}{s}", .{ next, self.last, also }, "emetgate_read_symbol", .{ .file = file, .line_start = next, .line_end = self.last, .nodes = true });
+        return reply_contract.writeTrailer(w, "lines {d}-{d}{s}", .{ next, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = next, .line_end = self.last });
+    }
+};
+
+/// Approximate reply size of one entry of a symbols or range reply.
+fn entryCost(ref: []const u8, text: ?[]const u8) usize {
+    return 200 + 2 * ref.len + if (text) |t| reply_contract.encodedLen(t, .json) else 0;
+}
+
+fn utf8Head(text: []const u8, limit: usize) []const u8 {
+    return read_tools.utf8Prefix(text, limit);
 }
 
 fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
@@ -460,8 +523,17 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     const table = try snapshot.symbols();
     const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
     defer gpa.free(entries);
-    var annotated: usize = 0;
-    defer for (entries[0..annotated]) |entry| gpa.free(entry.body.?);
+    const refs = try gpa.alloc([]const u8, symbols.len);
+    defer gpa.free(refs);
+    for (symbols, 0..) |item, i| refs[i] = switch (item) {
+        .string => |s| s,
+        else => return tool_result.missing("symbols[{d}] (string)", .{i}),
+    };
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |t| gpa.free(t);
+        owned.deinit(gpa);
+    }
     var views: usize = 0;
     defer for (entries[0..views]) |entry| if (entry.folded) |folded| folded.view.deinit(gpa);
     var lines: ?read_budget.Lines = null;
@@ -471,23 +543,40 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         for (folded_docs.items) |d| d.deinit(gpa);
         folded_docs.deinit(gpa);
     }
+    const room = reply_contract.room(.read_symbol);
+    var used: usize = 0;
     var chars: usize = 0;
+    var shown_count: usize = symbols.len;
+    var first_cut: ?LinesCut = null;
+    var cut_form: LinesCut.Form = .source;
     const covered = try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force);
-    for (symbols, 0..) |item, i| {
-        const sym = switch (item) {
-            .string => |s| s,
-            else => return tool_result.missing("symbols[{d}] (string)", .{i}),
-        };
+    for (refs, 0..) |sym, i| {
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
         const found = try table.item(ref);
         const shown = shownSpan(found);
         if (nodes) {
             const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
-            entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
+            try owned.append(gpa, text);
+            const cost = entryCost(sym, text);
+            if (used + cost > room and i != 0) {
+                shown_count = i;
+                break;
+            }
+            var body: []const u8 = text;
+            if (used + cost > room) {
+                const cut = LinesCut.of(snapshot.source, text, found.span.start, found.span.end, entryCost(sym, null));
+                first_cut = cut;
+                cut_form = .nodes;
+                body = cut.c.kept;
+                shown_count = 1;
+            }
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = body, .nodes = true };
+            views = i + 1;
             try reading.note(loaded.place.rel).shown(snapshot.source, found.span.start, found.span.end, .dense);
-            annotated = i + 1;
-            chars += text.len;
+            used += entryCost(sym, body);
+            chars += body.len;
+            if (first_cut != null) break;
             continue;
         }
         try folded_docs.ensureUnusedCapacity(gpa, 1);
@@ -495,6 +584,23 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
         const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
         const folds = reading.folds(body.len);
+        // Decide whether the entry fits before the mirror records it as sent.
+        const cost = if (folds) entryCost(sym, null) + reading.budget + reading.budget / 4 else entryCost(sym, body);
+        if (used + cost > room and i != 0) {
+            shown_count = i;
+            break;
+        }
+        if (used + cost > room and !folds) {
+            const cut = LinesCut.of(snapshot.source, body, shown.start, shown.end, entryCost(sym, null));
+            first_cut = cut;
+            cut_form = if (docs == null) .source else .folded;
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = cut.c.kept, .docs = if (docs) |d| d.spans else &.{} };
+            views = i + 1;
+            try reading.note(loaded.place.rel).shown(snapshot.source, shown.start, shown.end, .dense);
+            chars += cut.c.kept.len;
+            shown_count = 1;
+            break;
+        }
         var unchanged = covered;
         if (!covered) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, sym, folds or docs != null);
@@ -503,20 +609,41 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         };
         entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body, .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
-        if (unchanged) continue;
+        if (unchanged) {
+            used += entryCost(sym, null);
+            continue;
+        }
         try reading.note(loaded.place.rel).shown(snapshot.source, shown.start, shown.end, if (folds or docs != null) .dense else .exact);
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body orelse found.node, reading.budget);
             entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
             chars += view.text.len;
+            used += entryCost(sym, view.text);
             continue;
         }
         chars += body.len;
+        used += cost;
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSymbolBodies(w, file, entries);
+    try wire.writeSymbolBodies(w, file, entries[0..shown_count]);
+    const rest = refs[shown_count..];
+    var rest_buf: [256]u8 = undefined;
+    const rest_text = if (rest.len == 0) "" else std.fmt.bufPrint(&rest_buf, "{d} symbol(s) from {s}", .{ rest.len, utf8Head(rest[0], 120) }) catch "";
+    if (first_cut) |cut| {
+        var also_buf: [512]u8 = undefined;
+        const also = if (rest.len == 0) "" else std.fmt.bufPrint(&also_buf, " of {s}; then {s}", .{ utf8Head(refs[0], 120), rest_text }) catch "";
+        return cut.trailer(w, file, cut_form, also);
+    }
+    if (rest.len != 0) {
+        try reply_contract.writeTrailer(w, "{s}", .{rest_text}, "emetgate_read_symbol", .{
+            .file = file,
+            .symbols = rest,
+            .nodes = if (nodes) true else null,
+            .detail = if (reading.detail == .full) @as(?[]const u8, "full") else null,
+        });
+    }
 }
 
 fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
@@ -531,10 +658,12 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         const region = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, region);
         defer gpa.free(annotated);
+        const cut = LinesCut.of(snapshot.source, annotated, region.start, region.end, 0);
         try reading.note(loaded.place.rel).shown(snapshot.source, region.start, region.end, .dense);
-        event.chars_emetgate = annotated.len;
+        event.chars_emetgate = cut.c.kept.len;
         event.chars_fullfile = snapshot.source.len;
-        return wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), annotated);
+        try wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), cut.c.kept);
+        return cut.trailer(w, file, .nodes, "");
     }
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
@@ -561,39 +690,88 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         for (folded_docs.items) |d| d.deinit(gpa);
         folded_docs.deinit(gpa);
     }
+    const room = reply_contract.room(.read_symbol);
+    var used: usize = 0;
     var chars: usize = 0;
+    var shown_count: usize = matched.len;
+    var first_cut: ?LinesCut = null;
+    var cut_form: LinesCut.Form = .source;
+    var stop_line: i64 = 0;
     for (matched, 0..) |found, i| {
         ref_text[i] = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
         named = i + 1;
+        const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
+        const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
         try folded_docs.ensureUnusedCapacity(gpa, 1);
         const docs = try reading.foldDocs(gpa, snapshot, found.declaration.start, found.declaration.end);
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
         const text = if (docs) |d| d.text else snapshot.source[found.declaration.start..found.declaration.end];
         const folds = reading.folds(text.len);
+        // Decide whether the entry fits before the mirror records it as sent.
+        const cost = if (folds) entryCost(ref_text[i], null) + reading.budget + reading.budget / 4 else entryCost(ref_text[i], text);
+        if (used + cost > room and i != 0) {
+            shown_count = i;
+            stop_line = @intCast(start_line);
+            break;
+        }
+        if (used + cost > room and !folds) {
+            const cut = LinesCut.of(snapshot.source, text, found.declaration.start, found.declaration.end, entryCost(ref_text[i], null));
+            first_cut = cut;
+            cut_form = if (docs == null) .source else .folded;
+            entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = cut.c.kept, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
+            views = i + 1;
+            try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, .dense);
+            chars += cut.c.kept.len;
+            shown_count = 1;
+            break;
+        }
         var unchanged = whole_read;
         if (!whole_read) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, ref_text[i], folds or docs != null);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         };
-        const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
-        const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
         entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
-        if (unchanged) continue;
+        if (unchanged) {
+            used += entryCost(ref_text[i], null);
+            continue;
+        }
         try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, if (folds or docs != null) .dense else .exact);
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
             entries[i].folded = .{ .view = view, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
             chars += view.text.len;
+            used += entryCost(ref_text[i], view.text);
             continue;
         }
         chars += text.len;
+        used += cost;
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries);
+    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries[0..shown_count]);
+    if (first_cut) |cut| {
+        if (shown_count < matched.len or cut.last < end) {
+            var also_buf: [96]u8 = undefined;
+            const also = std.fmt.bufPrint(&also_buf, "; the range runs on to line {d}", .{end}) catch "";
+            return cut.trailer(w, file, cut_form, also);
+        }
+        return cut.trailer(w, file, cut_form, "");
+    }
+    if (shown_count < matched.len) {
+        var rest_buf: [256]u8 = undefined;
+        const rest = std.fmt.bufPrint(&rest_buf, "{d} of {d}, from line {d}", .{ matched.len - shown_count, matched.len, stop_line }) catch "";
+        // A later symbol that starts after the requested start continues the
+        // same symbol view; otherwise the raw lines make progress.
+        const from = @max(stop_line, start);
+        if (from > start) {
+            try reply_contract.writeTrailer(w, "the symbols {s}", .{rest}, "emetgate_read_symbol", .{ .file = file, .line_start = from, .line_end = end, .detail = if (reading.detail == .full) @as(?[]const u8, "full") else null });
+        } else {
+            try reply_contract.writeTrailer(w, "the symbols {s}", .{rest}, "emetgate_read_file", .{ .file = file, .line_start = from, .line_end = end });
+        }
+    }
 }
 
 fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {

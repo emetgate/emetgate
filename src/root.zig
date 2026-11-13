@@ -202,6 +202,7 @@ pub const context_epoch = @import("protocol/context_epoch.zig");
 pub const outline = @import("protocol/outline.zig");
 pub const read_cache = @import("protocol/read_cache.zig");
 pub const raw_reply = @import("protocol/raw_reply.zig");
+pub const reply_contract = @import("protocol/reply_contract.zig");
 pub const agent_ledger = @import("agent/ledger.zig");
 pub const agent_tokcount = @import("agent/tokcount.zig");
 pub const agent_evict = @import("agent/evict.zig");

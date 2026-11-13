@@ -192,6 +192,7 @@ pub const context_epoch = src.context_epoch;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
+pub const reply_contract = src.reply_contract;
 pub const agent_ledger = src.agent_ledger;
 pub const agent_tokcount = src.agent_tokcount;
 pub const agent_evict = src.agent_evict;
@@ -339,6 +340,7 @@ test {
     _ = @import("tests/observability.zig");
     _ = @import("tests/recovery_hints.zig");
     _ = @import("tests/readtools.zig");
+    _ = @import("tests/reply_contract.zig");
     _ = @import("tests/short_path_jail.zig");
     _ = @import("tests/read_budget.zig");
     _ = @import("tests/search.zig");

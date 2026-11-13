@@ -978,14 +978,15 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
 - **Markdown**: `emetgate_read_file` defaults to a heading tree (heading, level, line,
   hash); `heading` reads one section, including its nested subsections.
 - **Any other text file**: `line_start`/`line_end` reads just that line range with its
-  own hash, the `cat`/`sed -n` replacement; without them the file is returned whole, up
-  to 16 KiB.
+  own hash, the `cat`/`sed -n` replacement; without them the file is returned from its
+  start, up to the reply budget (see Reply contract).
 - **Which view a read gets**: one order holds for every file type. A line range
   (`line_start`/`line_end`) wins and returns those lines, in the same reply shape as for
   any other file, also for `.md` and `.json` and also when `heading` or `pointer` is
   given; next `heading` (Markdown) or `pointer` (JSON) returns that section or value;
   otherwise the file gets its default view: the heading tree, the key tree, the outline
-  of a source file over 8 KiB, or the first 16 KiB. In `files`, an entry that names its
+  of a source file over 8 KiB (with `raw:true`, the text itself), or the file from its
+  start. In `files`, an entry that names its
   own `heading` or `pointer` and no range does not inherit a top-level range.
 - **Several files in one call**: `files` takes up to 32 entries, each a path or an
   object `{file, raw, pointer, heading, line_start, line_end, force}` whose fields
@@ -994,8 +995,34 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   get alone, a file that fails as its own error reply in its place. The reply is capped
   at 64 KiB: a file that would push it over is left out, and a last line
   `{"status":"partial","not_sent":[...],"fix":...}` names every such file and says to
-  read it in another call, alone or by line range. A file left out is not remembered
+  read it in another call, alone or by line range, followed by the trailer line below
+  whose call is the same one narrowed to those files. A file left out is not remembered
   as sent.
+- **Reply contract**: no read reply is unbounded. One table in
+  `src/protocol/reply_contract.zig` gives each read tool its budget in characters
+  (`emetgate_read_file` 24,000 per file and 64 KiB for `files`, `emetgate_read_symbol`,
+  `emetgate_skeleton` and `emetgate_expand` 24,000, `emetgate_list` and
+  `emetgate_symbols` 16,000). A view over its budget is cut at a line end, and only a
+  single line longer than the budget is cut inside it. Whatever was cut is named on one
+  last line with the exact call that returns the next part:
+  `[left out: lines 5001-400000 (20537812 bytes); continue with emetgate_read_file {"file":"huge.log","line_start":5001,"line_end":400000}]`.
+  The JSON header before it then says `"status":"partial"`. Where a line range cannot
+  resume a view, the call carries `offset`: a byte offset into `line_start`'s line, into
+  a pointer's value or a heading's section, the first row of a key, heading or outline
+  tree (`emetgate_read_file`), a byte offset into the skeleton (`emetgate_skeleton`) or
+  into the stashed body (`emetgate_expand`), or the first entry of a listing
+  (`emetgate_list`); `tools/list` declares `offset` on `emetgate_read_file` only, to
+  stay within its size, and the other three accept it as the trailer writes it.
+  `emetgate_read_symbol` with `nodes:true`, with `detail:"full"`,
+  with `symbols` or with a line range stops at the budget too, and continues with the
+  next lines (`nodes:true`), the remaining `symbols`, or the raw lines of a symbol cut
+  inside its body. `emetgate_list` returns every path when they fit; a larger folder
+  comes back one level deep, with `total`, each subfolder and the number of files below
+  it, then the files directly in the folder, paged by `offset`; a subfolder is listed by
+  calling again with it as `dir`. `tests/reply_contract.zig` calls every read-only tool
+  of `tools/list` on a fixture with a 20 MB file, a minified file, a 5,000-file tree and
+  large JSON and Markdown files, checks each reply against its budget and the trailer,
+  and makes the trailer's call; a read-only tool without a case there fails it.
 - **Reply compaction (off by default, `emetgate mcp --compact` turns it on).** By
   default every read reply comes back whole. With `--compact`, a successful reply over
   1,200 characters from `emetgate_search`, `emetgate_explore`, `emetgate_evidence`,

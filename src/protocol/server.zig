@@ -194,7 +194,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_read_file",
         .read_only = true,
-        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files 16 KiB.",
+        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files from the top.",
         .props = &.{
             .{ .name = "file", .desc = "", .optional = true },
             .{ .name = "files", .desc = "", .optional = true, .ty = "array" },
@@ -204,12 +204,13 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
         .name = "emetgate_list",
         .read_only = true,
-        .description = "Lists up to 2000 tracked files under dir.",
+        .description = "Lists files under dir.",
         .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
     },
     .{
@@ -581,8 +582,9 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
             (if (stash.find(h)) |entry| fileRoot(gpa, io, policy.root, entry.targets) else std.mem.zeroes(ledger_mod.Hash))
         else
             std.mem.zeroes(ledger_mod.Hash);
-        const exp = try compact_mod.expand(gpa, stash, handle, current, file);
-        if (exp.stale and file == null) {
+        const offset = tool_result.getInt(args, "offset") orelse 0;
+        const exp = try compact_mod.expandPage(gpa, stash, handle, current, file, @intCast(@max(offset, 0)));
+        if (exp.stale and file == null and offset == 0) {
             if (compact_mod.parseHandle(handle)) |h| {
                 if (stash.find(h)) |entry| {
                     if (entry.tool.len != 0) {

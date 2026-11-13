@@ -9,6 +9,7 @@ const Runtime = @import("emetgate").runtime.Runtime;
 const outline_mod = @import("emetgate").outline;
 const agent_ledger = @import("emetgate").agent_ledger;
 const agent_compact = @import("emetgate").agent_compact;
+const reply_contract = @import("emetgate").reply_contract;
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -116,7 +117,17 @@ test "read_file returns the outline of a source file over the threshold, with li
     const runtime = try Runtime.create(testing.allocator);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    for ([_]bool{ false, true }) |raw| {
+    {
+        // raw:true asks for the text itself, not the outline.
+        var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true });
+        defer reply.deinit();
+        try testing.expect(!reply.is_error);
+        var body = try reply.payload();
+        defer body.deinit();
+        try testing.expect(body.value.object.get("outline") == null);
+        try testing.expect(std.mem.startsWith(u8, source, body.value.object.get("content").?.string));
+    }
+    for ([_]bool{false}) |raw| {
         var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = raw });
         defer reply.deinit();
         try testing.expect(!reply.is_error);
@@ -436,10 +447,19 @@ test "read_file caps a large file and says it was truncated" {
     defer body.deinit();
     const content = body.value.object.get("content").?.string;
     try testing.expect(body.value.object.get("truncated").?.bool);
-    try testing.expect(content.len <= 16 * 1024);
+    try testing.expect(reply.text.len <= reply_contract.budget(.read_file));
     try testing.expect(content.len > 0);
+    try testing.expect(content[content.len - 1] == '\n');
     try testing.expect(std.mem.startsWith(u8, whole, content));
     try testing.expectEqual(@as(i64, @intCast(whole.len)), body.value.object.get("bytes").?.integer);
+    // The rest is named with the line range that returns it.
+    const next = std.mem.count(u8, content, "\n") + 1;
+    var expected_buf: [256]u8 = undefined;
+    const expected = try std.fmt.bufPrint(&expected_buf, "continue with emetgate_read_file {{\"file\":", .{});
+    const trailer = reply_contract.findTrailer(reply.text).?;
+    try testing.expect(std.mem.indexOf(u8, trailer, expected) != null);
+    var at_buf: [64]u8 = undefined;
+    try testing.expect(std.mem.indexOf(u8, trailer, try std.fmt.bufPrint(&at_buf, "\"line_start\":{d},", .{next})) != null);
 }
 
 test "read tools refuse a path outside the repo" {
@@ -1543,7 +1563,11 @@ test "read many: files over the reply cap are named as not sent, are not remembe
     try testing.expect(first.text.len <= read_tools.max_many_bytes + 1024);
     try testing.expect(sectionOf(first.text, paths[0]) != null);
     try testing.expect(sectionOf(first.text, paths[4]) == null);
-    const trimmed = std.mem.trimEnd(u8, first.text, "\n");
+    // The last line is the trailer naming the call for the files not sent;
+    // the line before it is the not_sent object.
+    const trailer = reply_contract.findTrailer(first.text).?;
+    try testing.expect(std.mem.indexOf(u8, trailer, "continue with emetgate_read_file {\"files\":[") != null);
+    const trimmed = std.mem.trimEnd(u8, first.text[0..std.mem.lastIndexOf(u8, first.text, trailer).?], "\n");
     const tail_at = std.mem.lastIndexOfScalar(u8, trimmed, '\n').?;
     var tail = try std.json.parseFromSlice(Value, testing.allocator, trimmed[tail_at + 1 ..], .{});
     defer tail.deinit();
