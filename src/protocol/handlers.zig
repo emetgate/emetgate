@@ -1,6 +1,7 @@
 const std = @import("std");
 const commit_plan = @import("../platform/commit_plan.zig");
 const commit_group = @import("../platform/commit_group.zig");
+const change_undo = @import("../platform/change_undo.zig");
 const commit_refusal = @import("../platform/commit_refusal.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
@@ -988,6 +989,33 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .allow_repo_memory = policy.allow_repo_memory,
     });
     defer result.deinit(gpa);
+    return writeCommitResult(gpa, io, root, result, w, event);
+}
+
+fn commitAdmission(gpa: Allocator, io: std.Io, message: []const u8, policy: Policy, event: *telemetry.Event) !?ToolResult {
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const refused = admissionInto(gpa, io, message, policy, &buffer.writer, event) catch |err| blk: {
+        if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
+        buffer.clearRetainingCapacity();
+        try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
+        break :blk true;
+    };
+    if (!refused) return null;
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
+}
+
+fn admissionInto(gpa: Allocator, io: std.Io, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    try commit_message.check(message);
+    const root = try repo.servedRoot(gpa, io, policy.root);
+    defer gpa.free(root);
+    const result = (try commit_group.admit(gpa, io, root, message)) orelse return false;
+    defer result.deinit(gpa);
+    return writeCommitResult(gpa, io, root, result, w, event);
+}
+
+fn writeCommitResult(gpa: Allocator, io: std.Io, root: []const u8, result: commit_group.Result, w: *Writer, event: *telemetry.Event) !bool {
     var js: std.json.Stringify = .{ .writer = w };
     switch (result) {
         .committed => |c| {
@@ -1274,7 +1302,18 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     var failed: ?[]const u8 = null;
     var made_branch = false;
     var before: ?HeadBefore = null;
-    if (branch) |name| {
+    const committed_with_edits = policy.commit and edits != null;
+    const separate: ?[]const u8 = if (committed_with_edits) null else message;
+    if (separate) |text| if (try commitAdmission(gpa, io, text, policy, event)) |refused| {
+        defer gpa.free(refused.text);
+        try changeStep(arena, &js, "commit", refused.text);
+        failed = "commit";
+        if (edits != null) {
+            try js.objectField("on_disk");
+            try js.write(edits_not_written);
+        }
+    };
+    if (failed == null) if (branch) |name| {
         before = try headBefore(arena, io, policy.root);
         const reply = try git_write.callGitWrite(gpa, io, try gitArgs(arena, &.{ "switch", "-c", name }), event, policy.root, policy.open_run);
         defer gpa.free(reply.text);
@@ -1284,10 +1323,12 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
             try js.objectField("fix");
             try js.write(try std.fmt.allocPrint(arena, "the branch was not created (see branch); if {s} already exists, switch to it with emetgate_git_write args [\"switch\", \"{s}\"] and resend without branch, or pick another name", .{ name, name }));
         }
-    }
+    };
     var edits_written = false;
+    var undo: ?change_undo.Snapshot = null;
     if (failed == null) if (edits) |list| {
         const root = policy.root orelse ".";
+        if (separate != null) undo = try change_undo.take(arena, io, try repo.servedRoot(arena, io, policy.root), try editedFiles(arena, list));
         var batch: std.json.ObjectMap = .empty;
         try batch.put(arena, "edits", if (policy.known_files) |known| try withKnownHashes(arena, io, root, list, known) else list);
         if (policy.commit) if (getString(arguments, "message") orelse message) |text| try batch.put(arena, "message", .{ .string = text });
@@ -1302,18 +1343,26 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         if (!reply.is_error) if (policy.map_session) |session| try writeUnreached(arena, io, &js, session, root, list);
         if (reply.is_error and made_branch) try undoBranch(arena, io, &js, policy.root, branch.?, before);
     };
-    const committed_with_edits = policy.commit and edits != null;
-    if (failed == null and !committed_with_edits) if (message) |text| {
+    if (failed == null) if (separate) |text| {
         const made = try commitReply(gpa, io, runtime, text, policy, event, true);
         defer gpa.free(made.text);
         try changeStep(arena, &js, "commit", made.text);
         if (made.is_error) failed = "commit";
         if (made.is_error and edits_written) {
-            // The edits step already wrote its files; only the commit was refused.
             try js.objectField("on_disk");
-            try js.write("the edits are written to the work tree; the commit was refused, so they are not committed");
-            event.disk = "edits written, commit refused";
+            if (undo) |snapshot| {
+                if (change_undo.restore(gpa, arena, io, snapshot)) |_| {
+                    try js.write(edits_undone);
+                } else |err| {
+                    try js.write(try std.fmt.allocPrint(arena, "the edits are written to the work tree; the commit was refused and undoing the edits failed ({s}), so they are on disk but not committed", .{@errorName(err)}));
+                    event.disk = "edits written, commit refused";
+                }
+            } else {
+                try js.write("the edits are written to the work tree; the commit was refused, so they are not committed");
+                event.disk = "edits written, commit refused";
+            }
         }
+        if (made.is_error and made_branch and event.disk == null) try undoBranch(arena, io, &js, policy.root, branch.?, before);
     };
     if (branch != null or message != null) try writeAfter(gpa, io, &js, policy);
     try js.objectField("status");
@@ -1324,6 +1373,17 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+const edits_not_written = "the commit was refused before any edit was written, so the edits were not kept: the work tree is as it was before the call";
+const edits_undone = "the commit was refused, so the edits were not kept: every file this call wrote is back as it was before the call";
+
+fn editedFiles(arena: Allocator, list: Value) ![]const []const u8 {
+    var files: std.ArrayList([]const u8) = .empty;
+    for (list.array.items) |item| {
+        try files.append(arena, getString(item, "file") orelse continue);
+    }
+    return files.items;
 }
 
 const HeadBefore = struct {

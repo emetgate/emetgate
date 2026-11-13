@@ -183,26 +183,82 @@ test "change atomic: a branch that already exists stops the call with a fix that
     try testing.expect(reply.has("switch"));
 }
 
-test "change atomic: when a message rule refuses the commit after the edits were written, the reply and footer say the edits are on disk" {
+test "change atomic: a commit message a rule refuses stops the call before any edit is written, and the reply says the edits were not kept" {
     var repo = try Repo.init(&.{});
     defer repo.deinit();
-    const id = try memory.remember(gpa, testing.io, repo.root_abs, .project, "no WIP commits", true, "message:forbid:WIP", null);
+    const id = try memory.remember(gpa, testing.io, repo.root_abs, .project, "signed", true, "message:require:Signed-off-by:", null);
     gpa.free(id);
     const app = try repo.path("src\\app.js");
     defer gpa.free(app);
 
     var reply = try repo.call(.{ .edits = .{
         .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
-    }, .commit = "WIP swap" }, green);
+    }, .commit = "no signoff" }, green);
     defer reply.deinit();
     errdefer std.debug.print("reply: {s}\n", .{reply.text});
     try testing.expect(reply.is_error);
     try testing.expect(reply.has("\"stopped_at\":\"commit\""));
-    try testing.expect(reply.has("\"on_disk\":\"the edits are written"));
-    try testing.expect(reply.has("edits written, commit refused"));
-    try testing.expect(!reply.has("disk untouched"));
-    try repo.expectFile("src/app.js", "export function total(a, b) {\n  return b + a;\n}\n");
+    try testing.expect(reply.has("the edits were not kept"));
+    try testing.expect(!reply.has("edits written, commit refused"));
+    try repo.expectFile("src/app.js", app_js);
     try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "init");
+    try repo.expectGit(&.{ "status", "--porcelain", "--", "src" }, "");
+}
+
+test "change atomic: a branch and a commit message a rule refuses leave HEAD on the branch it was on" {
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+    const start = try repo.gitText(&.{ "rev-parse", "--abbrev-ref", "HEAD" });
+    defer gpa.free(start);
+    const id = try memory.remember(gpa, testing.io, repo.root_abs, .project, "no WIP commits", true, "message:forbid:WIP", null);
+    gpa.free(id);
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+
+    var reply = try repo.call(.{ .branch = "feature/y", .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    }, .commit = "WIP swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(reply.has("the edits were not kept"));
+    try repo.expectFile("src/app.js", app_js);
+    try repo.expectGit(&.{ "rev-parse", "--abbrev-ref", "HEAD" }, start);
+    try repo.expectGit(&.{ "branch", "--list", "feature/y" }, "");
+}
+
+test "change atomic: a commit refused after the edits were written puts every file back and leaves no receipt behind" {
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+    const id = try memory.remember(gpa, testing.io, repo.root_abs, .project, "no eval in src", true, "forbid:eval", "src/");
+    gpa.free(id);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/outside.js", .data = "eval('1');\n" });
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const made = try repo.path("src\\made.js");
+    defer gpa.free(made);
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+        .{ .file = made, .content = "export const made = 1;\n" },
+    }, .commit = "swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(reply.has("\"stopped_at\":\"commit\""));
+    try testing.expect(reply.has("the edits were not kept"));
+    try testing.expect(reply.has("back as it was before the call"));
+    try testing.expect(!reply.has("edits written, commit refused"));
+    try repo.expectFile("src/app.js", app_js);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/made.js", .{}));
+    try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "init");
+    try repo.expectGit(&.{ "status", "--porcelain", "--", "src/app.js", "src/made.js" }, "");
+    var receipts = try repo.tmp.dir.openDir(testing.io, "repo/.emetgate/receipts", .{ .iterate = true });
+    defer receipts.close(testing.io);
+    var it = receipts.iterate();
+    while (try it.next(testing.io)) |entry| {
+        try testing.expect(!std.mem.endsWith(u8, entry.name, ".json"));
+    }
 }
 
 test "change atomic: legacy emetgate_write refuses to overwrite an existing file without its file_hash, and accepts it with the hash" {
