@@ -121,8 +121,8 @@
     {
       "id": "SC1-symbols-never-compact",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
-      "to": "    _ = .{ full, budget };",
+      "from": "    if (page == null and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
+      "to": "    _ = budget;",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -130,8 +130,8 @@
     {
       "id": "SC2-symbols-compact-ignores-detail-full",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len",
-      "to": "    if ((full or !full) and table.symbols.len",
+      "from": "    if (page == null and table.symbols.len",
+      "to": "    if ((page == null or page != null) and table.symbols.len",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -301,8 +301,8 @@
     {
       "id": "RB7-range-inside-a-large-declaration-not-focused",
       "file": "src/protocol/handlers.zig",
-      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
-      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
+      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            view = try read_budget.focus(",
+      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            view = try read_budget.focus(",
       "kills": [
         "a line range inside a declaration over the budget returns the requested lines and names the rest"
       ]
@@ -5205,10 +5205,10 @@
     {
       "id": "GT5-output-line-limit-removed",
       "file": "src/protocol/git_tools.zig",
-      "from": "if (kept.items.len < max_output_lines) try kept.append(gpa, line);",
-      "to": "try kept.append(gpa, line);",
+      "from": "    const byte_budget = opts.budget -| stat_used;\n    const max_lines: usize = if (opts.detail == .full) max_output_lines else std.math.maxInt(usize);",
+      "to": "    const byte_budget = if (opts.detail == .full) std.math.maxInt(usize) else opts.budget -| stat_used;\n    const max_lines: usize = std.math.maxInt(usize);",
       "kills": [
-        "git diff full caps raw output at the line limit and marks it truncated"
+        "git diff full pages raw output under the reply budget and names the next line"
       ]
     },
     {
@@ -11744,7 +11744,9 @@
       "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "kills": [
         "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk"
-      ]
+      ],
+      "expect_status": "survived",
+      "note": "no test tells a file read from the index from one streamed from disk; both paths find the match"
     },
     {
       "id": "PF1-stamp-reads-the-creation-time",
@@ -16506,8 +16508,7 @@
       "from": "        if (std.mem.eql(u8, tool, name)) return true;",
       "to": "        _ = tool;\n        _ = name;\n        return true;",
       "kills": [
-        "find after write: the read only tools are told apart from every other tool",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+        "find after write: the read only tools are told apart from every other tool"
       ]
     },
     {
