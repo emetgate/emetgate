@@ -65,6 +65,7 @@ pub const Policy = struct {
     cache: cache_gc.Flags = .{},
     tool_prefix: []const u8 = "",
     legacy_tools: bool = false,
+    explore_mode: map_tools.ExploreMode = .full,
 
     /// Forget what this session has shown the model, as after the client
     /// compacted its context. No-op without a ledger.

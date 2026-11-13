@@ -44,7 +44,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--test-scoped <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command> | --detect-test] [--test-scoped <command>] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools] [--compact]
+    \\       emetgate mcp [--test <command> | --detect-test] [--test-scoped <command>] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools] [--compact] [--explore-mode (full | dense)]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++
@@ -199,7 +199,9 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
-        var policy = server.parsePolicy(args[2..]) orelse exitWithUsage();
+        const split = (try emetgate.map_tools.splitExploreMode(init.arena.allocator(), args[2..])) orelse exitWithUsage();
+        var policy = server.parsePolicy(split.rest) orelse exitWithUsage();
+        policy.explore_mode = split.mode;
         if (policy.open_run) policy.commit_guard_exe = std.process.executablePathAlloc(init.io, runtime.gpa) catch null;
         defer if (policy.commit_guard_exe) |exe| runtime.gpa.free(exe);
         try server.serve(runtime.gpa, init.io, runtime, out, policy, init.environ_map);

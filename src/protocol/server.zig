@@ -393,6 +393,7 @@ pub const Served = struct {
         self.search.start();
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
+            ms.explore_mode = policy.explore_mode;
             ms.start();
         }
         if (self.find_session) |fs| fs.start();
