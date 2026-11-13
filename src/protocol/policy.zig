@@ -30,6 +30,7 @@ pub const Policy = struct {
     no_typecheck: bool = false,
     allow_repo_config: bool = false,
     detect_test: bool = false,
+    allow_unverified: bool = false,
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
@@ -135,6 +136,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (std.mem.trim(u8, command, " \t").len == 0) return null;
             policy.test_scoped_command = command;
+        } else if (std.mem.eql(u8, arg, "--allow-unverified")) {
+            if (policy.allow_unverified) return null;
+            policy.allow_unverified = true;
         } else if (std.mem.eql(u8, arg, "--detect-test")) {
             if (policy.detect_test) return null;
             policy.detect_test = true;

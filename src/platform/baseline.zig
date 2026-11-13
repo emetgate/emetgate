@@ -15,7 +15,6 @@ const Allocator = std.mem.Allocator;
 pub const Note = struct {
     failing: bool = false,
     unverified: bool = false,
-    skipped: bool = false,
     debt: bool = false,
     regressed: bool = false,
     buf: [600]u8 = undefined,
@@ -54,7 +53,12 @@ pub const Note = struct {
     }
 };
 
+/// Set from --allow-unverified: a test or typecheck command that cannot start lets
+/// the edit land marked unverified instead of refusing it.
+pub var allow_unverified: bool = false;
+
 pub const unverified_prefix = "the test command could not run, so no test judged this edit: ";
+pub const typecheck_unverified_prefix = "the typecheck command could not run, so no typecheck judged this edit: ";
 pub const same_failures = "the same failures were there before this edit; each one's output is in failures";
 
 pub const Change = struct {
@@ -70,23 +74,14 @@ pub const Failures = struct {
     cases: ?[]const test_results.Case = null,
 };
 
-pub fn inert(rel: []const u8) bool {
-    const base = std.fs.path.basename(rel);
-    if (std.mem.startsWith(u8, base, ".git")) return true;
-    const dot = std.mem.lastIndexOfScalar(u8, base, '.');
-    const stem = if (dot) |d| base[0..d] else base;
-    const names = [_][]const u8{ "LICENSE", "LICENCE", "COPYING", "AUTHORS", "CHANGELOG", "NOTICE" };
-    for (names) |name| if (std.ascii.eqlIgnoreCase(stem, name)) return true;
-    const ext = if (dot) |d| base[d..] else "";
-    const docs = [_][]const u8{ ".md", ".markdown", ".rst", ".adoc" };
-    for (docs) |doc| if (std.ascii.eqlIgnoreCase(ext, doc)) return true;
-    return false;
-}
-
-pub fn allInert(changes: []const Change) bool {
-    if (changes.len == 0) return false;
-    for (changes) |change| if (!inert(change.rel)) return false;
-    return true;
+/// A command that could not start judged nothing. Unless the operator passed
+/// --allow-unverified, such a run is never accepted as the baseline: the write is refused.
+/// A run that reported tests (per-test results, or a summary with a count) did start, even
+/// when a test fails on a missing module, as a test written before its code does.
+fn refusesUnstarted(report: sandbox.Report, results: ?test_results.Results) bool {
+    if (allow_unverified or test_outcome.envError(report) == null) return false;
+    if (results) |r| if (r.cases.len != 0) return false;
+    return !test_outcome.ranSome(test_outcome.summarize(report));
 }
 
 pub fn noNewFailures(after: Failures, before: Failures) bool {
@@ -175,12 +170,6 @@ pub fn treeKey(gpa: Allocator, io: std.Io, root: []const u8, typecheck_command: 
     return hasher.final();
 }
 
-pub fn passReport(gpa: Allocator) !sandbox.Report {
-    const out = try gpa.alloc(u8, 0);
-    errdefer gpa.free(out);
-    return .{ .outcome = .{ .exited = 0 }, .duration_ns = 0, .stdout = out, .stderr = try gpa.alloc(u8, 0), .truncated = false, .killed_leftovers = false };
-}
-
 pub const Gate = struct {
     root: []const u8,
     gate_dir: []const u8,
@@ -233,11 +222,9 @@ pub fn measured(gpa: Allocator, io: std.Io, gate: Gate) !Measured {
     return .{ .run = ran, .results = try collected(gpa, io, reporter, ran) };
 }
 
+/// Every change is tested, whatever file it touches: a README or LICENSE a test reads can
+/// break that test as surely as code can.
 pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Change, gate: Gate) !runner.ShadowRun {
-    if (allInert(changes)) {
-        if (gate.note) |n| n.skipped = true;
-        return .{ .tests = try passReport(gpa) };
-    }
     const reporter = try reporterFor(gpa, gate.gate_dir, gate.test_command);
     defer if (reporter) |r| r.deinit(gpa);
     const after = try runGate(gpa, io, gate, reporter);
@@ -246,7 +233,7 @@ pub fn run(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
         else => return judgeTests(gpa, io, workspace, changes, gate, reporter, after),
     };
     errdefer checked.deinit(gpa);
-    if (!comparable(checked)) return after;
+    if (!comparable(checked) or refusesUnstarted(checked, null)) return after;
     const key = try treeKey(gpa, io, gate.root, gate.typecheck_command, gate.test_command);
     const before = lookup(key) orelse try measure(gpa, io, workspace, changes, gate, key, reporter);
     if (!try typecheckAlreadyFailing(gpa, gate, checked, before)) return after;
@@ -313,7 +300,7 @@ fn failingKeys(gpa: Allocator, stage: Stage, report: sandbox.Report) ![]u64 {
 fn noteExisting(gpa: Allocator, n: *Note, stage: Stage, report: sandbox.Report) !void {
     if (test_outcome.envError(report)) |reason| {
         n.unverified = true;
-        n.keep(unverified_prefix);
+        n.keep(if (stage == .typecheck) typecheck_unverified_prefix else unverified_prefix);
         n.append(reason);
         return;
     }
@@ -343,7 +330,7 @@ fn judgeTests(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const C
         }
         return after;
     }
-    if (!comparable(report)) return after;
+    if (!comparable(report) or refusesUnstarted(report, now)) return after;
 
     const key = try treeKey(gpa, io, gate.root, gate.typecheck_command, gate.test_command);
     const before = lookup(key) orelse try measure(gpa, io, workspace, changes, gate, key, reporter);
@@ -425,17 +412,20 @@ fn measure(gpa: Allocator, io: std.Io, workspace: anytype, changes: []const Chan
 
 const testing = std.testing;
 
-test "non-code files are never test-gated" {
-    try testing.expect(inert(".gitignore"));
-    try testing.expect(inert("docs/README.md"));
-    try testing.expect(inert("LICENSE"));
-    try testing.expect(inert("CHANGELOG.md"));
-    try testing.expect(!inert("src/app.ts"));
-    try testing.expect(!inert("requirements.txt"));
-    try testing.expect(!inert("package.json"));
-    try testing.expect(allInert(&.{ .{ .rel = "README.md", .content = "x" }, .{ .rel = ".gitignore", .content = "y" } }));
-    try testing.expect(!allInert(&.{ .{ .rel = "README.md", .content = "x" }, .{ .rel = "src/a.ts", .content = "y" } }));
-    try testing.expect(!allInert(&.{}));
+fn reportOf(code: u32, stderr: []const u8) sandbox.Report {
+    return .{ .outcome = .{ .exited = code }, .duration_ns = 0, .stdout = @constCast(""), .stderr = @constCast(stderr), .truncated = false, .killed_leftovers = false };
+}
+
+test "a command that could not start is refused as a baseline unless --allow-unverified" {
+    const missing = reportOf(9009, "'mocha' is not recognized as an internal or external command,\n");
+    const failing = reportOf(1, "  1 failing\n");
+    const test_first = reportOf(1, "E   ModuleNotFoundError: No module named 'calc'\n1 failed in 0.05s\n");
+    try testing.expect(refusesUnstarted(missing, null));
+    try testing.expect(!refusesUnstarted(failing, null));
+    try testing.expect(!refusesUnstarted(test_first, null));
+    allow_unverified = true;
+    defer allow_unverified = false;
+    try testing.expect(!refusesUnstarted(missing, null));
 }
 
 test "an edit is accepted only when its failures were already failing before it, in the same stage" {

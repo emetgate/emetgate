@@ -15014,12 +15014,12 @@
       ]
     },
     {
-      "id": "BSL4-code-file-skips-gate",
+      "id": "BSL4-unstarted-command-taken-as-baseline",
       "file": "src/platform/baseline.zig",
-      "from": "    for (changes) |change| if (!inert(change.rel)) return false;\n",
-      "to": "\n",
+      "from": "    if (allow_unverified or test_outcome.envError(report) == null) return false;\n",
+      "to": "    if (true) return false;\n",
       "kills": [
-        "non-code files are never test-gated"
+        "a command that could not start is refused as a baseline unless --allow-unverified"
       ]
     },
     {
@@ -16281,7 +16281,7 @@
       "from": "    if (test_outcome.envError(report)) |reason| {",
       "to": "    if (@as(?[]const u8, null)) |reason| {",
       "kills": [
-        "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
+        "test detection: a test command that cannot start refuses the write, and never reads as a failing baseline"
       ]
     },
     {
@@ -16462,10 +16462,10 @@
     {
       "id": "VF1-verified-without-tests",
       "file": "src/protocol/wire.zig",
-      "from": "    if (!n.tested or n.baseline.skipped) return;",
-      "to": "    if (n.baseline.skipped) return;",
+      "from": "    if (!n.tested or !test_outcome.ranSome(n.tests)) return;",
+      "to": "    if (!n.tested) return;",
       "kills": [
-        "a committed reply says the tests ran on a mirror only when they ran and were not skipped"
+        "a committed reply says the tests ran on a mirror only when at least one test ran"
       ]
     },
     {

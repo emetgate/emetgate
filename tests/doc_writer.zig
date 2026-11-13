@@ -82,7 +82,7 @@ test "doc_writer: a passing test command commits a json pointer write and touche
     try testing.expectEqualStrings("{\"name\": \"demo\", \"scripts\": {\"build\": \"tsc --noEmit\"}}\n", after);
 }
 
-test "doc_writer: a markdown section write is not test-gated, so a failing test command still lets it through" {
+test "doc_writer: a markdown section write is test-gated like code, so a failing test command refuses it" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var fx = try Fixture.init();
     defer fx.deinit();
@@ -97,11 +97,11 @@ test "doc_writer: a markdown section write is not test-gated, so a failing test 
         .test_command = "cmd /c exit 1",
     }, null);
     defer result.deinit(gpa);
-    try testing.expect(result == .committed);
+    try testing.expect(result == .rejected);
 
     const after = try fx.read("README.md");
     defer gpa.free(after);
-    try testing.expect(std.mem.indexOf(u8, after, "new instructions") != null);
+    try testing.expect(std.mem.indexOf(u8, after, "old instructions") != null);
 }
 
 test "doc_writer: a stale hash on a line range write is refused before any sandbox run" {

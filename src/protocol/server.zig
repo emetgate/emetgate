@@ -15,6 +15,7 @@ const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
+const baseline = @import("../platform/baseline.zig");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const cache_gc = @import("../platform/cache_gc.zig");
@@ -437,6 +438,7 @@ pub const Served = struct {
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy, environ: *const std.process.Environ.Map) !void {
     try tool_names.setPrefix(policy.tool_prefix);
+    baseline.allow_unverified = policy.allow_unverified;
     var served: Served = undefined;
     served.open(gpa, io, runtime, policy, .{ .environ = environ });
     defer served.close();

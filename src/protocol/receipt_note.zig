@@ -56,7 +56,65 @@ pub fn restated(gpa: Allocator, text: []const u8, to: []const u8, extra: []const
 const max_unverified_files = 20;
 const kept_fields = [_][]const u8{ "commit", "commit_unfinished", "files_left_as_found", "left_as_found" };
 
+/// Restates a write that ran no test as `to` with the files it wrote and `hint`. Takes a
+/// write reply (`{"status":"written"...}`) or an emetgate_change reply, whose written edits
+/// step is restated in place; anything else (a refusal, a rejection) is left as it is (null).
 pub fn unverified(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8, args: ?std.json.Value) !?[]u8 {
+    if (std.mem.startsWith(u8, text, "{\"edits\":")) return unverifiedChange(gpa, text, to, hint, args);
+    return unverifiedWrite(gpa, text, to, hint, args);
+}
+
+fn unverifiedChange(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8, args: ?std.json.Value) !?[]u8 {
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const close = std.mem.indexOfScalar(u8, text, '\n') orelse text.len;
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, text[0..close], .{}) catch return null;
+    if (parsed != .object) return null;
+    const step = parsed.object.get("edits") orelse return null;
+    if (step != .object) return null;
+    const status = step.object.get("status") orelse return null;
+    if (status != .string) return null;
+    const landed = [_][]const u8{ wire.written_status, wire.committed_status, "applied" };
+    for (landed) |name| {
+        if (std.mem.eql(u8, status.string, name)) break;
+    } else return null;
+    var step_text: std.Io.Writer.Allocating = .init(arena);
+    try step_text.writer.writeAll("{\"status\":\"written\"");
+    var fields = step.object.iterator();
+    while (fields.next()) |field| {
+        if (std.mem.eql(u8, field.key_ptr.*, "status")) continue;
+        try step_text.writer.writeByte(',');
+        var key: std.json.Stringify = .{ .writer = &step_text.writer };
+        try key.write(field.key_ptr.*);
+        try step_text.writer.writeByte(':');
+        var value: std.json.Stringify = .{ .writer = &step_text.writer };
+        try value.write(field.value_ptr.*);
+    }
+    try step_text.writer.writeAll("}\n");
+    const edits_args: ?std.json.Value = if (args) |given| (if (given == .object) given.object.get("edits") else null) else null;
+    const wrapped: ?std.json.Value = if (edits_args) |list| blk: {
+        var object: std.json.ObjectMap = .empty;
+        try object.put(arena, "edits", list);
+        break :blk .{ .object = object };
+    } else null;
+    const short = (try unverifiedWrite(arena, step_text.written(), to, hint, wrapped)) orelse return null;
+    const short_value = try std.json.parseFromSliceLeaky(std.json.Value, arena, std.mem.trimEnd(u8, short, "\n"), .{});
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var js: std.json.Stringify = .{ .writer = &out.writer };
+    try js.beginObject();
+    var top = parsed.object.iterator();
+    while (top.next()) |field| {
+        try js.objectField(field.key_ptr.*);
+        try js.write(if (std.mem.eql(u8, field.key_ptr.*, "edits")) short_value else field.value_ptr.*);
+    }
+    try js.endObject();
+    try out.writer.writeAll(text[close..]);
+    return try out.toOwnedSlice();
+}
+
+fn unverifiedWrite(gpa: Allocator, text: []const u8, to: []const u8, hint: []const u8, args: ?std.json.Value) !?[]u8 {
     const open = "{\"status\":\"";
     if (!std.mem.startsWith(u8, text, open)) return null;
     const end = std.mem.indexOfScalarPos(u8, text, open.len, '"') orelse return null;
@@ -191,4 +249,13 @@ test "receipt note: an unverified write is one short line that names the files a
     defer gpa.free(short);
     try std.testing.expectEqualStrings("{\"status\":\"unverified_no_tests\",\"files\":[\"src/A.cs\",\"src/B.cs\"],\"commit\":\"c0ffee\",\"tests\":\"none: add a test command\"}\n", short);
     try std.testing.expect((try unverified(gpa, "{\"status\":\"rejected\"}\n", "unverified_no_tests", "x", null)) == null);
+}
+
+test "receipt note: an emetgate_change reply that ran no test restates its edits step as unverified, keeping the rest" {
+    const gpa = std.testing.allocator;
+    const text = "{\"edits\":{\"status\":\"applied\",\"edits\":[{\"file\":\"src/a.js\",\"new_hash\":\"ab\"}],\"verified\":\"x\"},\"status\":\"applied\"}\nfooter\n";
+    const short = (try unverified(gpa, text, "unverified_no_tests", "none", null)).?;
+    defer gpa.free(short);
+    try std.testing.expectEqualStrings("{\"edits\":{\"status\":\"unverified_no_tests\",\"files\":[\"src/a.js\"],\"tests\":\"none\"},\"status\":\"applied\"}\nfooter\n", short);
+    try std.testing.expect((try unverified(gpa, "{\"edits\":{\"status\":\"rejected\"},\"status\":\"stopped\"}\n", "unverified_no_tests", "x", null)) == null);
 }

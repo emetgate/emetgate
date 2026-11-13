@@ -630,20 +630,18 @@ fn writeNoteFields(js: *std.json.Stringify, note: ?ShadowNote, full: bool) !void
 
 pub const verified_text = "tests ran on a mirror of this exact tree; no need to rerun them";
 
+/// Says "verified" only when the run shows that at least one test ran: a silent command
+/// (`exit 0`, the stand-in while no test command exists) or one that reports zero tests
+/// verified nothing.
 fn writeVerified(js: *std.json.Stringify, note: ?ShadowNote) !void {
     const n = note orelse return;
-    if (!n.tested or n.baseline.skipped) return;
+    if (!n.tested or !test_outcome.ranSome(n.tests)) return;
     if (n.baseline.failing or n.baseline.unverified or n.baseline.debt or n.baseline.regressed) return;
     try js.objectField("verified");
     try js.write(verified_text);
 }
 
 fn writeTests(js: *std.json.Stringify, n: *const ShadowNote) !void {
-    if (n.baseline.skipped) {
-        try js.objectField("tests");
-        try js.write("not run: only non-code files changed");
-        return;
-    }
     if (n.baseline.unverified) {
         try js.objectField("unverified");
         try js.write(n.baseline.text());
@@ -1453,7 +1451,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "BinaryFile", "binary files cannot be read or edited with these tools" },
     .{ "DocTooLarge", "the file or its new content is over what emetgate edits (1 MiB for a non-code file, 16 MiB for source code), whatever the edit form; no emetgate tool can write it: keep each file under the limit by splitting the content, or ask the user to make this change" },
     .{ "EmptyPattern", "pass a non-empty pattern" },
-    .{ "IgnoredPath", "the path is git-ignored; write tracked files only" },
+    .{ "IgnoredPath", "nothing was written: the path is ignored by git (a .gitignore rule matches it), so git could not track it; write it under a path that is not ignored, or ask the user to change the .gitignore rule" },
     .{ "InvalidPath", "pass a path relative to the repository root" },
     .{ "NoNodeEdits", "nodes is empty; send at least one {node, text}" },
     .{ "TooManyNodeEdits", "too many node edits in one call; split them" },
@@ -1684,11 +1682,15 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
             try js.write(tests.text());
         }
     }
-    if (std.mem.eql(u8, reason, "test_env_error")) {
+    const unstarted = std.mem.eql(u8, reason, "test_env_error") or std.mem.eql(u8, reason, "typecheck_env_error");
+    if (unstarted) {
+        const typecheck = std.mem.eql(u8, reason, "typecheck_env_error");
         try js.objectField("env_error");
         try js.write(test_outcome.envError(report).?);
         try js.objectField("hint");
-        try js.write(env_error_hint);
+        try js.write(if (typecheck) typecheck_env_error_hint else env_error_hint);
+        try js.objectField("fix");
+        try js.write(if (typecheck) typecheck_env_error_fix else env_error_fix);
     }
     switch (report.outcome) {
         .crashed => |code| {
@@ -1713,7 +1715,7 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
     }
     const noted = if (note) |n| n.baseline.failures().len != 0 else false;
     const stage: failure_text.Stage = if (std.mem.eql(u8, command_field, "typecheck_cmd")) .typecheck else .tests;
-    const judged = !noted and !std.mem.eql(u8, reason, "test_env_error") and !std.mem.eql(u8, reason, "leftover_processes");
+    const judged = !noted and !unstarted and !std.mem.eql(u8, reason, "leftover_processes");
     const failures = if (judged) try failure_text.render(gpa, stage, report.stdout, report.stderr, &.{}) else null;
     defer if (failures) |f| gpa.free(f.text);
     if (failures != null and failures.?.text.len != 0) {
@@ -1753,7 +1755,10 @@ fn writeDiagnostic(js: *std.json.Stringify, d: diagnostics.Diagnostic) !void {
 
 const max_rejected_diagnostics = 20;
 
-pub const env_error_hint = "the test command could not start (a missing program or module), so no test judged the edit; the edit is not the cause; fix the test setup or pass a different --test command";
+pub const env_error_hint = "the test command could not start (a missing program or module), so no test judged the edit; the edit is not the cause; nothing was written";
+pub const env_error_fix = "the user must fix the test setup (install the missing program or module) or start emetgate with a different --test command; to let edits land unverified while it cannot run, the user starts emetgate with --allow-unverified";
+pub const typecheck_env_error_hint = "the typecheck command could not start (a missing program or module), so no typecheck judged the edit; the edit is not the cause; nothing was written";
+pub const typecheck_env_error_fix = "the user must fix the typecheck setup (install the missing program or module), start emetgate with a different --typecheck command or with --no-typecheck; to let edits land unverified while it cannot run, the user starts emetgate with --allow-unverified";
 
 pub fn rejectionReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
@@ -1766,7 +1771,7 @@ pub fn rejectionReason(report: sandbox.Report) []const u8 {
 
 pub fn typecheckReason(report: sandbox.Report) []const u8 {
     return switch (report.outcome) {
-        .exited => |code| if (code != 0) "typecheck_failed" else "leftover_processes",
+        .exited => |code| if (code == 0) "leftover_processes" else if (test_outcome.envError(report) != null) "typecheck_env_error" else "typecheck_failed",
         .crashed => "typecheck_crashed",
         .timed_out => "timed_out",
         .output_limit => "output_limit",
@@ -2424,7 +2429,7 @@ test "a result names a stale shadow the sweep could not remove, in a compact rep
     }
 }
 
-test "a committed reply says the tests ran on a mirror only when they ran and were not skipped" {
+test "a committed reply says the tests ran on a mirror only when at least one test ran" {
     const base: ShadowNote = .{ .root = "r", .dotted = false, .linked_files = 0, .copied_files = 0, .skipped_links = 0 };
     const cases = [_]struct { note: ?ShadowNote, want: bool }{
         .{ .note = null, .want = false },
@@ -2432,12 +2437,18 @@ test "a committed reply says the tests ran on a mirror only when they ran and we
         .{ .note = blk: {
             var n = base;
             n.tested = true;
+            n.tests = test_outcome.summarize(.{ .outcome = .{ .exited = 0 }, .duration_ns = 0, .stdout = @constCast("  3 passing (4ms)\n"),.stderr = @constCast(""), .truncated = false, .killed_leftovers = false });
             break :blk n;
         }, .want = true },
         .{ .note = blk: {
             var n = base;
             n.tested = true;
-            n.baseline.skipped = true;
+            break :blk n;
+        }, .want = false },
+        .{ .note = blk: {
+            var n = base;
+            n.tested = true;
+            n.tests = test_outcome.summarize(.{ .outcome = .{ .exited = 0 }, .duration_ns = 0, .stdout = @constCast("  0 passing (1ms)\n"),.stderr = @constCast(""), .truncated = false, .killed_leftovers = false });
             break :blk n;
         }, .want = false },
         .{ .note = blk: {

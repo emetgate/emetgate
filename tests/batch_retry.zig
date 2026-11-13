@@ -12,7 +12,7 @@ const gpa = testing.allocator;
 const Value = std.json.Value;
 
 const spare = "export function unused(): number {\n  return 7;\n}\n";
-const gate = "cmd /c findstr /c:good src\\b.ts";
+const gate = "(findstr /c:good src\\b.ts >nul && echo 1 passing)";
 
 const Repo = struct {
     tmp: testing.TmpDir,

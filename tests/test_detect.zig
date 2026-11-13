@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const test_command = @import("emetgate").test_command;
 const server = @import("emetgate").server;
 const handlers = @import("emetgate").handlers;
+const baseline = @import("emetgate").baseline;
 const telemetry = @import("emetgate").telemetry;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
@@ -433,14 +434,27 @@ test "test detection: a src layout is put on PYTHONPATH for the gated run, and n
     try testing.expect((try test_command.pythonPath(arena, testing.io, none)) == null);
 }
 
-test "test detection: a test command that cannot start is reported unverified, never as a failing baseline" {
+test "test detection: a test command that cannot start refuses the write, and never reads as a failing baseline" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try fixture.TsRepo.init(&.{.{ .rel = "a.txt", .text = "x\n" }});
     defer repo.deinit();
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
+    const command = "echo ModuleNotFoundError: No module named 'emetgate_absent' 1>&2& exit /b 1";
 
-    var reply = try create(&repo, runtime, "fresh.ts", fresh_body, .{ .test_command = "echo ModuleNotFoundError: No module named 'emetgate_absent' 1>&2& exit /b 1" });
+    {
+        var refused = try create(&repo, runtime, "fresh.ts", fresh_body, .{ .test_command = command });
+        defer refused.deinit();
+        errdefer std.debug.print("{s}\n", .{refused.text});
+        try testing.expect(refused.is_error);
+        try testing.expectEqualStrings("test_env_error", refused.value.object.get("reason").?.string);
+        try testing.expect(refused.value.object.get("baseline_failing") == null);
+        try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().access(testing.io, try repo.abs(refused.arena_state.allocator(), "fresh.ts"), .{}));
+    }
+
+    baseline.allow_unverified = true;
+    defer baseline.allow_unverified = false;
+    var reply = try create(&repo, runtime, "fresh.ts", fresh_body, .{ .test_command = command });
     defer reply.deinit();
     errdefer std.debug.print("{s}\n", .{reply.text});
     try testing.expect(!reply.is_error);

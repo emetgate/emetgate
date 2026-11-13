@@ -179,7 +179,7 @@ fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
-    if (edit.text) |text| return planText(gpa, io, runtime, edit, text, rel);
+    if (edit.text) |text| return planText(gpa, io, runtime, root, edit, text, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -243,11 +243,14 @@ pub fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8
     return applied.source;
 }
 
-fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, text: Text, rel: []u8) !Prepared {
+fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, text: Text, rel: []u8) !Prepared {
     try repo.refuseInternal(rel);
     const code = registry.forPath(edit.file_abs) != null;
     const base = try file_edit.readBase(gpa, io, edit.file_abs, code);
     defer if (base) |b| gpa.free(b);
+    // git refuses to index an ignored path, so a new file there would land on disk untracked
+    // while the reply says the write failed: refuse it before anything is written.
+    if (base == null and try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;
     var matches: usize = 0;
     const after = switch (text) {
         .replace => |r| try file_edit.replaceUniqueIn(gpa, edit.file_abs, base orelse return error.FileNotFound, r.old, r.new, r.all, &matches),
