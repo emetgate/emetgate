@@ -35,6 +35,9 @@ FORBIDDEN_ROOTS = (r"C:\Users\ugur\Desktop\APRYCO",)
 CODE_CHARS = set("{}();=<>[]")
 
 
+
+SERVER_ARGS: list = []  # extra arguments for `emetgate mcp`, set from --server-arg
+
 def est_tokens(text):
     if not text:
         return 0.0
@@ -157,7 +160,7 @@ def qualify(path):
 
 class Server:
     def __init__(self, exe, cwd):
-        self.proc = subprocess.Popen([exe, "mcp"], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.proc = subprocess.Popen([exe, "mcp", *SERVER_ARGS], cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         self.lines = queue.Queue()
         threading.Thread(target=self._pump, daemon=True).start()
         self.next_id = 0
@@ -621,7 +624,9 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--baseline")
     ap.add_argument("--workers", type=int, default=min(8, os.cpu_count() or 4))
+    ap.add_argument("--server-arg", action="append", default=[], help="extra argument for emetgate mcp, repeatable, e.g. --server-arg=--explore-mode --server-arg=dense")
     a = ap.parse_args()
+    SERVER_ARGS[:] = a.server_arg
     started = time.monotonic()
     exe = os.path.abspath(a.emetgate)
     if not os.path.isfile(exe):
