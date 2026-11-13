@@ -24,6 +24,7 @@ const mirror_mod = @import("mirror.zig");
 const ledger_mod = @import("../agent/ledger.zig");
 const compact_mod = @import("../agent/compact.zig");
 const known_files_mod = @import("known_files.zig");
+const sent_ledger_mod = @import("../engine/sent_ledger.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const batch_stage_mod = @import("batch_stage.zig");
@@ -336,6 +337,7 @@ pub const Served = struct {
     mirror: mirror_mod.Mirror,
     stash: ledger_mod.Ledger,
     known_files: known_files_mod.KnownFiles,
+    sent_ledger: sent_ledger_mod.Ledger,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
     search: search_session_mod.Session,
@@ -365,6 +367,7 @@ pub const Served = struct {
             .mirror = .init(gpa, policy.mirror_enabled),
             .stash = .init(gpa),
             .known_files = .init(gpa),
+            .sent_ledger = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
@@ -379,6 +382,7 @@ pub const Served = struct {
         self.policy.mirror = &self.mirror;
         self.policy.stash = &self.stash;
         self.policy.known_files = &self.known_files;
+        self.policy.sent_ledger = &self.sent_ledger;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
         self.policy.search_session = &self.search;
@@ -415,6 +419,7 @@ pub const Served = struct {
         self.mirror.deinit();
         self.stash.deinit();
         self.known_files.deinit();
+        self.sent_ledger.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
         if (self.root) |r| self.gpa.free(r);

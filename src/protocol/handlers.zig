@@ -14,6 +14,7 @@ const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const map_tools = @import("map_tools.zig");
 const read_tools = @import("read_tools.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const read_budget = @import("read_budget.zig");
 const read_cache = @import("read_cache.zig");
 const raw_reply = @import("raw_reply.zig");
@@ -136,7 +137,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     const args = call.args;
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return rawCode(gpa, policy, try callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache));
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget));
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget, policy.sent_ledger));
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_commit")) return callCommit(gpa, io, runtime, args, event, policy);
@@ -148,7 +149,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_edit")) return edit_tool.callEdit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write")) return edit_tool.callWrite(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }, policy.raw_code));
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache, .sent_ledger = policy.sent_ledger }, policy.raw_code));
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
@@ -306,7 +307,7 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize, ledger: ?*sent_ledger.Ledger) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     const nodes = if (args) |a| tool_result.getBool(a, "nodes") orelse false else false;
@@ -316,7 +317,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     defer buffer.deinit();
     const arguments = args.?;
     const detail = read_budget.parseDetail(tool_result.getString(arguments, "detail")) catch |err| return failure(gpa, &buffer, err, event);
-    const reading: Reading = .{ .budget = budget, .detail = detail };
+    const reading: Reading = .{ .budget = budget, .detail = detail, .ledger = ledger };
     const line_start = getInt(arguments, "line_start");
     const line_end = getInt(arguments, "line_end");
     const symbols = getStringArray(arguments, "symbols");
@@ -351,6 +352,11 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
 const Reading = struct {
     budget: usize,
     detail: read_budget.Detail,
+    ledger: ?*sent_ledger.Ledger = null,
+
+    fn note(self: Reading, rel: []const u8) read_tools.Note {
+        return .{ .ledger = self.ledger, .rel = rel };
+    }
 
     fn folds(self: Reading, chars: usize) bool {
         return self.detail == .budgeted and chars > self.budget;
@@ -396,6 +402,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     const found = try table.item(ref);
     event.hash = found.hash;
     const shown = shownSpan(found);
+    const note = reading.note(loaded.place.rel);
     const docs = if (nodes) null else try reading.foldDocs(gpa, snapshot, shown.start, shown.end);
     defer if (docs) |d| d.deinit(gpa);
     const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
@@ -418,6 +425,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     if (nodes) {
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
         defer gpa.free(annotated);
+        try note.shown(snapshot.source, found.span.start, found.span.end, .dense);
         event.chars_emetgate = annotated.len;
         return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
     }
@@ -426,9 +434,11 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
         defer lines.deinit(gpa);
         const view = try read_budget.fold(gpa, snapshot.source, lines, found.body orelse found.node, reading.budget);
         defer view.deinit(gpa);
+        try note.shown(snapshot.source, shown.start, shown.end, .dense);
         event.chars_emetgate = view.text.len;
         return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
     }
+    try note.shown(snapshot.source, shown.start, shown.end, if (docs == null) .exact else .dense);
     event.chars_emetgate = body.len;
     try wire.writeSymbolBody(w, file, sym, found.hash, body, if (docs) |d| d.spans else &.{});
 }
@@ -466,6 +476,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         if (nodes) {
             const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
             entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
+            try reading.note(loaded.place.rel).shown(snapshot.source, found.span.start, found.span.end, .dense);
             annotated = i + 1;
             chars += text.len;
             continue;
@@ -484,6 +495,7 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body, .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
         if (unchanged) continue;
+        try reading.note(loaded.place.rel).shown(snapshot.source, shown.start, shown.end, if (folds or docs != null) .dense else .exact);
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body orelse found.node, reading.budget);
@@ -510,6 +522,7 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         const region = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, region);
         defer gpa.free(annotated);
+        try reading.note(loaded.place.rel).shown(snapshot.source, region.start, region.end, .dense);
         event.chars_emetgate = annotated.len;
         event.chars_fullfile = snapshot.source.len;
         return wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), annotated);
@@ -517,7 +530,7 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
     const matched = line_range.symbolsOverlapping(gpa, table.*, requested) catch |err| switch (err) {
-        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),
+        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, reading.note(loaded.place.rel), w, event),
         else => |e| return e,
     };
     defer gpa.free(matched);
@@ -559,6 +572,7 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
         if (unchanged) continue;
+        try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, if (folds or docs != null) .dense else .exact);
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));

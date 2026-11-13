@@ -13598,7 +13598,7 @@
     {
       "id": "RD9-empty-symbol-range-is-an-error",
       "file": "src/protocol/handlers.zig",
-      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),",
+      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, reading.note(loaded.place.rel), w, event),",
       "to": "        error.NoSymbolInRange => return error.NoSymbolInRange,",
       "kills": [
         "read_symbol over a line range that holds no symbol returns the raw lines instead of an error",

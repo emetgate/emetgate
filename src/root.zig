@@ -193,6 +193,7 @@ pub const read_tools = @import("protocol/read_tools.zig");
 pub const read_budget = @import("protocol/read_budget.zig");
 pub const mirror = @import("protocol/mirror.zig");
 pub const known_files = @import("protocol/known_files.zig");
+pub const sent_ledger = @import("engine/sent_ledger.zig");
 pub const context_epoch = @import("protocol/context_epoch.zig");
 pub const compaction_marker = @import("platform/compaction_marker.zig");
 pub const precompact_hook = @import("protocol/precompact_hook.zig");

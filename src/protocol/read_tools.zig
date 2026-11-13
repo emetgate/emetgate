@@ -19,6 +19,7 @@ const read_cache = @import("read_cache.zig");
 const raw_reply = @import("raw_reply.zig");
 const tool_names = @import("../engine/tool_names.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -67,6 +68,19 @@ fn hasExtension(file: []const u8, ext: []const u8) bool {
 pub const Source = struct {
     runtime: *Runtime,
     tree_cache: ?*tree_cache_mod.TreeCache,
+    sent_ledger: ?*sent_ledger.Ledger = null,
+};
+
+/// Where a render notes the file bytes it put in a reply: the session's sent
+/// ledger, under the repo-relative path. A null ledger notes nothing.
+pub const Note = struct {
+    ledger: ?*sent_ledger.Ledger = null,
+    rel: []const u8 = "",
+
+    pub fn shown(self: Note, bytes: []const u8, start: usize, end: usize, form: sent_ledger.Form) Allocator.Error!void {
+        const ledger = self.ledger orelse return;
+        try ledger.recordBytes(self.rel, bytes, .{ .start = @intCast(start), .end = @intCast(end) }, form);
+    }
 };
 
 pub const max_many_files = 32;
@@ -228,17 +242,18 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     defer gpa.free(bytes);
     if (looksBinary(bytes)) return error.BinaryFile;
     const force = options.force;
+    const note: Note = .{ .ledger = if (source) |s| s.sent_ledger else null, .rel = place.rel };
 
     // One precedence for every file type: a line range wins, then heading
     // (Markdown) or pointer (JSON), then the type's default view.
     if (options.line_start != null or options.line_end != null) {
-        return renderRange(gpa, file, bytes, options.line_start, options.line_end, force, mirror, w, event);
+        return renderRange(gpa, file, bytes, options.line_start, options.line_end, force, mirror, note, w, event);
     }
     if (!options.raw and hasExtension(file, ".json")) {
-        return renderJson(gpa, file, bytes, options.pointer, force, mirror, w, event);
+        return renderJson(gpa, file, bytes, options.pointer, force, mirror, note, w, event);
     }
     if (!options.raw and hasExtension(file, ".md")) {
-        return renderMarkdown(gpa, file, bytes, options.heading, force, mirror, w, event);
+        return renderMarkdown(gpa, file, bytes, options.heading, force, mirror, note, w, event);
     }
     if (profile != null and bytes.len > outline.threshold) {
         if (source) |s| {
@@ -256,6 +271,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
         return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
     }
     if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    try note.shown(bytes, 0, shown.len, .exact);
     event.chars_emetgate = shown.len;
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
@@ -296,7 +312,7 @@ fn renderOutline(gpa: Allocator, io: std.Io, source: Source, abs: []const u8, fi
     return true;
 }
 
-fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const parser = ts.Parser.create();
     defer parser.deinit();
@@ -314,6 +330,7 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
             return wire.writeUnchangedSince(w, file, p, entry.hash, file_hash, since);
         }
         const text = tree.text(entry.node);
+        try note.shown(bytes, entry.node.startByte(), entry.node.endByte(), .exact);
         event.chars_emetgate = text.len;
         const hex = symbol.formatHash(entry.hash);
         var js: std.json.Stringify = .{ .writer = w };
@@ -374,7 +391,7 @@ fn sendTree(gpa: Allocator, file: []const u8, comptime fmt: []const u8, text: []
     try w.writeByte('\n');
 }
 
-fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const parser = ts.Parser.create();
     defer parser.deinit();
@@ -390,6 +407,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
             return wire.writeUnchangedSince(w, file, h, entry.hash, file_hash, since);
         }
         const text = tree.text(entry.node);
+        try note.shown(bytes, entry.node.startByte(), entry.node.endByte(), .exact);
         event.chars_emetgate = text.len;
         const hex = symbol.formatHash(entry.hash);
         var js: std.json.Stringify = .{ .writer = w };
@@ -437,7 +455,7 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
     return sendTree(gpa, file, "headings:{s}", out.written(), file_hash, force, mirror, w, event);
 }
 
-pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
@@ -459,6 +477,7 @@ pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_sta
         event.chars_emetgate = 0;
         return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
     }
+    try note.shown(bytes, span.start, span.end, .exact);
     event.chars_emetgate = text.len;
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = w };
