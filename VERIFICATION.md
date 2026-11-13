@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3148**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3149**
 - Mutations declared in `tests/mutations.json`: **2029**
   - killed: **1979**
   - equivalent: **9**
@@ -1842,7 +1842,7 @@ python tools/verification_page.py --check
 | `BR2-kept-batch-never-expires` | `src/protocol/batch_stage.zig` | `return now - entry.staged_at > ttl_ns;` -> `return now - entry.staged_at < 0;` | a kept batch expires, belongs to its root, and the oldest is evicted past the l... | killed |
 | `BR3-kept-batch-any-root` | `src/protocol/batch_stage.zig` | `if (expired(entry.*, now) or !std.mem.eql(u8, entry.root, root ...` -> `_ = root;             if (expired(entry.*, now)) return null;` | a kept batch expires, belongs to its root, and the oldest is evicted past the l... | killed |
 | `BR4-committed-batch-stays-kept` | `src/protocol/handlers.zig` | `if (retry) \|id\| store.remove(id);` -> `_ = &retry;` | batch retry: a rejected batch is kept under a retry id, and a retry that sends ... | killed |
-| `BR5-batch-kept-after-commit-started` | `src/protocol/handlers.zig` | `if (!is_error or event.trace.commit_attempted) {` -> `if (!is_error) {` | a failure after the commit began is reported as commit phase, never disk untouc... | killed |
+| `BR5-batch-kept-after-commit-started` | `src/protocol/handlers.zig` | `if (!is_error or event.trace.commit_attempted) {` -> `if (!is_error) {` | batch retry: a batch whose commit began and then failed is not kept for a retry | killed |
 | `VF1-verified-without-tests` | `src/protocol/wire.zig` | `if (!n.tested or !test_outcome.ranSome(n.tests)) return;` -> `if (!n.tested) return;` | a committed reply says the tests ran on a mirror only when at least one test ran | killed |
 | `RO1-short-run-output-digested` | `src/protocol/output_digest.zig` | `pub const verbatim_under: usize = cap;` -> `pub const verbatim_under: usize = 512;` | run output past the old 512 byte cut and under the cap comes back verbatim with... | killed |
 | `FW1-write-tool-leaves-find-index-fresh` | `src/protocol/find_tools.zig` | `if (fence) self.dirtyAll();             return;` -> `if (false) self.dirtyAll();             return;` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |

@@ -4,6 +4,7 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const symbol = @import("emetgate").symbol;
 const batch_stage = @import("emetgate").batch_stage;
+const batch_kernel = @import("emetgate").batch;
 const wire = @import("emetgate").wire;
 const Runtime = @import("emetgate").runtime.Runtime;
 
@@ -97,7 +98,8 @@ const Reply = struct {
     fn parse(raw: []const u8) !Reply {
         const envelope = try std.json.parseFromSlice(Value, gpa, raw, .{});
         errdefer envelope.deinit();
-        const result = envelope.value.object.get("result").?.object;
+        errdefer std.debug.print("reply: {s}\n", .{raw});
+        const result = (envelope.value.object.get("result") orelse return error.NotAToolResult).object;
         const text = result.get("content").?.array.items[0].object.get("text").?.string;
         const first = text[0 .. std.mem.indexOfScalar(u8, text, '\n') orelse text.len];
         const body = try std.json.parseFromSlice(Value, gpa, first, .{});
@@ -241,4 +243,22 @@ test "batch retry: a read-only file stops the batch before anything lands, so it
     try testing.expect(std.mem.indexOf(u8, failed.text, "emetgate recover") == null);
     try testing.expect(failed.string("retry") != null);
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/b.ts", .{}));
+}
+
+test "batch retry: a batch whose commit began and then failed is not kept for a retry" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo: Repo = undefined;
+    try repo.init();
+    defer repo.deinit();
+    const hash = symbol.formatHash(symbol.fileHash(spare));
+    const edits = try std.fmt.allocPrint(gpa, "{{\"edits\":[{{\"file\":\"src/b.ts\",\"hash\":\"absent\",\"content\":\"export const b = 'good';\\n\"}},{{\"file\":\"src/spare.ts\",\"hash\":\"{s}\",\"content\":\"export const spare = 1;\\n\"}}]}}", .{&hash});
+    defer gpa.free(edits);
+    batch_kernel.fail_after_landing = true;
+    const failed = repo.call(edits);
+    batch_kernel.fail_after_landing = false;
+    var reply = try failed;
+    defer reply.deinit();
+    errdefer std.debug.print("{s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(reply.string("retry") == null);
 }

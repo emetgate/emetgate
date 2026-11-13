@@ -16460,7 +16460,7 @@
       "from": "    if (!is_error or event.trace.commit_attempted) {",
       "to": "    if (!is_error) {",
       "kills": [
-        "a failure after the commit began is reported as commit phase, never disk untouched"
+        "batch retry: a batch whose commit began and then failed is not kept for a retry"
       ]
     },
     {
