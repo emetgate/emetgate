@@ -436,7 +436,7 @@ test "emetgate_commit: create, modify, modify again commits the last content" {
     try seq.init();
     defer seq.deinit();
     try seq.write("emetgate_write", .{ .file = "notes/c.txt", .content = "one\n" });
-    try seq.write("emetgate_write", .{ .file = "notes/c.txt", .content = "two\n" });
+    try seq.write("emetgate_write", .{ .file = "notes/c.txt", .hash = try seq.fileHash("notes/c.txt"), .content = "two\n" });
     try seq.write("emetgate_edit", .{ .file = "notes/c.txt", .old_string = "two", .new_string = "three" });
     try seq.commitAll(".gitignore\nnotes/c.txt\nsrc/math.ts\nsrc/util.ts\n");
     try testing.expectEqualStrings("three\n", try seq.git(&.{ "show", "HEAD:notes/c.txt" }));

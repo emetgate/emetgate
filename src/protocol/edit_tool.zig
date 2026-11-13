@@ -10,6 +10,7 @@ const file_edit = @import("../platform/file_edit.zig");
 const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const receipts = @import("../platform/receipts.zig");
 const receipt_note = @import("receipt_note.zig");
+const symbol = @import("../engine/symbol.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -20,13 +21,15 @@ const ToolResult = tool_result.ToolResult;
 
 pub const edit_description = "Replaces exact old_string (unique unless replace_all) with new_string in any file, gated.";
 
-pub const write_description = "Creates or overwrites a whole file, gated.";
+pub const write_description = "Creates a whole file, or overwrites an existing one given its file_hash as hash, gated.";
 
 const Request = struct {
     file: []const u8,
     change: file_edit.Change,
     may_create: bool,
     sent: usize,
+    /// Whole-file writes only: the file_hash the caller read, or null when none was given.
+    hash: ?[]const u8 = null,
 };
 
 pub fn callEdit(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
@@ -42,7 +45,8 @@ pub fn callWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, ev
     const file = try tool_result.requireString(args, "file");
     const content = try tool_result.requireString(args, "content");
     event.label = "write";
-    return run(gpa, io, runtime, args, event, policy, .{ .file = file, .change = .{ .whole = content }, .may_create = true, .sent = content.len });
+    const hash = tool_result.getString(args.?, "hash");
+    return run(gpa, io, runtime, args, event, policy, .{ .file = file, .change = .{ .whole = content }, .may_create = true, .sent = content.len, .hash = hash });
 }
 
 fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy, request: Request) !ToolResult {
@@ -90,12 +94,40 @@ fn record(gpa: Allocator, io: std.Io, outcome: file_edit.Outcome, file_abs: []co
     }, w, full, request);
 }
 
+/// The same rule emetgate_change applies to {file, content}: an existing file is overwritten
+/// only with its current file_hash as hash, or when this session wrote it and it is unchanged.
+/// Content equal to the file changes nothing and needs no hash.
+fn requireReadHash(gpa: Allocator, io: std.Io, file_abs: []const u8, content: []const u8, given: ?[]const u8, policy: Policy) !void {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, file_abs, gpa, .limited(file_edit.max_code_bytes + 1)) catch |err| switch (err) {
+        error.FileNotFound => {
+            if (given) |text| if (!std.mem.eql(u8, text, symbol.absent_text)) return error.HashMismatch;
+            return;
+        },
+        error.StreamTooLong => return error.DocTooLarge,
+        else => |e| return e,
+    };
+    defer gpa.free(bytes);
+    if (given == null and std.mem.eql(u8, bytes, content)) return;
+    const current = symbol.fileHash(bytes);
+    if (given) |text| {
+        const expected = try symbol.parseExpected(text);
+        switch (expected) {
+            .present => |hash| if (std.mem.eql(u8, &hash, &current)) return,
+            .absent => return error.FileExists,
+        }
+        return error.HashMismatch;
+    }
+    if (policy.known_files) |known| if (known.get(file_abs)) |hash| if (std.mem.eql(u8, &hash, &current)) return;
+    return error.FileExists;
+}
+
 fn applyInto(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, policy: Policy, request: Request, matches: *usize, w: *Writer, event: *telemetry.Event) !bool {
     const given = try policy_mod.trustedTestCommand(args, policy);
     var commit = try policy_mod.commitRequest(args, policy, runtime);
     defer if (commit) |made| made.deinit(gpa);
     const target = try file_edit.jailWrite(gpa, io, policy.root, request.file, request.may_create);
     defer target.deinit(gpa);
+    if (request.change == .whole) try requireReadHash(gpa, io, target.abs, request.change.whole, request.hash, policy);
     const anchor = file_edit.existingAncestor(io, target.abs) orelse return error.InvalidPath;
     const probe = try std.fmt.allocPrint(gpa, "{s}\\_", .{anchor});
     defer gpa.free(probe);

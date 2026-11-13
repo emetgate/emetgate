@@ -1094,12 +1094,20 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     var js: std.json.Stringify = .{ .writer = &out.writer };
     try js.beginObject();
     var failed: ?[]const u8 = null;
+    var made_branch = false;
+    var before: ?HeadBefore = null;
     if (branch) |name| {
+        before = try headBefore(arena, io, policy.root);
         const reply = try git_write.callGitWrite(gpa, io, try gitArgs(arena, &.{ "switch", "-c", name }), event, policy.root, policy.open_run);
         defer gpa.free(reply.text);
         try changeStep(arena, &js, "branch", reply.text);
-        if (reply.is_error) failed = "branch";
+        if (reply.is_error) failed = "branch" else made_branch = true;
+        if (reply.is_error) {
+            try js.objectField("fix");
+            try js.write(try std.fmt.allocPrint(arena, "the branch was not created (see branch); if {s} already exists, switch to it with emetgate_git_write args [\"switch\", \"{s}\"] and resend without branch, or pick another name", .{ name, name }));
+        }
     }
+    var edits_written = false;
     if (failed == null) if (edits) |list| {
         const root = policy.root orelse ".";
         var batch: std.json.ObjectMap = .empty;
@@ -1110,8 +1118,11 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         defer gpa.free(reply.text);
         try changeStep(arena, &js, "edits", reply.text);
         if (reply.is_error) failed = "edits";
+        edits_written = !reply.is_error;
+        if (!reply.is_error) try writeParseCheck(arena, &js, list);
         if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);
         if (!reply.is_error) if (policy.map_session) |session| try writeUnreached(arena, io, &js, session, root, list);
+        if (reply.is_error and made_branch) try undoBranch(arena, io, &js, policy.root, branch.?, before);
     };
     const committed_with_edits = policy.commit and edits != null;
     if (failed == null and !committed_with_edits) if (message) |text| {
@@ -1119,8 +1130,14 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         defer gpa.free(made.text);
         try changeStep(arena, &js, "commit", made.text);
         if (made.is_error) failed = "commit";
+        if (made.is_error and edits_written) {
+            // The edits step already wrote its files; only the commit was refused.
+            try js.objectField("on_disk");
+            try js.write("the edits are written to the work tree; the commit was refused, so they are not committed");
+            event.disk = "edits written, commit refused";
+        }
     };
-    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);
+    if (branch != null or message != null) try writeAfter(gpa, io, &js, policy);
     try js.objectField("status");
     try js.write(if (failed == null) "applied" else "stopped");
     if (failed) |step| {
@@ -1129,6 +1146,63 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+const HeadBefore = struct {
+    /// The branch checked out before the call, or null when HEAD was detached.
+    branch: ?[]const u8,
+    oid: []const u8,
+};
+
+fn headBefore(arena: Allocator, io: std.Io, served: ?[]const u8) !?HeadBefore {
+    const root = try repo.servedRoot(arena, io, served);
+    const git = git_commit.Git.init(arena, io, root) catch return null;
+    const oid = (git.run(&.{ "rev-parse", "--verify", "-q", "HEAD" }) catch return null) orelse return null;
+    const ref = git.run(&.{ "symbolic-ref", "-q", "--short", "HEAD" }) catch null;
+    return .{ .branch = ref, .oid = oid };
+}
+
+/// The edits of a call that created its branch were refused: switch back to where HEAD was
+/// and delete the branch, but only while it still points at that commit (no commits of its
+/// own), so the same call can be sent again.
+fn undoBranch(arena: Allocator, io: std.Io, js: *std.json.Stringify, served: ?[]const u8, name: []const u8, before: ?HeadBefore) !void {
+    try js.objectField("branch_undone");
+    const was = before orelse return js.write("no: HEAD had no commit before the call, so the branch is left checked out");
+    const root = try repo.servedRoot(arena, io, served);
+    const git = git_commit.Git.init(arena, io, root) catch return js.write("no: git could not be started; the branch is left checked out");
+    const full = try std.fmt.allocPrint(arena, "refs/heads/{s}", .{name});
+    const tip = (git.run(&.{ "rev-parse", "--verify", "-q", full }) catch null) orelse return js.write("no: the branch is not found; nothing to undo");
+    if (!std.mem.eql(u8, tip, was.oid)) return js.write("no: the branch has commits of its own, so it is kept");
+    const back = if (was.branch) |b| try arena.dupe([]const u8, &.{ "switch", "-q", b }) else try arena.dupe([]const u8, &.{ "switch", "-q", "--detach", was.oid });
+    if ((git.run(back) catch null) == null) return js.write("no: switching back failed; the branch is left checked out");
+    const where = was.branch orelse was.oid;
+    if ((git.run(&.{ "branch", "-q", "-d", name }) catch null) == null) {
+        return js.write(try std.fmt.allocPrint(arena, "partly: back on {s}, but deleting {s} failed, so it still exists", .{ where, name }));
+    }
+    try js.write(try std.fmt.allocPrint(arena, "yes: back on {s}, and {s} is deleted; the same call can be sent again", .{ where, name }));
+}
+
+/// Says which written source files the language's own check verified after the reparse.
+/// A language without a check is named, never reported as verified.
+fn writeParseCheck(arena: Allocator, js: *std.json.Stringify, list: Value) !void {
+    var verified: std.ArrayList(u8) = .empty;
+    var unverified: std.ArrayList(u8) = .empty;
+    for (list.array.items) |item| {
+        const file = getString(item, "file") orelse continue;
+        const profile = lang_registry.forPath(file) orelse continue;
+        const into = if (profile.source_check != null) &verified else &unverified;
+        if (into.items.len != 0) try into.appendSlice(arena, ", ");
+        try into.appendSlice(arena, file);
+        if (profile.source_check == null) try into.print(arena, " ({s})", .{profile.name});
+    }
+    if (verified.items.len == 0 and unverified.items.len == 0) return;
+    try js.objectField("parse");
+    if (unverified.items.len == 0) return js.write("verified: the language check passed after the reparse");
+    const text = if (verified.items.len == 0)
+        try std.fmt.allocPrint(arena, "not verified for {s}: tree-sitter only, no language check", .{unverified.items})
+    else
+        try std.fmt.allocPrint(arena, "verified for {s}; not verified for {s}: tree-sitter only, no language check", .{ verified.items, unverified.items });
+    try js.write(text);
 }
 
 pub const unreached_shown: usize = 8;

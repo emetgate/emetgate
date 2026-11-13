@@ -2,6 +2,7 @@ const std = @import("std");
 const ts = @import("../tree_sitter.zig");
 const Accessor = @import("../ref.zig").Accessor;
 const facts = @import("../facts.zig");
+const source_check = @import("../source_check.zig");
 
 pub const FunctionKind = enum {
     declaration,
@@ -498,6 +499,10 @@ pub const Profile = struct {
     effect_update_tokens: []const []const u8 = &.{},
     commented_definitions: []const []const u8 = &.{},
     uncommented_definitions: []const []const u8 = &.{},
+    /// The language's own validity rules beyond its tree-sitter grammar, run on every gated
+    /// write after the reparse. null: the reply says the parse was not verified, since
+    /// tree-sitter alone recovers from some errors the compiler refuses.
+    source_check: ?source_check.Check = null,
 
     pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;

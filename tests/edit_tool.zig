@@ -4,6 +4,7 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const telemetry = @import("emetgate").telemetry;
 const memory = @import("emetgate").memory;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -214,10 +215,15 @@ test "emetgate_write that fails the gate leaves no file and no created directory
     try testing.expect(repo.missing("src/p"));
 }
 
-test "emetgate_write replaces a whole existing file and refuses paths outside the repo" {
+test "emetgate_write replaces a whole existing file given its file_hash and refuses paths outside the repo" {
     var repo = try Repo.init();
     defer repo.deinit();
-    var whole = try repo.call("emetgate_write", .{ .file = "src/app.js", .content = "export const total = 3;\n" });
+    var unread = try repo.call("emetgate_write", .{ .file = "src/app.js", .content = "export const total = 3;\n" });
+    defer unread.deinit();
+    try unread.expectError("FileExists");
+    try repo.expectFile("src/app.js", app_js);
+    const hex = symbol.formatHash(symbol.fileHash(app_js));
+    var whole = try repo.call("emetgate_write", .{ .file = "src/app.js", .content = "export const total = 3;\n", .hash = @as([]const u8, &hex) });
     defer whole.deinit();
     try whole.expectStatus("committed");
     try repo.expectFile("src/app.js", "export const total = 3;\n");

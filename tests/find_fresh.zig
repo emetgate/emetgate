@@ -6,6 +6,7 @@ const handlers = @import("emetgate").handlers;
 const find_tools = @import("emetgate").find_tools;
 const map_tools = @import("emetgate").map_tools;
 const fact_file = @import("emetgate").fact_file;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -35,6 +36,17 @@ const Repo = struct {
     session: *find_tools.Session,
     store_path: []u8,
     map: *map_tools.Session,
+    hash_hex: [symbol.hash_hex_len]u8 = undefined,
+
+    /// The current file_hash of rel, which an emetgate_write overwrite needs.
+    fn hashOf(self: *Repo, rel: []const u8) ![]const u8 {
+        const sub = try std.fmt.allocPrint(gpa, "repo/{s}", .{rel});
+        defer gpa.free(sub);
+        const bytes = try self.tmp.dir.readFileAlloc(testing.io, sub, gpa, .unlimited);
+        defer gpa.free(bytes);
+        self.hash_hex = symbol.formatHash(symbol.fileHash(bytes));
+        return &self.hash_hex;
+    }
 
     fn init(watch: bool) !Repo {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -133,7 +145,7 @@ test "find after write: an index with no watcher sees a file written through eme
     defer repo.deinit();
     try repo.expectFind("total", "2 hits in 2 files");
     try repo.expectFind("grand_sum", "0 hits in 0 files");
-    try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = "export function grand_sum(a, b) {\n  return a + b;\n}\n" });
+    try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = "export function grand_sum(a, b) {\n  return a + b;\n}\n", .hash = try repo.hashOf("src/app.js") });
     try repo.expectFind("grand_sum", "1 hits in 1 files");
     try repo.expectFind("total", "1 hits in 1 files");
 }
@@ -157,7 +169,7 @@ test "find after write: a watched index returns fresh hits right after each writ
     var token: [32]u8 = undefined;
     for (0..30) |i| {
         const tok = try std.fmt.bufPrint(&token, "fresh_token_{d}_", .{i});
-        try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = try std.fmt.bufPrint(&content, "export function {s}(a, b) {{\n  return a + b;\n}}\n", .{tok}) });
+        try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = try std.fmt.bufPrint(&content, "export function {s}(a, b) {{\n  return a + b;\n}}\n", .{tok}), .hash = try repo.hashOf("src/app.js") });
         errdefer std.debug.print("iteration {d}\n", .{i});
         try repo.expectFind(tok, "1 hits in 1 files");
         try repo.expectFind("fresh_token_", "1 hits in 1 files");

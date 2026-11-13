@@ -211,6 +211,8 @@ pub const agent_loop = @import("agent/loop.zig");
 pub const agent_compact = @import("agent/compact.zig");
 pub const json_pointer = @import("engine/lang/json/pointer.zig");
 pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
+pub const python_indent = @import("engine/lang/python/indent.zig");
+pub const source_check = @import("engine/source_check.zig");
 pub const self_update = @import("update/update.zig");
 
 test {

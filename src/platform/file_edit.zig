@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const docnode = @import("../engine/docnode.zig");
 const registry = @import("../engine/lang/registry.zig");
+const source_check = @import("../engine/source_check.zig");
 const repo = @import("repo.zig");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
@@ -151,6 +152,7 @@ pub fn prepare(gpa: Allocator, runtime: *Runtime, file_abs: []const u8, rel: []u
         return .{ .rel = rel, .action = action, .base_hash = base_hash, .hash = symbol.hashOf(after), .doc_source = try gpa.dupe(u8, after) };
     };
     if (after.len > max_code_bytes) return error.DocTooLarge;
+    if (profile.source_check) |check| if (source_check.judge(check, base, after)) |fault| return source_check.refuse(rel, fault);
     const next = try Snapshot.fromSource(runtime, profile, try gpa.dupe(u8, after));
     errdefer next.destroy();
     const old = if (base) |b| try Snapshot.fromSource(runtime, profile, try gpa.dupe(u8, b)) else null;

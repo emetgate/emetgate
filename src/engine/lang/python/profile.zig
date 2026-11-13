@@ -4,6 +4,7 @@ const profile_mod = @import("../profile.zig");
 const python_rename = @import("rename.zig");
 const python_facts = @import("facts.zig");
 const python_map = @import("map.zig");
+const python_indent = @import("indent.zig");
 
 const Profile = profile_mod.Profile;
 const FunctionKind = profile_mod.FunctionKind;
@@ -127,6 +128,7 @@ pub const profile: Profile = .{
     .docstrings = true,
     .definition_wrappers = &.{"decorated_definition"},
     .map = &python_map.table,
+    .source_check = python_indent.check,
 };
 
 const Decorated = enum { staticmethod, classmethod, property, setter, deleter, getter, overload };

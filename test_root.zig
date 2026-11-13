@@ -201,6 +201,8 @@ pub const agent_loop = src.agent_loop;
 pub const agent_compact = src.agent_compact;
 pub const json_pointer = src.json_pointer;
 pub const markdown_heading = src.markdown_heading;
+pub const python_indent = src.python_indent;
+pub const source_check = src.source_check;
 pub const self_update = src.self_update;
 pub const rules_tui = src.rules_tui;
 pub const rules_command = src.rules_command;
@@ -317,6 +319,8 @@ test {
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/edit_tool.zig");
     _ = @import("tests/change_tool.zig");
+    _ = @import("tests/change_atomic.zig");
+    _ = @import("tests/python_parse.zig");
     _ = @import("tests/fuzzy_match.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");

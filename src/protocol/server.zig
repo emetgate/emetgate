@@ -293,6 +293,7 @@ pub const tool_defs = [_]Tool{
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "content", .desc = "" },
+            .{ .name = "hash", .desc = "", .optional = true },
         },
     },
     .{

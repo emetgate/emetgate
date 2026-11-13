@@ -16,6 +16,7 @@ const shadow = @import("../platform/shadow.zig");
 const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
 const doc_fold = @import("../engine/doc_fold.zig");
+const source_check = @import("../engine/source_check.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -1403,6 +1404,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "PointerNotFound", "emetgate_read_file on the file lists its pointers" },
     .{ "HeadingNotFound", "emetgate_read_file on the file lists its headings" },
     .{ "InvalidJson", "content must be valid JSON" },
+    .{ "SyntaxCheckFailed", "the edit leaves the file in a state the language's own compiler refuses (for Python: its indentation rules); nothing was written; fix the indentation and resend" },
     .{ "DocSyntaxInvalid", "a Markdown section starts with its heading line" },
     .{ "UnknownGitSubcommand", "sub is status, diff, log, show or blame; changes go through emetgate_git_write" },
     .{ "MissingGitArgs", "args is the git argv, e.g. [\"switch\",\"-c\",\"topic\"]" },
@@ -1524,6 +1526,9 @@ fn takeFix(name: []const u8) ?Fix {
     }
     if (std.mem.eql(u8, name, "LabelDenied")) {
         if (shadow.takeLabelDeniedFix(&fix_buffer)) |text| return .{ .text = text, .dynamic = true };
+    }
+    if (std.mem.eql(u8, name, "SyntaxCheckFailed")) {
+        if (source_check.takeFix(&fix_buffer)) |text| return .{ .text = text, .dynamic = true };
     }
     return .{ .text = fixFor(name) orelse return null, .dynamic = false };
 }
@@ -1658,7 +1663,7 @@ pub fn exitCode(err: anyerror) u8 {
         error.SymbolNotFound => 4,
         error.AmbiguousSymbol => 5,
         error.HashMismatch => 6,
-        error.MutationSyntaxInvalid => 7,
+        error.MutationSyntaxInvalid, error.SyntaxCheckFailed => 7,
         error.BodyEscape => 8,
         error.SkeletonInvalid => 9,
         error.PlaceholderBody => 13,

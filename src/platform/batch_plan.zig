@@ -13,6 +13,7 @@ const tsserver = @import("tsserver.zig");
 const rename = @import("../engine/rename.zig");
 const line_range = @import("../engine/line_range.zig");
 const registry = @import("../engine/lang/registry.zig");
+const source_check = @import("../engine/source_check.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -117,9 +118,23 @@ pub fn planDoc(gpa: Allocator, io: std.Io, edit: DocEdit, rel: []u8) !Prepared {
 
 pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     return switch (edit.op) {
-        .write => planWrite(gpa, io, runtime, root, edit, rel),
+        .write => if (edit.text != null) planWrite(gpa, io, runtime, root, edit, rel) else checked(gpa, try planWrite(gpa, io, runtime, root, edit, rel)),
         .delete => if (edit.ref_text.len == 0) planFileDeletion(gpa, io, edit, rel) else planSymbolDeletion(gpa, io, runtime, edit, rel),
     };
+}
+
+/// Runs the language's source check on a symbol or node write; text writes ran it in
+/// file_edit.prepare. On a refusal the caller still owns rel, so it is kept out of deinit.
+fn checked(gpa: Allocator, p: Prepared) !Prepared {
+    const next = p.snapshot orelse return p;
+    const check = next.profile.source_check orelse return p;
+    const base: ?[]const u8 = if (p.base) |b| b.source else null;
+    const fault = source_check.judge(check, base, next.source) orelse return p;
+    const err = source_check.refuse(p.rel, fault);
+    var rest = p;
+    rest.rel = &.{};
+    rest.deinit(gpa);
+    return err;
 }
 
 fn holeBefore(_: void, a: symbol.Hole, b: symbol.Hole) bool {
