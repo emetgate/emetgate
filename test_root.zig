@@ -143,6 +143,7 @@ pub const own_dir = src.own_dir;
 pub const text_checks = src.text_checks;
 pub const tool_names = src.tool_names;
 pub const batch_plan = src.batch_plan;
+pub const batch = src.batch;
 pub const doc_writer = src.doc_writer;
 pub const rules = src.rules;
 pub const scan = src.scan;

@@ -142,6 +142,7 @@ pub const own_dir = @import("platform/own_dir.zig");
 pub const text_checks = @import("engine/text_checks.zig");
 pub const tool_names = @import("engine/tool_names.zig");
 pub const batch_plan = @import("platform/batch_plan.zig");
+pub const batch = @import("platform/batch.zig");
 pub const doc_writer = @import("platform/doc_writer.zig");
 pub const rules = @import("platform/rules.zig");
 pub const scan = @import("platform/scan.zig");

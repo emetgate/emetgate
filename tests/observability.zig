@@ -1,5 +1,5 @@
 const std = @import("std");
-const shadow_root = @import("emetgate").shadow_root;
+const batch = @import("emetgate").batch;
 const git_fixture = @import("git_fixture.zig");
 const diagnostics = @import("diagnostics.zig");
 const builtin = @import("builtin");
@@ -379,25 +379,6 @@ test "a committed batch counts every edit in the footer and logs the full gate" 
     try expectContains(events, "\"confidence\":null");
 }
 
-fn raceExternalEdit(file_abs: []const u8, shadow_abs: []const u8) void {
-    const io = testing.io;
-    var started_buf: [std.fs.max_path_bytes]u8 = undefined;
-    var raced_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const started = std.fmt.bufPrint(&started_buf, "{s}\\started", .{shadow_abs}) catch return;
-    const raced = std.fmt.bufPrint(&raced_buf, "{s}\\raced", .{shadow_abs}) catch return;
-    var attempt: usize = 0;
-    while (attempt < 3000) : (attempt += 1) {
-        if (std.Io.Dir.cwd().access(io, started, .{})) |_| break else |_| {}
-        io.sleep(.fromMilliseconds(10), .awake) catch return;
-    } else return;
-    const original = std.Io.Dir.cwd().readFileAlloc(io, file_abs, testing.allocator, .unlimited) catch return;
-    defer testing.allocator.free(original);
-    const edited = std.mem.concat(testing.allocator, u8, &.{ original, "// external\n" }) catch return;
-    defer testing.allocator.free(edited);
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = file_abs, .data = edited }) catch return;
-    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = raced, .data = "" }) catch return;
-}
-
 test "a failure after the commit began is reported as commit phase, never disk untouched" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const runtime = try Runtime.create(testing.allocator);
@@ -410,18 +391,14 @@ test "a failure after the commit began is reported as commit phase, never disk u
     const file = try repo.under("src\\math.ts");
     defer testing.allocator.free(file);
 
-    const location = try shadow_root.locate(testing.allocator, repo.root_abs, null);
-    defer location.deinit(testing.allocator);
-    const shadow_abs = location.shadow;
-    const racing_cmd = "echo.> started & (for /l %i in (1,1,3000) do @if exist raced (exit 0) else ping -n 1 127.0.0.1 >nul) & exit 1";
     const hex = symbol.formatHash(try hashOfAdd(runtime, file));
     var line: Allocating = .init(testing.allocator);
     defer line.deinit();
     try writeCall(&line.writer, "emetgate_try", file, hex[0..], "{\n  return a - b;\n}");
 
-    const racer = try std.Thread.spawn(.{}, raceExternalEdit, .{ file, shadow_abs });
-    const outcome = call(runtime, line.written(), &observer, .{ .test_command = racing_cmd, .root = repo.root_abs });
-    racer.join();
+    batch.fail_after_landing = true;
+    const outcome = call(runtime, line.written(), &observer, .{ .test_command = "cmd /c exit 0", .root = repo.root_abs });
+    batch.fail_after_landing = false;
     const response = try outcome;
     defer testing.allocator.free(response);
     try expectContains(response, "\"isError\":true");
@@ -431,7 +408,7 @@ test "a failure after the commit began is reported as commit phase, never disk u
 
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
-    try testing.expect(!std.mem.eql(u8, committed_source, on_disk));
+    try testing.expectEqualStrings(committed_source, on_disk);
 }
 
 test "fail-soft: an events file symlinked outside the repo is never written through" {
