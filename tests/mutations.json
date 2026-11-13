@@ -11738,15 +11738,22 @@
       ]
     },
     {
+      "id": "RST1-change-time-ignored-by-the-racy-rule",
+      "file": "src/platform/run_stamps.zig",
+      "from": "    return @max(stamp.mtime_ns, stamp.ctime_ns) < started_ns - mtime_slack_ns;",
+      "to": "    return stamp.mtime_ns < started_ns - mtime_slack_ns;",
+      "kills": [
+        "run stamps: a same-size rewrite inside one clock tick, with its write time put back, is read again while its change time is recent"
+      ]
+    },
+    {
       "id": "TL1-file-of-exactly-the-limit-excluded",
       "file": "src/platform/search_index.zig",
       "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "kills": [
         "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk"
-      ],
-      "expect_status": "survived",
-      "note": "no test tells a file read from the index from one streamed from disk; both paths find the match"
+      ]
     },
     {
       "id": "PF1-stamp-reads-the-creation-time",
@@ -16519,6 +16526,43 @@
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
         "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+      ]
+    },
+    {
+      "id": "FW11-watched-find-skips-the-cookie-fence",
+      "file": "src/protocol/find_tools.zig",
+      "from": "const dirty = (if (fence) w.sync(fence_timeout_ms) else w.drain()) catch {",
+      "to": "const dirty = w.drain() catch {",
+      "kills": [
+        "find after write: a watched find fences the change watcher, so a write whose events were not read yet is found by the very next find"
+      ]
+    },
+    {
+      "id": "FW12-racy-stamp-trusted",
+      "file": "src/protocol/find_tools.zig",
+      "from": "indexed.mtime < read_at - racy_ns",
+      "to": "indexed.mtime < read_at + racy_ns",
+      "kills": [
+        "find after write: a same-size rewrite that puts back the old mtime is found while the index read is under two seconds old",
+        "find after write: an index loaded from disk judges stamps by the time its build read the files, not by the index file's mtime"
+      ]
+    },
+    {
+      "id": "FW13-loaded-index-read-time-later-than-stored",
+      "file": "src/protocol/find_tools.zig",
+      "from": ".read_at = ix.h.read_at };",
+      "to": ".read_at = ix.h.read_at + 3600 * std.time.ns_per_s };",
+      "kills": [
+        "find after write: an index loaded from disk judges stamps by the time its build read the files, not by the index file's mtime"
+      ]
+    },
+    {
+      "id": "FW14-index-read-time-not-stored",
+      "file": "src/platform/emet_file.zig",
+      "from": "            h.read_at = out.read_at;\n",
+      "to": "",
+      "kills": [
+        "find after write: an index loaded from disk judges stamps by the time its build read the files, not by the index file's mtime"
       ]
     },
     {

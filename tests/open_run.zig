@@ -173,13 +173,15 @@ test "open run: a file that only enters the listing, such as a cache file git ad
     if (std.mem.eql(u8, try age.string("shell"), "cmd")) return;
     try testing.expectEqual(@as(i64, 0), (try age.field("exit_code")).?.integer);
     try testing.expect((try age.field("files_changed")) == null);
+    try testing.io.sleep(.fromNanoseconds(run_command.mtime_slack_ns + 300 * std.time.ns_per_ms), .awake);
     var add = try fixture.call(policy, .{ .command = "git add __pycache__ && echo made > made.txt", .as_user = true });
     defer add.deinit();
     errdefer std.debug.print("{s}\n", .{add.text});
     try testing.expectEqual(@as(i64, 0), (try add.field("exit_code")).?.integer);
     try testing.expectEqual(@as(i64, 1), (try add.field("files_changed")).?.integer);
-    try testing.expect(run_command.untouchedSince(0, 3 * std.time.ns_per_s));
-    try testing.expect(!run_command.untouchedSince(std.time.ns_per_s, 2 * std.time.ns_per_s));
+    try testing.expect(run_command.untouchedSince(.{ .mtime_ns = 0, .ctime_ns = 0, .size = 0 }, 3 * std.time.ns_per_s));
+    try testing.expect(!run_command.untouchedSince(.{ .mtime_ns = std.time.ns_per_s, .ctime_ns = 0, .size = 0 }, 2 * std.time.ns_per_s));
+    try testing.expect(!run_command.untouchedSince(.{ .mtime_ns = 0, .ctime_ns = 2 * std.time.ns_per_s, .size = 0 }, 3 * std.time.ns_per_s));
 }
 
 test "open run: a command past its timeout is killed and the reply says how to give it more time" {

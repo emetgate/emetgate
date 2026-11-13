@@ -8,6 +8,8 @@ pub const cookie_dir = ".emetgate/cookies";
 pub const default_buffer_bytes: u32 = 64 * 1024;
 pub const min_buffer_bytes: u32 = 1024;
 
+pub var hold_until_fence: bool = false;
+
 pub const StartError = error{ NotWatching, NameTooLong, InvalidWtf8, OutOfMemory };
 pub const SyncError = error{ Overflow, Timeout, NotWatching, OutOfMemory };
 
@@ -309,7 +311,9 @@ pub const Watcher = struct {
     }
 
     pub fn drain(self: *Watcher) SyncError!Dirty {
-        while (try self.poll(0)) {}
+        if (!(builtin.is_test and hold_until_fence)) {
+            while (try self.poll(0)) {}
+        }
         if (self.dead) return self.fail(error.NotWatching);
         if (self.overflowed) return self.fail(error.Overflow);
         return self.take();

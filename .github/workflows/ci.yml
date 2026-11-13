@@ -176,17 +176,38 @@ jobs:
         run: |
           zig build -Doptimize=ReleaseSafe --summary all
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Load the server at a fixed address so a crash can be named by source line
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/catalog-server" | Out-Null
+          Copy-Item zig-out/bin/emetgate.exe, zig-out/bin/emetgate.pdb "$env:RUNNER_TEMP/catalog-server/"
+          python -I tools/crash_symbols.py fix-base "$env:RUNNER_TEMP/catalog-server/emetgate.exe"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Every scenario of the catalog against the built server
         shell: pwsh
         run: |
-          python -I tests/catalog/run.py --emetgate zig-out/bin/emetgate.exe --json "$env:RUNNER_TEMP/catalog.json"
+          python -I tests/catalog/run.py --emetgate "$env:RUNNER_TEMP/catalog-server/emetgate.exe" --json "$env:RUNNER_TEMP/catalog.json" --work "$env:RUNNER_TEMP/catalog-work" --keep
           if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Name the source lines of every server crash
+        if: failure()
+        shell: pwsh
+        run: python -I tools/crash_symbols.py name "$env:RUNNER_TEMP/catalog-server/emetgate.exe" "$env:RUNNER_TEMP/catalog-work"
       - name: Upload the catalog results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: catalog-results
           path: ${{ runner.temp }}/catalog.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload the server and its crash dumps
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-crash
+          path: |
+            ${{ runner.temp }}/catalog-server/
+            ${{ runner.temp }}/catalog-work/**/stderr-*.txt
           if-no-files-found: ignore
           retention-days: 7
 

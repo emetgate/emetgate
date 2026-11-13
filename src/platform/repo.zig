@@ -210,6 +210,53 @@ pub fn removeAllFromIndex(gpa: Allocator, io: std.Io, root_abs: []const u8, path
     return runOnPaths(gpa, io, root_abs, &.{ "-c", "core.longpaths=true", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, paths);
 }
 
+pub fn indexEntriesOf(arena: Allocator, io: std.Io, root_abs: []const u8, rels: []const []const u8) ![]const []const u8 {
+    const entries = try arena.alloc([]const u8, rels.len);
+    @memset(entries, "");
+    if (rels.len == 0) return entries;
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ try exe_path.git(arena, root_abs), "--literal-pathspecs", "-c", "core.longpaths=true", "ls-files", "-s", "-z", "--" });
+    try argv.appendSlice(arena, rels);
+    const result = bounded_run.run(arena, io, .{
+        .argv = argv.items,
+        .cwd = .{ .path = root_abs },
+        .stdout_limit = .limited(max_git_output),
+    }) catch return error.GitFailed;
+    switch (result.term) {
+        .exited => |code| if (code != 0) return error.GitFailed,
+        else => return error.GitFailed,
+    }
+    var records = std.mem.tokenizeScalar(u8, result.stdout, 0);
+    while (records.next()) |record| {
+        const tab = std.mem.indexOfScalar(u8, record, '\t') orelse continue;
+        for (rels, entries) |rel, *entry| {
+            if (!std.ascii.eqlIgnoreCase(rel, record[tab + 1 ..])) continue;
+            entry.* = try std.mem.concat(arena, u8, &.{ entry.*, record, "\x00" });
+            break;
+        }
+    }
+    return entries;
+}
+
+pub fn putIndexEntry(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8, entry: []const u8) !bool {
+    var records = std.mem.tokenizeScalar(u8, entry, 0);
+    const record = records.next() orelse {
+        try runOnPaths(gpa, io, root_abs, &.{ "--literal-pathspecs", "-c", "core.longpaths=true", "rm", "--cached", "--ignore-unmatch", "-q", "--" }, &.{rel});
+        return true;
+    };
+    if (records.next() != null) return false;
+    const tab = std.mem.indexOfScalar(u8, record, '\t') orelse return false;
+    var fields = std.mem.tokenizeScalar(u8, record[0..tab], ' ');
+    const mode = fields.next() orelse return false;
+    const oid = fields.next() orelse return false;
+    const stage = fields.next() orelse return false;
+    if (!std.mem.eql(u8, stage, "0")) return false;
+    const info = try std.fmt.allocPrint(gpa, "{s},{s},{s}", .{ mode, oid, record[tab + 1 ..] });
+    defer gpa.free(info);
+    try runOnPaths(gpa, io, root_abs, &.{ "-c", "core.longpaths=true", "update-index", "--add", "--cacheinfo" }, &.{info});
+    return true;
+}
+
 fn runOnPaths(gpa: Allocator, io: std.Io, root_abs: []const u8, command: []const []const u8, paths: []const []const u8) !void {
     const git = try exe_path.git(gpa, root_abs);
     defer gpa.free(git);

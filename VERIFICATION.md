@@ -6,16 +6,16 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3150**
-- Mutations declared in `tests/mutations.json`: **2029**
-  - killed: **1979**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3160**
+- Mutations declared in `tests/mutations.json`: **2034**
+  - killed: **1985**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **3**
   - control: **3**
   - not caught by a test, documented as unbounded cost: **1**
   - verified end-to-end, not by the mutation harness: **3**
-  - survives, not yet classified: **20** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, TL1-file-of-exactly-the-limit-excluded, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
+  - survives, not yet classified: **19** (R11-cache-stamp-check-skipped, R12-cache-not-invalidated-after-try, R13-cache-not-invalidated-after-try-batch, RN14-cache-not-invalidated-after-rename, DW8-write-doc-allows-create, BC7-index-sync-of-the-journal-runs-before-the-commit, CSR10-overload-not-refused, CSR12-constructor-name-not-proven, CSR14-scope-bound-use-not-proven, CSR16-static-call-on-global-type-not-proven, CSR17-static-shape-not-compared, CSR20-nested-type-accepted-as-global, CSR28-alias-directive-imports-a-namespace, CSR31-target-kind-not-checked, CSR34-global-type-for-every-language, CSF1-accessor-def-not-skipped, CSF2-property-accessor-holder-not-skipped, PY-SC2-rest-position-matches-any, PY-RN15-starred-unpacking-not-binder)
 - Red-team suites: **16** files, **199** tests total
   - `tests/redteam_appcontainer.zig`: 5
   - `tests/redteam_batch_create.zig`: 6
@@ -762,7 +762,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1366 mutation(s).
+1371 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1395,7 +1395,8 @@ python tools/verification_page.py --check
 | `SR6-racy-stamp-not-smudged` | `src/platform/search_index.zig` | `if (!isRacy(stamp, read_ns)) return stamp;` -> `if (!isRacy(stamp, read_ns) or true) return stamp;` | a file rewritten inside the racy window with its old size and both of its old t...; a fil... | killed |
 | `RS2-read-time-not-taken` | `src/platform/search_index.zig` | `prepared.stamp = smudgedIfRacy(prepared.stamp, wallNow(self.io)...` -> `prepared.stamp = smudgedIfRacy(prepared.stamp, 0 * wallNow(self...` | a file rewritten inside the racy window with its old size and both of its old t...; a fil... | killed |
 | `RS4-racy-entry-kept-with-its-real-stamp` | `src/platform/search_index.zig` | `return .{ .mtime_ns = smudged_mtime_ns, .ctime_ns = stamp.ctime...` -> `return .{ .mtime_ns = stamp.mtime_ns, .ctime_ns = stamp.ctime_n...` | a file rewritten inside the racy window with its old size and both of its old t...; a fil... | killed |
-| `TL1-file-of-exactly-the-limit-excluded` | `src/platform/search_index.zig` | `if (stamp.size > max_indexed_file_bytes) return .{ .path = path...` -> `if (stamp.size >= max_indexed_file_bytes) return .{ .path = pat...` | search answers: a tracked file of exactly the index size limit is searched from... | survives (unclassified) |
+| `RST1-change-time-ignored-by-the-racy-rule` | `src/platform/run_stamps.zig` | `return @max(stamp.mtime_ns, stamp.ctime_ns) < started_ns - mtim...` -> `return stamp.mtime_ns < started_ns - mtime_slack_ns;` | run stamps: a same-size rewrite inside one clock tick, with its write time put ... | killed |
+| `TL1-file-of-exactly-the-limit-excluded` | `src/platform/search_index.zig` | `if (stamp.size > max_indexed_file_bytes) return .{ .path = path...` -> `if (stamp.size >= max_indexed_file_bytes) return .{ .path = pat...` | search answers: a tracked file of exactly the index size limit is searched from... | killed |
 | `PF1-stamp-reads-the-creation-time` | `src/platform/stat_scan.zig` | `const write = std.mem.readInt(i64, rec[24..32], .little);` -> `const write = std.mem.readInt(i64, rec[8..16], .little);` | a file rewritten with its old size and change time but a new last-write time is... | killed |
 | `HS1-header-sum-not-checked` | `src/platform/search_index_file.zig` | `if (!std.mem.eql(u8, &headerSum(bytes, sums), &header.header_su...` -> `` | index v4: any flipped byte is refused at open or at verify, and another version... | killed |
 | `IF1-index-file-version-not-named` | `src/platform/search_index_file.zig` | `if (bytes.len >= 8 and std.mem.startsWith(u8, bytes, "EMGIDX\x0...` -> `` | index v4: any flipped byte is refused at open or at verify, and another version... | killed |
@@ -1849,6 +1850,10 @@ python tools/verification_page.py --check
 | `FW2-fence-without-watcher-skips-rescan` | `src/protocol/find_tools.zig` | `if (fence) self.dirtyAll();` -> `` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |
 | `FW3-every-tool-counted-read-only` | `src/protocol/handlers.zig` | `if (std.mem.eql(u8, tool, name)) return true;` -> `_ = tool;         _ = name;         return true;` | find after write: the read only tools are told apart from every other tool | killed |
 | `FW4-stale-find-skips-settle` | `src/protocol/find_tools.zig` | `} else if (self.patcher.busy()) {                 self.ready.wa...` -> `} else return;` | find after write: an index with no watcher sees a file written through emetgate...; find ... | killed |
+| `FW11-watched-find-skips-the-cookie-fence` | `src/protocol/find_tools.zig` | `const dirty = (if (fence) w.sync(fence_timeout_ms) else w.drain...` -> `const dirty = w.drain() catch {` | find after write: a watched find fences the change watcher, so a write whose ev... | killed |
+| `FW12-racy-stamp-trusted` | `src/protocol/find_tools.zig` | `indexed.mtime < read_at - racy_ns` -> `indexed.mtime < read_at + racy_ns` | find after write: a same-size rewrite that puts back the old mtime is found whi...; find ... | killed |
+| `FW13-loaded-index-read-time-later-than-stored` | `src/protocol/find_tools.zig` | `.read_at = ix.h.read_at };` -> `.read_at = ix.h.read_at + 3600 * std.time.ns_per_s };` | find after write: an index loaded from disk judges stamps by the time its build... | killed |
+| `FW14-index-read-time-not-stored` | `src/platform/emet_file.zig` | `h.read_at = out.read_at;` -> `` | find after write: an index loaded from disk judges stamps by the time its build... | killed |
 | `FW8-map-names-ignore-changed-files` | `src/protocol/map_tools.zig` | `report.full_link) self.tables_stale = true;` -> `report.full_link) {}` | find after write: evidence and explore know a function renamed through emetgate...; find ... | killed |
 | `FW9-map-names-rebuilt-on-unchanged-call` | `src/protocol/map_tools.zig` | `if (!self.tables_stale) return;` -> `` | find after write: evidence and explore know a function renamed by an editor out... | killed |
 | `FW10-map-names-miss-edited-files` | `src/protocol/map_tools.zig` | `report.extracted != 0 or report.removed != 0 or report.full_link` -> `report.removed != 0 or report.full_link` | find after write: evidence and explore know a function renamed through emetgate...; find ... | killed |

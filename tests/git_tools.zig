@@ -724,6 +724,55 @@ test "blame and diff detail full stay within the git reply budget under a huge c
     try testing.expectEqual(next, page_body.value.object.get("line_start").?.integer);
 }
 
+test "log and status detail full stay within the git reply budget under a huge configured read budget and page by line_start" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const msg_abs = try std.fmt.allocPrint(gpa, "{s}/../msg.txt", .{repo.root_abs});
+    defer gpa.free(msg_abs);
+    for (0..3) |c| {
+        var name_buf: [32]u8 = undefined;
+        const name = try std.fmt.bufPrint(&name_buf, "c{d}.txt", .{c});
+        try repo.writeFile(name, name);
+        try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "msg.txt", .data = "\u{15f}\"" ** 9000 });
+        try repo.git(&.{ "add", "." });
+        try repo.git(&.{ "commit", "-q", "-F", msg_abs });
+    }
+    for (0..700) |f| {
+        var name_buf: [96]u8 = undefined;
+        try repo.writeFile(try std.fmt.bufPrint(&name_buf, "untracked_file_{d:0>4}_with_a_long_name.txt", .{f}), "u\n");
+    }
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const policy: server.Policy = .{ .root = repo.root_abs, .read_budget = 4 * 1024 * 1024 };
+    const limit = reply_contract.budget(.git);
+    for ([_][]const u8{ "log", "status" }) |sub| {
+        var reply = try callToolWith(runtime, policy, .{ .sub = sub, .path = repo.root_abs, .detail = "full" });
+        defer reply.deinit();
+        errdefer std.debug.print("{s}: {d} chars" ++ "\n", .{ sub, reply.text.len });
+        try testing.expect(!reply.is_error);
+        try testing.expect(reply.text.len <= limit);
+        var body = try reply.payload();
+        defer body.deinit();
+        const output = body.value.object.get("output").?.string;
+        try testing.expect(std.unicode.utf8ValidateSlice(output));
+        if (std.mem.eql(u8, sub, "log")) try testing.expect(body.value.object.get("line_shortened").?.bool);
+        const next = body.value.object.get("next_line").?.integer;
+        const trailer = reply_contract.findTrailer(reply.text) orelse return error.TestNoTrailer;
+        var want_buf: [48]u8 = undefined;
+        try testing.expect(std.mem.indexOf(u8, trailer, try std.fmt.bufPrint(&want_buf, "\"line_start\":{d}", .{next})) != null);
+        try testing.expect(std.mem.indexOf(u8, trailer, "\"detail\":\"full\"") != null);
+
+        var page = try callToolWith(runtime, policy, .{ .sub = sub, .path = repo.root_abs, .detail = "full", .line_start = next });
+        defer page.deinit();
+        try testing.expect(!page.is_error);
+        try testing.expect(page.text.len <= limit);
+        var page_body = try page.payload();
+        defer page_body.deinit();
+        try testing.expectEqual(next, page_body.value.object.get("line_start").?.integer);
+    }
+}
+
 test "git log on a repository with no commits answers no commits yet, show refuses with NoCommitYet" {
     var repo = try Repo.init();
     defer repo.deinit();

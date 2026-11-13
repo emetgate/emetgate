@@ -553,7 +553,7 @@ fn makeDirs(b: *const Batch) !void {
     }
 }
 
-fn removeEmptyDirs(io: std.Io, dirs: []const []const u8) void {
+pub fn removeEmptyDirs(io: std.Io, dirs: []const []const u8) void {
     var k = dirs.len;
     while (k > 0) {
         k -= 1;

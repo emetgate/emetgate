@@ -24,8 +24,8 @@ pub const Stamp = stat_scan.Stamp;
 
 pub const mtime_slack_ns: i96 = 2 * std.time.ns_per_s;
 
-pub fn untouchedSince(mtime_ns: i96, started_ns: i96) bool {
-    return mtime_ns < started_ns - mtime_slack_ns;
+pub fn untouchedSince(stamp: Stamp, started_ns: i96) bool {
+    return @max(stamp.mtime_ns, stamp.ctime_ns) < started_ns - mtime_slack_ns;
 }
 
 pub const max_hashed_bytes = 256 * 1024 * 1024;
@@ -98,7 +98,7 @@ pub const Memo = struct {
         const now = stamp orelse return null;
         const known = self.files.get(rel) orelse return null;
         if (!sameStamp(known.stamp, now)) return null;
-        if (!untouchedSince(known.stamp.mtime_ns, known.at_ns)) return null;
+        if (!untouchedSince(known.stamp, known.at_ns)) return null;
         return known.hash;
     }
 
@@ -163,10 +163,10 @@ pub fn compare(arena: Allocator, reader: *Reader, files: []const []const u8, sta
         const abs = try absOf(arena, root_abs, rel);
         const was = before.files.get(rel);
         if (was == null) {
-            const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch continue;
-            if (untouchedSince(stat.mtime.nanoseconds, started_ns)) continue;
+            const seen = stamp orelse continue;
+            if (untouchedSince(seen, started_ns)) continue;
         }
-        if (was) |entry| if (entry.stamp != null and stamp != null and sameStamp(entry.stamp.?, stamp.?) and untouchedSince(stamp.?.mtime_ns, before.at_ns)) continue;
+        if (was) |entry| if (entry.stamp != null and stamp != null and sameStamp(entry.stamp.?, stamp.?) and untouchedSince(stamp.?, before.at_ns)) continue;
         const now = reader.hash(rel) orelse continue;
         try fresh.append(arena, .{ .rel = rel, .stamp = stamp, .hash = now });
         if (was) |entry| if (std.mem.eql(u8, &entry.hash, &now)) continue;
