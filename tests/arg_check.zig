@@ -158,6 +158,50 @@ test "arg check: documented aliases, item shapes, null and policy fields" {
     }
 }
 
+test "arg check: arguments that select two different things, or a selector the file type has none of, are refused with a fix" {
+    const policy: Policy = .{};
+    inline for (.{
+        .{ "emetgate_read_file", "{\"file\":\"data/big.json\",\"heading\":\"Root\"}", "ConflictingArguments", "heading applies only to .md files", "with pointer" },
+        .{ "emetgate_read_file", "{\"file\":\"notes.md\",\"pointer\":\"/a\"}", "ConflictingArguments", "pointer applies only to .json files", "with heading" },
+        .{ "emetgate_read_file", "{\"file\":\"src/app.ts\",\"heading\":\"A\"}", "ConflictingArguments", "heading applies only", "line_start and line_end" },
+        .{ "emetgate_read_file", "{\"files\":[\"a.md\",{\"file\":\"b.json\",\"heading\":\"A\"}]}", "ConflictingArguments", "files[1].heading", "with pointer" },
+        .{ "emetgate_read_symbol", "{\"file\":\"src/app.ts\",\"symbol\":\"Cart.add\",\"symbols\":[\"Cart.total\"]}", "ConflictingArguments", "symbol cannot be combined with symbols", "symbols: [" },
+        .{ "emetgate_read_symbol", "{\"file\":\"src/app.ts\",\"symbols\":[\"A\"],\"line_start\":1,\"line_end\":2}", "ConflictingArguments", "symbols cannot be combined with line_start", "line_start/line_end alone" },
+        .{ "emetgate_write_doc", "{\"file\":\"config.json\",\"hash\":\"h\",\"pointer\":\"/n\",\"heading\":\"Usage\",\"content\":\"4\"}", "ConflictingArguments", "pointer cannot be combined with heading", "keep pointer" },
+        .{ "emetgate_change", "{\"edits\":[{\"file\":\"notes.txt\",\"old_string\":\"a\",\"new_string\":\"b\",\"content\":\"whole\",\"hash\":\"h\"}]}", "ConflictingArguments", "edits[0].old_string cannot be combined with edits[0].content", "own item of edits" },
+        .{ "emetgate_change", "{\"edits\":[{\"path\":\"a.js\",\"old_str\":\"a\",\"new_str\":\"b\",\"body\":\"x\"}]}", "ConflictingArguments", "old_str cannot be combined with edits[0].body", "own item of edits" },
+        .{ "emetgate_change", "{\"edits\":[{\"file\":\"a.md\",\"hash\":\"h\",\"heading\":\"A\",\"line_start\":1,\"content\":\"x\"}]}", "ConflictingArguments", "heading cannot be combined with edits[0].line_start", "keep pointer" },
+        .{ "emetgate_find", "{\"pattern\":\"\"}", "EmptyPattern", "pattern of emetgate_find is empty", "literal text" },
+    }) |case| {
+        var args = try std.json.parseFromSlice(Value, gpa, case[1], .{});
+        defer args.deinit();
+        const refused = (try arg_check.check(gpa, case[0], args.value, policy)) orelse return error.NotRefused;
+        defer gpa.free(refused);
+        errdefer std.debug.print("{s}\n", .{refused});
+        var reply = try errorOf(refused);
+        defer reply.deinit();
+        try testing.expectEqualStrings(case[2], reply.value.object.get("error").?.string);
+        try testing.expect(std.mem.indexOf(u8, reply.value.object.get("message").?.string, case[3]) != null);
+        try testing.expect(std.mem.indexOf(u8, reply.value.object.get("fix").?.string, case[4]) != null);
+    }
+    inline for (.{
+        .{ "emetgate_read_file", "{\"file\":\"data/big.json\",\"pointer\":\"/a\"}" },
+        .{ "emetgate_read_file", "{\"file\":\"README.MD\",\"heading\":\"Usage\"}" },
+        .{ "emetgate_read_file", "{\"files\":[{\"file\":\"a.md\",\"heading\":\"A\"},{\"file\":\"b.json\",\"pointer\":\"/a\"}]}" },
+        .{ "emetgate_read_symbol", "{\"file\":\"a.ts\",\"symbols\":[\"A\",\"B\"]}" },
+        .{ "emetgate_write_doc", "{\"file\":\"config.json\",\"hash\":\"h\",\"pointer\":\"/n\",\"content\":\"4\"}" },
+        .{ "emetgate_change", "{\"edits\":[{\"file\":\"a.js\",\"symbol\":\"f\",\"hash\":\"h\",\"content\":\"x\"},{\"file\":\"a.md\",\"hash\":\"h\",\"line_start\":1,\"line_end\":2,\"content\":\"x\"}]}" },
+        .{ "emetgate_find", "{\"pattern\":\"needle\"}" },
+    }) |case| {
+        var args = try std.json.parseFromSlice(Value, gpa, case[1], .{});
+        defer args.deinit();
+        const refused = try arg_check.check(gpa, case[0], args.value, policy);
+        defer if (refused) |r| gpa.free(r);
+        if (refused) |r| std.debug.print("{s}: {s}\n", .{ case[0], r });
+        try testing.expect(refused == null);
+    }
+}
+
 test "arg check: a value of the wrong type is the invalid-params error naming it and its type" {
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");

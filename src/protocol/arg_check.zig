@@ -126,12 +126,114 @@ pub fn check(gpa: Allocator, name: []const u8, arguments: ?Value, policy: Policy
         if (!typeFits(spec, name, value)) return typeRefusal("", key, spec);
         if (eql(key, "edits") and (eql(name, "emetgate_change") or eql(name, "emetgate_try_batch"))) {
             if (try checkItems(gpa, "edits", value, &edit_item_props, &forgive.item_aliases)) |refused| return refused;
+            if (try checkItemRules(gpa, "edits", value, &edit_item_rules, &forgive.item_aliases)) |refused| return refused;
         }
         if (eql(key, "files") and eql(name, "emetgate_read_file")) {
             if (try checkItems(gpa, "files", value, &file_item_props, &.{})) |refused| return refused;
+            if (try checkItemRules(gpa, "files", value, &read_file_rules, &.{})) |refused| return refused;
         }
     }
+    return checkRules(gpa, name, "", args, rulesOf(name), aliasesOf(name));
+}
+
+const Rule = union(enum) {
+    apart: Apart,
+    only_for: OnlyFor,
+    non_empty: NonEmpty,
+};
+
+const Apart = struct { key: []const u8, from: []const []const u8, fix: []const u8 };
+const OnlyFor = struct { key: []const u8, ext: []const u8, instead: []const u8, instead_ext: []const u8 };
+const NonEmpty = struct { key: []const u8, fix: []const u8 };
+
+const edit_shape_fix = "an edit has one shape: old_string with new_string, content with hash (and pointer, heading or line_start/line_end for a doc region), symbol with body, or node with text; send each shape as its own item of edits";
+const doc_region_fix = "a doc edit replaces one region: keep pointer (JSON), heading (Markdown) or line_start/line_end, and remove the others";
+const read_symbol_fix = "read several symbols with symbols: [\"A\", \"B\"] alone, one with symbol alone, or a range with line_start/line_end alone";
+
+const edit_item_rules = [_]Rule{
+    .{ .apart = .{ .key = "old_string", .from = &.{ "content", "body", "symbol", "node", "nodes", "pointer", "heading", "line_start", "line" }, .fix = edit_shape_fix } },
+    .{ .apart = .{ .key = "pointer", .from = &.{ "heading", "line_start", "line" }, .fix = doc_region_fix } },
+    .{ .apart = .{ .key = "heading", .from = &.{ "line_start", "line" }, .fix = doc_region_fix } },
+};
+
+const read_file_rules = [_]Rule{
+    .{ .only_for = .{ .key = "heading", .ext = ".md", .instead = "pointer", .instead_ext = ".json" } },
+    .{ .only_for = .{ .key = "pointer", .ext = ".json", .instead = "heading", .instead_ext = ".md" } },
+};
+
+const read_symbol_rules = [_]Rule{
+    .{ .apart = .{ .key = "symbol", .from = &.{ "symbols", "line_start", "line_end" }, .fix = read_symbol_fix } },
+    .{ .apart = .{ .key = "symbols", .from = &.{ "line_start", "line_end" }, .fix = read_symbol_fix } },
+};
+
+const find_rules = [_]Rule{
+    .{ .non_empty = .{ .key = "pattern", .fix = "pass the literal text to find as pattern, 1 to 4096 bytes" } },
+};
+
+fn rulesOf(name: []const u8) []const Rule {
+    if (eql(name, "emetgate_read_file")) return &read_file_rules;
+    if (eql(name, "emetgate_read_symbol")) return &read_symbol_rules;
+    if (eql(name, "emetgate_find")) return &find_rules;
+    if (eql(name, "emetgate_write_doc") or eql(name, "emetgate_try") or eql(name, "emetgate_try_batch")) return &edit_item_rules;
+    return &.{};
+}
+
+fn checkItemRules(gpa: Allocator, field: []const u8, list: Value, rules: []const Rule, aliases: []const Alias) !?[]u8 {
+    const items: []const Value = switch (list) {
+        .array => |a| a.items,
+        .object => (&list)[0..1],
+        else => return null,
+    };
+    for (items, 0..) |item, i| {
+        var where_buf: [48]u8 = undefined;
+        const where = std.fmt.bufPrint(&where_buf, "{s}[{d}].", .{ field, i }) catch field;
+        if (try checkRules(gpa, "", where, item, rules, aliases)) |refused| return refused;
+    }
     return null;
+}
+
+fn checkRules(gpa: Allocator, name: []const u8, where: []const u8, args: Value, rules: []const Rule, aliases: []const Alias) !?[]u8 {
+    if (args != .object) return null;
+    for (rules) |rule| switch (rule) {
+        .apart => |apart| {
+            const key = given(args, apart.key, aliases) orelse continue;
+            for (apart.from) |other| {
+                const clash = given(args, other, aliases) orelse continue;
+                if (eql(clash, key)) continue;
+                return try reply(gpa, "ConflictingArguments", 2, "{s}{s} cannot be combined with {s}{s}", .{ where, key, where, clash }, "{s}", .{apart.fix});
+            }
+        },
+        .only_for => |only| {
+            const key = given(args, only.key, aliases) orelse continue;
+            const file_value = args.object.get("file") orelse continue;
+            if (file_value != .string) continue;
+            const file = file_value.string;
+            if (endsWithIgnoreCase(file, only.ext)) continue;
+            const instead = if (endsWithIgnoreCase(file, only.instead_ext)) only.instead else "line_start and line_end";
+            return try reply(gpa, "ConflictingArguments", 2, "{s}{s} applies only to {s} files, and {s} is not one", .{ where, key, only.ext, file }, "read {s} with {s}, or without {s}", .{ file, instead, key });
+        },
+        .non_empty => |non_empty| {
+            const value = args.object.get(non_empty.key) orelse continue;
+            if (value != .string or value.string.len != 0) continue;
+            const tool = if (name.len == 0) "this item" else name;
+            return try reply(gpa, "EmptyPattern", wire.exitCode(error.EmptyPattern), "{s}{s} of {s} is empty", .{ where, non_empty.key, tool }, "{s}", .{non_empty.fix});
+        },
+    };
+    return null;
+}
+
+fn given(args: Value, key: []const u8, aliases: []const Alias) ?[]const u8 {
+    if (args.object.get(key)) |value| if (value != .null) return key;
+    for (aliases) |alias| {
+        if (!eql(alias[0], key)) continue;
+        for (alias[1]) |other| if (args.object.get(other)) |value| if (value != .null) return other;
+    }
+    return null;
+}
+
+fn endsWithIgnoreCase(text: []const u8, suffix: []const u8) bool {
+    if (text.len < suffix.len) return false;
+    return std.ascii.eqlIgnoreCase(text[text.len - suffix.len ..], suffix);
 }
 
 fn accepted(name: []const u8, tool: Tool, key: []const u8, policy: Policy) ?Prop {

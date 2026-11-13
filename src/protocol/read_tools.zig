@@ -680,6 +680,11 @@ pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
     return success(gpa, &buffer);
 }
 
+fn isFile(io: std.Io, abs: []const u8) bool {
+    const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return false;
+    return stat.kind == .file;
+}
+
 /// The file system folders directly under dir, as names, kept while they fit `limit`.
 fn writeFolders(gpa: Allocator, io: std.Io, dir_abs: []const u8, limit: usize, js: *std.json.Stringify) !void {
     var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return;
@@ -737,6 +742,11 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, of
     const offset: usize = @intCast(offset_arg);
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
+    if (isFile(io, place.abs)) {
+        const parent = std.fs.path.dirname(dir) orelse ".";
+        wire.setFix("{s} is a file: read it with emetgate_read_file file:\"{s}\", or list its folder with emetgate_list dir:\"{s}\"", .{ dir, dir, if (parent.len == 0) "." else parent });
+        return error.DirIsFile;
+    }
     var outside: std.ArrayList([]u8) = .empty;
     defer {
         for (outside.items) |p| gpa.free(p);

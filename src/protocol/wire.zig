@@ -1451,6 +1451,8 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "BinaryFile", "binary files cannot be read or edited with these tools" },
     .{ "DocTooLarge", "the file or its new content is over what emetgate edits (1 MiB for a non-code file, 16 MiB for source code), whatever the edit form; no emetgate tool can write it: keep each file under the limit by splitting the content, or ask the user to make this change" },
     .{ "EmptyPattern", "pass a non-empty pattern" },
+    .{ "ConflictingArguments", "the arguments ask for two things the tool cannot do in one call; keep one of them and remove the other" },
+    .{ "DirIsFile", "dir names a file; read it with emetgate_read_file, or list its folder with emetgate_list" },
     .{ "IgnoredPath", "nothing was written: the path is ignored by git (a .gitignore rule matches it), so git could not track it; write it under a path that is not ignored, or ask the user to change the .gitignore rule" },
     .{ "InvalidPath", "pass a path relative to the repository root" },
     .{ "NoNodeEdits", "nodes is empty; send at least one {node, text}" },

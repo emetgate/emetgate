@@ -462,6 +462,20 @@ test "read_file caps a large file and says it was truncated" {
     try testing.expect(std.mem.indexOf(u8, trailer, try std.fmt.bufPrint(&at_buf, "\"line_start\":{d},", .{next})) != null);
 }
 
+test "list refuses a dir that names a file, with a fix that reads it or lists its folder" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    var reply = try callTool(runtime, "emetgate_list", .{ .dir = "src/protocol/wire.zig" });
+    defer reply.deinit();
+    try testing.expect(reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("DirIsFile", body.value.object.get("error").?.string);
+    const fix = body.value.object.get("fix").?.string;
+    try testing.expect(std.mem.indexOf(u8, fix, "emetgate_read_file") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "dir:\"src/protocol\"") != null);
+}
+
 test "read tools refuse a path outside the repo" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     const runtime = try Runtime.create(testing.allocator);
