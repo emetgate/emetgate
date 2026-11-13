@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const cache_lease = @import("../platform/cache_lease.zig");
 const emet_file = @import("../platform/emet_file.zig");
 const change_watch = @import("../platform/change_watch.zig");
@@ -20,6 +21,8 @@ pub const waited_note = "waited for the find index build";
 pub const index_suffix = ".emet";
 
 pub const Job = enum { load, build };
+
+pub var fixed_read_at: ?i64 = null;
 
 const max_changed = 256;
 const max_changed_bytes = 4 << 20;
@@ -492,7 +495,7 @@ pub const Session = struct {
             const path = try self.generationPath(next);
             errdefer self.gpa.free(path);
             var links_out: std.ArrayList([]const u8) = .empty;
-            const read_at = now(self.io);
+            const read_at = if (builtin.is_test) fixed_read_at orelse now(self.io) else now(self.io);
             const paths = try emet_file.list(self.io, self.gpa, arena, self.root, &links_out);
             b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = .{ .path = path, .read_at = read_at } }, &self.cancel, &links_out), .path = path, .read_at = read_at };
             for (links_out.items) |p| putOwned(self.gpa, &b.links_out, p) catch {};

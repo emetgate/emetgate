@@ -173,6 +173,7 @@ test "open run: a file that only enters the listing, such as a cache file git ad
     if (std.mem.eql(u8, try age.string("shell"), "cmd")) return;
     try testing.expectEqual(@as(i64, 0), (try age.field("exit_code")).?.integer);
     try testing.expect((try age.field("files_changed")) == null);
+    try testing.io.sleep(.fromNanoseconds(run_command.mtime_slack_ns + 300 * std.time.ns_per_ms), .awake);
     var add = try fixture.call(policy, .{ .command = "git add __pycache__ && echo made > made.txt", .as_user = true });
     defer add.deinit();
     errdefer std.debug.print("{s}\n", .{add.text});

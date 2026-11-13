@@ -249,9 +249,12 @@ fn setModified(path: []const u8, at: std.Io.Timestamp) !void {
 
 fn rebuildRightAfterTouching(repo: *Repo) !void {
     try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = app_js });
-    try repo.session.prepare(.build);
     const touched = try repo.tmp.dir.statFile(testing.io, "repo/src/app.js", .{});
-    try testing.expect(repo.session.base.?.read_at - @as(i64, @truncate(touched.mtime.nanoseconds)) < std.time.ns_per_s);
+    const read_at = @as(i64, @truncate(touched.mtime.nanoseconds)) + std.time.ns_per_s;
+    find_tools.fixed_read_at = read_at;
+    defer find_tools.fixed_read_at = null;
+    try repo.session.prepare(.build);
+    try testing.expectEqual(read_at, repo.session.base.?.read_at);
 }
 
 fn expectSessionFind(session: *find_tools.Session, pattern: []const u8, summary: []const u8) !void {
