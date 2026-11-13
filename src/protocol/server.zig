@@ -232,10 +232,11 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_scan",
         .read_only = true,
-        .description = "Lists up to 100 violations of one check.",
+        .description = "Lists up to 100 violations of one check; offset pages by next_offset.",
         .props = &.{
             .{ .name = "check", .desc = "e.g. forbid:networkidle" },
             .{ .name = "where", .desc = "file, dir/ or file#symbol", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
@@ -246,7 +247,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_git",
         .read_only = true,
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; diff, show, blame and args page by next_line as line_start.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
             .{ .name = "dir", .desc = nested_dir_desc, .optional = true, .nested = true },

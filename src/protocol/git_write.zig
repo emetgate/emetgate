@@ -24,6 +24,10 @@ pub const max_read_bytes = 8 * 1024;
 const local_timeout_ms = 120_000;
 const network_timeout_ms = 180_000;
 const max_git_output = 1024 * 1024;
+/// How much stdout a read form reads before git is stopped; the reply pages
+/// through what was read with `line_start`.
+const max_read_capture = 32 * 1024 * 1024;
+const ellipsis = "\u{2026}";
 
 pub const Error = error{ MissingGitArgs, TooManyGitArgs, InvalidGitArg };
 
@@ -580,19 +584,33 @@ pub fn isReadSub(sub: []const u8) bool {
 }
 
 pub fn callRead(gpa: Allocator, io: std.Io, sub: []const u8, args: ?Value, event: *telemetry.Event, root: ?[]const u8, budget: usize) !ToolResult {
+    const from = readFrom(args) catch return tool_result.missing("line_start (integer of at least 1)", .{});
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    const is_error = renderRead(arena, io, root, sub, args, budget, &buffer.writer, event) catch |err| {
+    const is_error = renderRead(arena, io, root, sub, args, budget, from, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return tool_result.failure(gpa, &buffer, err, event);
     };
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 
-fn renderRead(arena: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: ?Value, budget: usize, w: *Writer, event: *telemetry.Event) !bool {
+/// The output line a read form's reply starts at: `line_start`, else 1.
+fn readFrom(args: ?Value) !usize {
+    const field = tool_result.getField(args orelse return 1, "line_start") orelse return 1;
+    const value: i64 = switch (field) {
+        .integer => |i| i,
+        .string => |text| std.fmt.parseInt(i64, text, 10) catch return error.InvalidLineStart,
+        .null => return 1,
+        else => return error.InvalidLineStart,
+    };
+    if (value < 1) return error.InvalidLineStart;
+    return @intCast(value);
+}
+
+fn renderRead(arena: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, args: ?Value, budget: usize, from: usize, w: *Writer, event: *telemetry.Event) !bool {
     const argv = try gitArgs(arena, args, sub);
     const root_abs = try repo.servedRoot(arena, io, root);
     const git = try exe_path.git(arena, root_abs);
@@ -621,7 +639,7 @@ fn renderRead(arena: Allocator, io: std.Io, root: ?[]const u8, sub: []const u8, 
         try writeRefused(w, why.reason, why.arg);
         return true;
     }
-    return runRead(arena, io, git, root_abs, &ok, argv, budget, w, event);
+    return runRead(arena, io, git, root_abs, &ok, argv, budget, .{ .from = from, .more = "for the next lines" }, w, event);
 }
 
 fn gitArgs(arena: Allocator, args: ?Value, sub: ?[]const u8) ![]const []const u8 {
@@ -717,22 +735,33 @@ const Ran = struct {
     exit_code: ?u32 = null,
     stdout: []const u8 = "",
     stderr: []const u8 = "",
+    /// A read form printed more than max_read_capture and was stopped there;
+    /// stdout holds what it printed up to then.
+    cut: bool = false,
 };
 
 fn runGit(arena: Allocator, io: std.Io, root_abs: []const u8, argv: []const []const u8, network: bool) !Ran {
+    return runGitCapped(arena, io, root_abs, argv, network, false);
+}
+
+fn runGitCapped(arena: Allocator, io: std.Io, root_abs: []const u8, argv: []const []const u8, network: bool, keep_head: bool) !Ran {
     var ran: Ran = .{};
     const timeout_ms: u64 = if (network) network_timeout_ms else local_timeout_ms;
-    if (bounded_run.run(arena, io, .{
+    const options: std.process.RunOptions = .{
         .argv = argv,
         .cwd = .{ .path = root_abs },
         .environ_map = try gitEnv(arena),
-        .stdout_limit = .limited(max_git_output),
+        .stdout_limit = .limited(if (keep_head) max_read_capture else max_git_output),
         .stderr_limit = .limited(max_git_output),
         .timeout = bounded_run.timeoutMs(timeout_ms),
-    })) |result| {
+    };
+    if (if (keep_head) bounded_run.runHead(arena, io, options, &ran.cut) else bounded_run.run(arena, io, options)) |result| {
         ran.stdout = result.stdout;
         ran.stderr = result.stderr;
-        switch (result.term) {
+        if (ran.cut) {
+            ran.outcome = "output_limit";
+            ran.stdout = result.stdout[0..(std.mem.lastIndexOfScalar(u8, result.stdout, '\n') orelse 0)];
+        } else switch (result.term) {
             .exited => |code| ran.exit_code = code,
             else => ran.outcome = "crashed",
         }
@@ -745,17 +774,20 @@ fn runGit(arena: Allocator, io: std.Io, root_abs: []const u8, argv: []const []co
     return ran;
 }
 
-fn runRead(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, args: []const []const u8, budget: usize, w: *Writer, event: *telemetry.Event) !bool {
-    const ran = try runGit(arena, io, root_abs, try fullArgv(arena, git, &read_prefix, ok, args), ok.spec.network);
+/// Where a read form's reply starts and how its trailer says to go on.
+const ReadPage = struct { from: usize, more: []const u8 };
+
+fn runRead(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, args: []const []const u8, budget: usize, page: ReadPage, w: *Writer, event: *telemetry.Event) !bool {
+    const ran = try runGitCapped(arena, io, root_abs, try fullArgv(arena, git, &read_prefix, ok, args), ok.spec.network, true);
     const code = ran.exit_code;
-    const failed = code == null or (code.? != 0 and (code.? > 1 or std.mem.trim(u8, ran.stderr, " \r\n").len != 0));
+    const failed = !ran.cut and (code == null or (code.? != 0 and (code.? > 1 or std.mem.trim(u8, ran.stderr, " \r\n").len != 0)));
     if (failed) event.fail("GitCommandFailed");
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("status");
     try js.write(if (failed) "failed" else "ok");
     try writeOutcome(&js, ran);
-    const output = try headOf(arena, ran.stdout, ran.stderr, @max(budget, 512));
+    const output = try pageOf(arena, ran.stdout, ran.stderr, @max(budget, 512), page, ran.cut);
     if (output.len != 0) {
         try js.objectField("output");
         try js.write(output);
@@ -799,7 +831,7 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
         try writeRefused(w, "would_lose_work", args[0]);
         return true;
     }
-    if (ok.spec.read) return runRead(arena, io, git, root_abs, &ok, args, max_read_bytes, w, event);
+    if (ok.spec.read) return runRead(arena, io, git, root_abs, &ok, args, max_read_bytes, .{ .from = 1, .more = "to emetgate_git with these args for the next lines" }, w, event);
 
     const lock = try shadow.Lock.acquire(io, root_abs);
     defer lock.release();
@@ -960,19 +992,49 @@ fn tail(arena: Allocator, stdout: []const u8, stderr: []const u8) ![]const u8 {
     return std.fmt.allocPrint(arena, "[{d} earlier lines left out]\n{s}", .{ left, text[start..] });
 }
 
-fn headOf(arena: Allocator, stdout: []const u8, stderr: []const u8, max_bytes: usize) ![]const u8 {
+/// The reply text of a read form: up to 200 lines and `max_bytes` of the
+/// output from line `page.from`, and, when anything was left out, a trailer
+/// naming the lines shown and the `line_start` that reaches the rest.
+fn pageOf(arena: Allocator, stdout: []const u8, stderr: []const u8, max_bytes: usize, page: ReadPage, cut: bool) ![]const u8 {
     const text = try joinOutput(arena, stdout, stderr);
-    var end: usize = 0;
+    if (text.len == 0) return text;
+    const total = std.mem.count(u8, text, "\n") + 1;
+    var begin: usize = 0;
+    var skipped: usize = 1;
+    while (skipped < page.from) : (skipped += 1) {
+        begin = (std.mem.indexOfScalarPos(u8, text, begin, '\n') orelse {
+            return std.fmt.allocPrint(arena, "[line_start {d} is past the end: the output has {d} lines]", .{ page.from, total });
+        }) + 1;
+    }
+    var end = begin;
     var lines: usize = 0;
     while (end < text.len) {
         const next = if (std.mem.indexOfScalarPos(u8, text, end, '\n')) |nl| nl + 1 else text.len;
-        if (lines == max_read_lines or next > max_bytes) break;
+        if (lines == max_read_lines or next - begin > max_bytes) break;
         end = next;
         lines += 1;
     }
-    if (end == text.len) return text;
-    const left = std.mem.count(u8, text[end..], "\n") + 1;
-    return std.fmt.allocPrint(arena, "{s}[{d} more lines left out]", .{ text[0..end], left });
+    var shown = text[begin..end];
+    var shortened = false;
+    if (lines == 0) {
+        // One line over the whole budget: shortened, so line_start still
+        // moves on by one line.
+        const line_end = std.mem.indexOfScalarPos(u8, text, begin, '\n') orelse text.len;
+        var keep = @min(line_end - begin, max_bytes);
+        while (keep > 0 and begin + keep < line_end and (text[begin + keep] & 0xC0) == 0x80) keep -= 1;
+        shown = text[begin .. begin + keep];
+        end = @min(line_end + 1, text.len);
+        lines = 1;
+        shortened = true;
+    }
+    const first = page.from;
+    const last = first + lines - 1;
+    const trimmed = std.mem.trimEnd(u8, shown, "\n");
+    const mark: []const u8 = if (shortened) ellipsis ++ "\n" else "\n";
+    if (end < text.len) return std.fmt.allocPrint(arena, "{s}{s}[lines {d}-{d} of {d} shown; pass line_start:{d} {s}]", .{ trimmed, mark, first, last, total, last + 1, page.more });
+    if (cut) return std.fmt.allocPrint(arena, "{s}{s}[lines {d}-{d} shown; git printed more than 32 MiB and was stopped after line {d}; narrow the command with a path or a flag]", .{ trimmed, mark, first, last, total });
+    if (first > 1 or shortened) return std.fmt.allocPrint(arena, "{s}{s}[lines {d}-{d} of {d} shown]", .{ trimmed, mark, first, last, total });
+    return text;
 }
 
 fn writeRefused(w: *Writer, reason: []const u8, arg: []const u8) !void {

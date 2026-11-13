@@ -1211,8 +1211,14 @@ fn writeViolation(js: *std.json.Stringify, v: rules.Violation, rule_text: []cons
     try js.endObject();
 }
 
-pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize, untrusted: []const rules.Rule) !void {
-    const shown = if (limit) |max| result.violations[0..@min(max, result.violations.len)] else result.violations;
+/// Which violations a scan reply lists: `limit` from `offset` on (all when
+/// limit is null).
+pub const ScanPage = struct { limit: ?usize = null, offset: usize = 0 };
+
+pub fn writeScan(writer: *Writer, result: scan.Result, page: ScanPage, untrusted: []const rules.Rule) !void {
+    const limit = page.limit;
+    const from = if (limit != null) @min(page.offset, result.violations.len) else 0;
+    const shown = if (limit) |max| result.violations[from..@min(from + max, result.violations.len)] else result.violations;
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("status");
@@ -1275,10 +1281,24 @@ pub fn writeScan(writer: *Writer, result: scan.Result, limit: ?usize, untrusted:
     for (shown) |v| try writeViolation(&js, v, "");
     try js.endArray();
     if (limit != null) {
+        const after = from + shown.len;
         try js.objectField("violation_count");
         try js.write(result.violations.len);
         try js.objectField("truncated");
-        try js.write(shown.len < result.violations.len);
+        try js.write(after < result.violations.len);
+        if (from != 0) {
+            try js.objectField("offset");
+            try js.write(from);
+        }
+        if (after < result.violations.len) {
+            try js.objectField("next_offset");
+            try js.write(after);
+            try js.objectField("note");
+            try js.print("\"violations {d}-{d} of {d} listed; pass offset:{d} for the next\"", .{ from + 1, after, result.violations.len, after });
+        } else if (from != 0 and shown.len == 0) {
+            try js.objectField("note");
+            try js.write("offset is past the last violation");
+        }
     }
     try js.endObject();
     try writer.writeByte('\n');
@@ -1430,7 +1450,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "InvalidConfig", ".emetgaterc.json is invalid; the user must fix it" },
     .{ "UntrustedRepoMemory", "repository rules are used only when the user starts the server with --allow-repo-memory" },
     .{ "GitCommandFailed", "git refused the call; message is git's reason. A commit is a hash or HEAD, optionally with ^ or ~N; other read-only git goes in args" },
-    .{ "GitOutputTooLarge", "git output is over the cap; narrow it with path, n, or line_start/line_end" },
+    .{ "GitOutputTooLarge", "git wrote more than 256 KiB of errors; narrow the call with path" },
     .{ "InvalidCommit", "commit is HEAD or a hash, optionally with ^ or ~N, e.g. HEAD~1 or abc1234^; a branch or tag name goes through args" },
     .{ "InvalidCount", "count is a positive integer" },
     .{ "SameFile", "the target is the source file; pick another target file" },

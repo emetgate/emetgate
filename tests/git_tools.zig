@@ -295,7 +295,8 @@ test "git diff folds a big diff under the budget and names the elided span" {
     var full_body = try full.payload();
     defer full_body.deinit();
     try testing.expectEqualStrings("full", full_body.value.object.get("view").?.string);
-    try testing.expect(full_body.value.object.get("output").?.string.len > body.value.object.get("output").?.string.len);
+    try testing.expect(std.mem.indexOf(u8, full_body.value.object.get("output").?.string, "@@ ") != null);
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("output").?.string, "@@ ") == null);
 
     var so = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer so.deinit();

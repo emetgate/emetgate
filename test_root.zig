@@ -156,6 +156,7 @@ pub const memory = src.memory;
 pub const journal = src.journal;
 pub const where = src.where;
 pub const wire = src.wire;
+pub const git_tools = src.git_tools;
 pub const scan_command = src.scan_command;
 pub const rule_command = src.rule_command;
 pub const rule_catalog = src.rule_catalog;
@@ -334,6 +335,7 @@ test {
     _ = @import("tests/search.zig");
     _ = @import("tests/git_tools.zig");
     _ = @import("tests/git_write.zig");
+    _ = @import("tests/git_scan_bounds.zig");
     _ = @import("tests/server.zig");
     _ = @import("tests/lockdown.zig");
     _ = @import("tests/lockdown_marks.zig");

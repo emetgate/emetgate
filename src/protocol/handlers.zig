@@ -187,12 +187,17 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
         .string => |text| text,
         else => return tool_result.missing("where (string)", .{}),
     } else null;
+    const offset: usize = if (getField(args.?, "offset")) |field| switch (field) {
+        .integer => |n| if (n >= 0) @intCast(n) else return tool_result.missing("offset (integer of at least 0)", .{}),
+        .null => 0,
+        else => return tool_result.missing("offset (integer of at least 0)", .{}),
+    } else 0;
     event.label = "scan";
     event.file = where;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var refusal: ?[]const u8 = null;
-    renderScan(gpa, io, runtime, root, check, where, tree_cache, &buffer.writer, &refusal) catch |err| {
+    renderScan(gpa, io, runtime, root, check, where, offset, tree_cache, &buffer.writer, &refusal) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -203,7 +208,7 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
     return success(gpa, &buffer);
 }
 
-fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, refusal: *?[]const u8) !void {
+fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, offset: usize, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, refusal: *?[]const u8) !void {
     const root_abs = try repo.servedRoot(gpa, io, root);
     defer gpa.free(root_abs);
     var discard: std.Io.Writer.Discarding = .init(&.{});
@@ -211,6 +216,7 @@ fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
         .source = .{ .check = .{ .spec = check, .where = where } },
         .json = true,
         .max_violations = max_scan_violations,
+        .violation_offset = offset,
         .call_operations = max_scan_operations,
         .refusal = refusal,
         .tree_cache = tree_cache,

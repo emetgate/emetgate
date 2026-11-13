@@ -114,9 +114,10 @@ test "scan tool: tools/list offers emetgate_scan with check required and where o
         if (!std.mem.eql(u8, tool.object.get("name").?.string, "emetgate_scan")) continue;
         const schema = tool.object.get("inputSchema").?.object;
         const props = schema.get("properties").?.object;
-        try testing.expectEqual(@as(usize, 2), props.count());
+        try testing.expectEqual(@as(usize, 3), props.count());
         try testing.expectEqualStrings("string", props.get("check").?.object.get("type").?.string);
         try testing.expectEqualStrings("string", props.get("where").?.object.get("type").?.string);
+        try testing.expectEqualStrings("integer", props.get("offset").?.object.get("type").?.string);
         const required = schema.get("required").?.array.items;
         try testing.expectEqual(@as(usize, 1), required.len);
         try testing.expectEqualStrings("check", required[0].string);
