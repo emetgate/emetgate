@@ -1,8 +1,9 @@
 """Compaction A/B: drive a built emetgate MCP server through one realistic
-"understand an area" session twice -- once with --no-compact (baseline) and once
-with World A compaction on -- and report the real-token cost of each, plus the
+"understand an area" session twice -- once with the default (baseline, no
+compaction) and once with --compact -- and report the real-token cost of each, plus the
 resident integral (every reply is re-read on every later turn, so the integral is
-the honest session cost). Needs: a release build at zig-out/bin/emetgate.exe and
+the honest session cost). It has no model in the loop, so it does not count the
+emetgate_expand calls a model makes to get the hidden text back. Needs: a release build at zig-out/bin/emetgate.exe and
 tiktoken. Run from the repo root:  python tests/bench/token/compaction_ab.py
 """
 import json, subprocess, os, tiktoken
@@ -65,8 +66,8 @@ def integral(per):
 
 
 def main():
-    base = run(["--no-compact"])
-    world = run([])
+    base = run([])
+    world = run(["--compact"])
     print(f"{'call':<26}{'baseline':>10}{'worldA':>10}")
     for (n, b), (_, w) in zip(base, world):
         print(f"{n:<26}{b:>10}{w:>10}")

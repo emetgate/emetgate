@@ -7,6 +7,8 @@ const mirror_mod = @import("emetgate").mirror;
 const tree_cache_mod = @import("emetgate").tree_cache;
 const Runtime = @import("emetgate").runtime.Runtime;
 const outline_mod = @import("emetgate").outline;
+const agent_ledger = @import("emetgate").agent_ledger;
+const agent_compact = @import("emetgate").agent_compact;
 
 const testing = std.testing;
 const Value = std.json.Value;
@@ -1040,6 +1042,39 @@ test "policy: the read cache is on by default, --no-mirror turns it off, and a m
     try testing.expect(server.parsePolicy(&[_][]const u8{}).?.raw_code);
     try testing.expect(!server.parsePolicy(&[_][]const u8{"--json-code"}).?.raw_code);
     try testing.expect(server.parsePolicy(&[_][]const u8{ "--json-code", "--json-code" }) == null);
+}
+
+test "policy: read replies are left whole by default, --compact folds a large one behind an expand handle" {
+    try testing.expect(!server.parsePolicy(&[_][]const u8{}).?.compact);
+    try testing.expect(server.parsePolicy(&[_][]const u8{"--compact"}).?.compact);
+    try testing.expect(!server.parsePolicy(&[_][]const u8{"--no-compact"}).?.compact);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--compact", "--compact" }) == null);
+    try testing.expect(server.parsePolicy(&[_][]const u8{ "--compact", "--no-compact" }) == null);
+
+    var stash = agent_ledger.Ledger.init(testing.allocator);
+    defer stash.deinit();
+    const big = "x" ** 5000;
+
+    var default_policy = server.parsePolicy(&[_][]const u8{}).?;
+    default_policy.stash = &stash;
+    try testing.expect(try server.compactReply(testing.allocator, testing.io, default_policy, "emetgate_search", null, big, false) == null);
+    try testing.expectEqual(@as(usize, 0), stash.entries.items.len);
+
+    var opt_in = server.parsePolicy(&[_][]const u8{"--compact"}).?;
+    opt_in.stash = &stash;
+    const folded = (try server.compactReply(testing.allocator, testing.io, opt_in, "emetgate_search", null, big, false)).?;
+    defer testing.allocator.free(folded);
+    try testing.expect(folded.len < big.len);
+    try testing.expect(std.mem.indexOf(u8, folded, "emetgate_expand") != null);
+    try testing.expectEqual(@as(usize, 1), stash.entries.items.len);
+
+    const key = "{\"handle\":\"";
+    const at = std.mem.indexOf(u8, folded, key).? + key.len;
+    const handle = folded[at .. at + std.mem.indexOfScalarPos(u8, folded, at, '"').? - at];
+    const back = try agent_compact.expand(testing.allocator, &stash, handle, std.mem.zeroes(agent_ledger.Hash), null);
+    defer testing.allocator.free(back.text);
+    try testing.expect(back.found and !back.stale);
+    try testing.expectEqualStrings(big, back.text);
 }
 
 test "symbol listings name ambiguity only where it holds" {

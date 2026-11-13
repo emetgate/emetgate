@@ -979,6 +979,16 @@ of 4.1K characters and a p90 of 22K. The read tools above are built to cut that:
   `{"status":"partial","not_sent":[...],"fix":...}` names every such file and says to
   read it in another call, alone or by line range. A file left out is not remembered
   as sent.
+- **Reply compaction (off by default, `emetgate mcp --compact` turns it on).** By
+  default every read reply comes back whole. With `--compact`, a successful reply over
+  1,200 characters from `emetgate_search`, `emetgate_explore`, `emetgate_evidence`,
+  `emetgate_read_file`, `emetgate_read_symbol`, `emetgate_skeleton`, `emetgate_symbols`,
+  `emetgate_list`, `emetgate_git`, `emetgate_scan` or `emetgate_facts` is cut to its first
+  700 characters (a search to a per-file match map) plus a handle, and `emetgate_expand {"handle":...}` returns the full
+  body. `--no-compact` is still accepted and keeps the default. Compaction was the
+  default in v0.10.0; in interactive sessions the model called `emetgate_expand` several
+  times per session and read the hidden text back, so it cost extra turns without
+  saving tokens.
 - **Session mirror (on by default, `emetgate mcp --no-mirror` turns it off).** The
   server remembers, in process memory only, the content hash of every unit it has
   already sent this session, keyed by path and selector (whole file, line range, JSON

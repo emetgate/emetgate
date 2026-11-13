@@ -570,7 +570,7 @@ fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
 }
 
 pub fn compactReply(gpa: Allocator, io: std.Io, policy: Policy, name: []const u8, args: ?Value, text: []const u8, is_error: bool) !?[]u8 {
-    if (is_error or policy.no_compact or !shouldCompact(name)) return null;
+    if (is_error or !policy.compact or !shouldCompact(name)) return null;
     const stash = policy.stash orelse return null;
     const file = fileArg(args);
     var tgts_buf: [1]ledger_mod.Target = undefined;
