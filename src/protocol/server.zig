@@ -115,6 +115,7 @@ pub const tool_defs = [_]Tool{
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
@@ -211,7 +212,10 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_list",
         .read_only = true,
         .description = "Lists files under dir.",
-        .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
+        .props = &.{
+            .{ .name = "dir", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
+        },
     },
     .{
         .name = "emetgate_search",
@@ -318,7 +322,8 @@ pub const tool_defs = [_]Tool{
         .description = "Returns the full body behind a collapsed #handle (only with --compact), flagged stale if its files changed. file narrows it to one file's section.",
         .props = &.{
             .{ .name = "handle", .desc = "the handle from a collapsed result line" },
-            .{ .name = "file", .desc = "optional: return only this file's section", .optional = true },
+            .{ .name = "file", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
 };

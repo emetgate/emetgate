@@ -146,7 +146,7 @@ test "arg check: documented aliases, item shapes, null and policy fields" {
     inline for (.{
         .{ "emetgate_search", "{\"pattern\":\"a\",\"format\":\"json\"}", "UnknownArgument" },
         .{ "emetgate_change", "{\"edits\":[],\"detail\":\"full\"}", "UnknownArgument" },
-        .{ "emetgate_list", "{\"dir\":\"src\",\"offset\":100}", "UnknownArgument" },
+        .{ "emetgate_list", "{\"dir\":\"src\",\"limit\":100}", "UnknownArgument" },
         .{ "emetgate_read_symbol", "{\"file\":\"a.js\",\"test_cmd\":\"x\"}", "ModelSuppliedTestPolicy" },
     }) |case| {
         var args = try std.json.parseFromSlice(Value, gpa, case[1], .{});

@@ -21,6 +21,7 @@
 //!   findTrailer(reply) ?[]const u8  the trailer line of a reply, if any
 //!   within(tool, reply) bool        the reply fits its tool's budget
 const std = @import("std");
+const server = @import("server.zig");
 
 const Writer = std.Io.Writer;
 
@@ -154,7 +155,8 @@ pub const trailer_join = "; continue with ";
 /// Writes the trailer line: `[left out: <left>; continue with <tool> <args as JSON>]`.
 /// `call_args` is a struct whose fields are the exact arguments of the call
 /// that returns what was left out; null optional fields are not written.
-pub fn writeTrailer(w: *Writer, comptime left_fmt: []const u8, left_args: anytype, tool: []const u8, call_args: anytype) Writer.Error!void {
+pub fn writeTrailer(w: *Writer, comptime left_fmt: []const u8, left_args: anytype, comptime tool: []const u8, call_args: anytype) Writer.Error!void {
+    comptime checkServedCall(tool, @TypeOf(call_args));
     try w.writeAll(trailer_open);
     try w.print(left_fmt, left_args);
     try w.writeAll(trailer_join);
@@ -163,6 +165,19 @@ pub fn writeTrailer(w: *Writer, comptime left_fmt: []const u8, left_args: anytyp
     var js: std.json.Stringify = .{ .writer = w, .options = .{ .emit_null_optional_fields = false } };
     try js.write(call_args);
     try w.writeAll("]\n");
+}
+
+fn checkServedCall(comptime tool: []const u8, comptime Args: type) void {
+    const def = for (server.tool_defs) |d| {
+        if (std.mem.eql(u8, d.name, tool)) break d;
+    } else @compileError("trailer names " ++ tool ++ ", which is not a served tool");
+    if (@typeInfo(Args) != .@"struct") return;
+    inline for (@typeInfo(Args).@"struct".fields) |field| {
+        const served = for (def.props) |prop| {
+            if (std.mem.eql(u8, prop.name, field.name)) break true;
+        } else false;
+        if (!served) @compileError("trailer calls " ++ tool ++ " with " ++ field.name ++ ", which its served schema does not declare");
+    }
 }
 
 /// The trailer line of a reply (without its newline), or null when the reply
