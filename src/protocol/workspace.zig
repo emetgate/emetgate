@@ -1,5 +1,6 @@
 const std = @import("std");
 const server = @import("server.zig");
+const arg_check = @import("arg_check.zig");
 const json_input = @import("json_input.zig");
 const policy_mod = @import("policy.zig");
 const telemetry = @import("telemetry.zig");
@@ -93,6 +94,8 @@ pub const Workspace = struct {
             if (method == .string and std.mem.eql(u8, method.string, "tools/list")) try self.prepareRun();
             return self.primary.handle(self.runtime, line, out);
         };
+        const refused = arg_check.check(arena, call.name, call.arguments, self.primary.policy) catch return self.primary.handle(self.runtime, line, out);
+        if (refused != null) return self.primary.handle(self.runtime, line, out);
 
         var slots: std.ArrayList(*Value) = .empty;
         if (call.arguments) |arguments| try collectSlots(arena, arguments, &slots);

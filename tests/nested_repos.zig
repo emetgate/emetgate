@@ -377,3 +377,17 @@ test "nested repos: a path spelled from the repository root is read from the ses
     const unknown = try workspace.chooseSpelling(a, testing.io, f.top, f.session, "nowhere/at/all.txt");
     try testing.expectEqualStrings("nowhere/at/all.txt", unknown.spelled);
 }
+
+test "nested repos: a call with an argument its tool does not serve is refused before it fans out or is routed" {
+    try skipOffWindows();
+    var f: Fixture = undefined;
+    try f.init();
+    defer f.deinit();
+    try f.serve(.{});
+    const fanned = try f.call("emetgate_search", .{ .pattern = "hello", .dir = f.session, .colour = true });
+    try testing.expect(fanned.is_error);
+    try expectHas(fanned.text, "UnknownArgument");
+    const routed = try f.call("emetgate_read_file", .{ .file = try f.path(f.session, "mobil/kept.txt"), .colour = true });
+    try testing.expect(routed.is_error);
+    try expectHas(routed.text, "UnknownArgument");
+}
