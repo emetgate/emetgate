@@ -12,7 +12,7 @@ irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | 
 
 It downloads `emetgate.exe` and `emetgate.exe.sha256` from the [latest release](https://github.com/emetgate/emetgate/releases/latest), stops with an error and installs nothing when the SHA256 does not match, and puts `emetgate.exe` in `%LOCALAPPDATA%\Programs\emetgate`.
 
-From then on `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours and install it only when its Ed25519 signature matches the key built into emetgate; the line `emetgate 0.10.0 → 0.10.1 updated` says it happened. Run `emetgate update` to do it now. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
+From then on `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours and install it only when its Ed25519 signature matches the key built into emetgate; the line `emetgate 0.10.1 → 0.10.2 updated` says it happened. Run `emetgate update` to do it now. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
 
 **Or build from source.** You need Zig **0.16.0** ([download](https://ziglang.org/download/#release-0.16.0)); another Zig version fails to build it, often with errors inside `build.zig` that do not mention the version, so check `zig version` first:
 
@@ -57,13 +57,13 @@ emetgate doctor
 One line per check, each `ok`, `warn` or `FAIL`, and every `FAIL` ends with the command that fixes it:
 
 ```
-ok    emetgate  0.10.1 at C:\Users\you\AppData\Local\Programs\emetgate\emetgate.exe
+ok    emetgate  0.10.2 at C:\Users\you\AppData\Local\Programs\emetgate\emetgate.exe
 ok    claude    2.1.311 (Claude Code) at C:\Users\you\AppData\Roaming\npm\claude.cmd
 ok    login     signed in
 ok    git       C:\Program Files\Git\cmd\git.exe
 ok    repo      C:/Users/you/proje
 ok    .mcp.json one emetgate server
-ok    server    answers as emetgate 0.10.1
+ok    server    answers as emetgate 0.10.2
 ok    tests     "npm test"
 ok    write     C:/Users/you/proje
 ok    state     C:\Users\you\AppData\Local\emetgate\lockdown\...
