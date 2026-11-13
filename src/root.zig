@@ -34,6 +34,7 @@ pub const facts_tests = @import("engine/facts_tests.zig");
 pub const facts_signature = @import("engine/facts_signature.zig");
 pub const evidence_request = @import("engine/evidence_request.zig");
 pub const evidence = @import("engine/evidence.zig");
+pub const test_reach = @import("engine/test_reach.zig");
 pub const question_lexicon = @import("engine/question_lexicon.zig");
 pub const question_terms = @import("engine/question_terms.zig");
 pub const question_intent = @import("engine/question_intent.zig");
