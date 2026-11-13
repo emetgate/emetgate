@@ -1,6 +1,5 @@
 const std = @import("std");
-const symbol = @import("../engine/symbol.zig");
-const disk = @import("disk.zig");
+const batch = @import("batch.zig");
 const shadow = @import("shadow.zig");
 const receipts = @import("receipts.zig");
 const own_dir = @import("own_dir.zig");
@@ -31,27 +30,14 @@ pub fn take(arena: Allocator, io: std.Io, root: []const u8, files: []const []con
 }
 
 pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, snapshot: Snapshot) !void {
-    var pendings: std.ArrayList(disk.Pending) = .empty;
-    defer pendings.deinit(gpa);
-    var staged = false;
-    errdefer if (!staged) for (pendings.items) |*p| p.abandon();
+    var back: std.ArrayList(batch.Restore) = .empty;
     for (snapshot.entries) |entry| {
         const now = try readOrNull(arena, io, entry.abs);
         if (now == null and entry.before == null) continue;
         if (now != null and entry.before != null and std.mem.eql(u8, now.?, entry.before.?)) continue;
-        const pending = if (entry.before) |bytes|
-            (if (now) |current| try disk.prepare(gpa, io, entry.abs, bytes, symbol.fileHash(current)) else try disk.stageCreate(gpa, io, entry.abs, bytes))
-        else
-            try disk.stageDelete(gpa, io, entry.abs, symbol.fileHash(now.?));
-        try pendings.append(gpa, pending);
+        try back.append(arena, .{ .abs = entry.abs, .now = now, .before = entry.before });
     }
-    if (pendings.items.len != 0) {
-        const journal_dir = try std.fmt.allocPrint(arena, "{s}\\{s}\\journal", .{ snapshot.root, shadow.workspace_dir });
-        var batch = disk.Batch.init(gpa, io, journal_dir);
-        batch.root = snapshot.root;
-        staged = true;
-        try disk.commitBatch(pendings.items, null, null, &batch, null);
-    }
+    try batch.restore(gpa, arena, io, snapshot.root, back.items);
     try dropNewReceipts(arena, io, snapshot);
 }
 
