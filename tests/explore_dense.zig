@@ -297,3 +297,27 @@ test "explore dense: the serve flag picks the mode and refuses an unknown or rep
     try testing.expect((try map_tools.splitExploreMode(arena, &[_][]const u8{ "--explore-mode", "full", "--explore-mode", "dense" })) == null);
     try testing.expect(emetgate.server.parsePolicy(dense.rest) != null);
 }
+
+test "explore: a body sent once is named instead of resent, until the ledger forgets" {
+    var f = try Fixture.open(&fixture_files);
+    defer f.close();
+    var ledger = emetgate.sent_ledger.Ledger.init(testing.allocator);
+    defer ledger.deinit();
+    f.session.ledger = &ledger;
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const first = try f.call(arena, .explore, explore_args);
+    try expectHas(first, "return 0.2;");
+    try expectLacks(first, "(already shown, unchanged)");
+
+    const second = try f.call(arena, .explore, explore_args);
+    try expectHas(second, "src/billing/tax.ts:2 taxRate (already shown, unchanged)\n");
+    try expectLacks(second, "return 0.2;");
+
+    ledger.reset();
+    const third = try f.call(arena, .explore, explore_args);
+    try expectHas(third, "return 0.2;");
+    try expectLacks(third, "(already shown, unchanged)");
+}

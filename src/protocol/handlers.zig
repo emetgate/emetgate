@@ -81,12 +81,14 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     _ = test_command_mod.takeLate();
     test_debt.drop();
+    const context_changed: ?bool = if (policy.context) |context| context.stale() else null;
     if (policy.mirror) |m| {
-        if (policy.context) |context| {
-            if (context.stale()) m.reset();
-        }
+        if (context_changed orelse false) m.reset();
         m.tick();
     }
+    // The model may have lost what it was shown: after a compaction, or when the session has no
+    // context watch at all, the ledger forgets, so nothing is ever skipped as "already shown".
+    if (context_changed orelse true) policy.ledgerReset();
     defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {

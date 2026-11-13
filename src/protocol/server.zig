@@ -394,6 +394,7 @@ pub const Served = struct {
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
             ms.explore_mode = policy.explore_mode;
+            ms.ledger = &self.sent_ledger;
             ms.start();
         }
         if (self.find_session) |fs| fs.start();

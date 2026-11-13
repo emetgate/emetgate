@@ -14,6 +14,7 @@ const evidence = @import("../engine/evidence.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_store = @import("../engine/facts_store.zig");
 const test_reach = @import("../engine/test_reach.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const tool_result = @import("tool_result.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -143,6 +144,8 @@ pub const Session = struct {
     explore_mode: ExploreMode = .full,
     explore_calls: u32 = 0,
     seen: ?SeenFn = null,
+    /// What this session has shown the model; explore skips a body it already sent unchanged.
+    ledger: ?*sent_ledger.Ledger = null,
 
     pub fn create(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8) !*Session {
         const self = try gpa.create(Session);
@@ -433,8 +436,17 @@ pub const Session = struct {
     }
 
     fn seenBefore(self: *const Session, path: []const u8, first: u32, last: u32, hash: facts.Hash) bool {
-        const check = self.seen orelse return false;
-        return check(path, first, last, hash);
+        if (self.seen) |check| return check(path, first, last, hash);
+        const ledger = self.ledger orelse return false;
+        return ledger.seenUnchanged(path, hash);
+    }
+
+    /// Records a body explore sent, keyed by the definition's own hash, so a later explore
+    /// names it instead of sending it again while it is unchanged. Dense bodies are kept as
+    /// dense: they never count as seen, because an edit needs the exact text.
+    fn noteShown(self: *const Session, path: []const u8, span: facts.Span, hash: facts.Hash, densified: bool) void {
+        const ledger = self.ledger orelse return;
+        ledger.record(path, .{ .start = span.start, .end = span.end }, hash, if (densified) .dense else .exact) catch {};
     }
 
     /// Changed callables that no test reaches through the static reference graph.
@@ -592,6 +604,7 @@ pub const Session = struct {
                     while (k <= last) : (k += 1) try writeLine(&out.writer, ft, k, base);
                 }
                 used += size;
+                self.noteShown(pk.f.path, d.span, d.hash, block != null);
                 try shown.append(arena, .{ .file = pk.f.file, .first = first, .last = last });
                 continue;
             }
@@ -656,6 +669,7 @@ pub const Session = struct {
                 while (k <= last) : (k += 1) try writeLine(&bound.writer, ft, k, base);
             }
             used += size;
+            self.noteShown(f.path, d.span, d.hash, block != null);
             try shown.append(arena, .{ .file = f.file, .first = first, .last = last });
         }
         if (bound.written().len != 0) {
