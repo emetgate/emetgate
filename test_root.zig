@@ -118,6 +118,7 @@ pub const checker = src.checker;
 pub const runner = src.runner;
 pub const gate = src.gate;
 pub const run_command = src.run_command;
+pub const run_stamps = src.run_stamps;
 pub const open_shell = src.open_shell;
 pub const low_run = src.low_run;
 pub const command_danger = src.command_danger;
@@ -263,7 +264,7 @@ test {
     _ = @import("tests/open_run.zig");
     _ = @import("tests/open_run_frozen.zig");
     _ = @import("tests/open_run_low.zig");
-    _ = @import("tests/redteam_run.zig");
+    _ = @import("tests/run_stamps.zig");    _ = @import("tests/redteam_run.zig");
     _ = @import("tests/purple.zig");
     _ = @import("tests/batch_retry.zig");
     _ = @import("tests/batch_crash.zig");

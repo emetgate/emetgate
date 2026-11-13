@@ -11,7 +11,7 @@ const receipts = @import("receipts.zig");
 const frozen_hold = @import("frozen_hold.zig");
 const command_danger = @import("command_danger.zig");
 const low_run = @import("low_run.zig");
-const receipt = @import("../verify/receipt.zig");
+const run_stamps = @import("run_stamps.zig");
 const symbol = @import("../engine/symbol.zig");
 
 const Allocator = std.mem.Allocator;
@@ -496,62 +496,34 @@ fn confined(gpa: Allocator, io: std.Io, root_abs: []const u8, limits: sandbox.Li
     return open_shell.run(gpa, io, open.place.cwd orelse root_abs, open.shell, open.command, limits, place.env, .{ .backend = .low_integrity, .temp = place.temp });
 }
 
-const Seen = std.StringArrayHashMapUnmanaged(receipt.Hash);
+pub const mtime_slack_ns = run_stamps.mtime_slack_ns;
+pub const untouchedSince = run_stamps.untouchedSince;
 
-fn snapshot(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8) !Seen {
-    var seen: Seen = .empty;
-    for (try shadow.workingFiles(arena, io, root_abs)) |rel| {
-        const hash = hashAt(gpa, io, root_abs, rel) orelse continue;
-        try seen.put(arena, rel, hash);
-    }
-    return seen;
+fn snapshot(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8) !run_stamps.Before {
+    const at_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+    const files = try shadow.workingFiles(arena, io, root_abs);
+    const stamps = try run_stamps.stampsOf(gpa, arena, root_abs, files);
+    var reader: run_stamps.Reader = .{ .gpa = gpa, .io = io, .root_abs = root_abs };
+    const memo = try run_stamps.store.acquire(io, root_abs);
+    defer run_stamps.store.release(io);
+    const before = try run_stamps.take(arena, &reader, files, stamps, memo, at_ns);
+    run_stamps.rememberAll(memo, &before) catch {};
+    return before;
 }
 
-pub const mtime_slack_ns: i96 = 2 * std.time.ns_per_s;
-
-pub fn untouchedSince(mtime_ns: i96, started_ns: i96) bool {
-    return mtime_ns < started_ns - mtime_slack_ns;
+fn changedSince(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, before: *const run_stamps.Before, started_ns: i96) ![]receipts.FileChange {
+    const at_ns = std.Io.Timestamp.now(io, .real).nanoseconds;
+    const files = try shadow.workingFiles(arena, io, root_abs);
+    const stamps = try run_stamps.stampsOf(gpa, arena, root_abs, files);
+    var reader: run_stamps.Reader = .{ .gpa = gpa, .io = io, .root_abs = root_abs };
+    const compared = try run_stamps.compare(arena, &reader, files, stamps, before, started_ns);
+    const memo = try run_stamps.store.acquire(io, root_abs);
+    defer run_stamps.store.release(io);
+    run_stamps.rememberCompared(memo, compared, at_ns) catch {};
+    return compared.changes;
 }
 
-fn changedSince(arena: Allocator, gpa: Allocator, io: std.Io, root_abs: []const u8, before: *const Seen, started_ns: i96) ![]receipts.FileChange {
-    var changes: std.ArrayList(receipts.FileChange) = .empty;
-    var present: std.StringHashMapUnmanaged(void) = .empty;
-    for (try shadow.workingFiles(arena, io, root_abs)) |rel| {
-        try present.put(arena, rel, {});
-        const abs = try absOf(arena, root_abs, rel);
-        const was = before.get(rel);
-        if (was == null) {
-            const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch continue;
-            if (untouchedSince(stat.mtime.nanoseconds, started_ns)) continue;
-        }
-        const now = hashAt(gpa, io, root_abs, rel) orelse continue;
-        if (was) |hash| if (std.mem.eql(u8, &hash, &now)) continue;
-        try changes.append(arena, .{ .rel = rel, .before = was, .after_abs = abs });
-    }
-    for (before.keys(), before.values()) |rel, hash| {
-        if (present.contains(rel)) continue;
-        if (std.Io.Dir.cwd().access(io, try absOf(arena, root_abs, rel), .{})) |_| continue else |_| {}
-        try changes.append(arena, .{ .rel = rel, .before = hash, .after_abs = null });
-    }
-    return changes.items;
-}
-
-fn absOf(arena: Allocator, root_abs: []const u8, rel: []const u8) ![]u8 {
-    const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_abs, rel });
-    std.mem.replaceScalar(u8, abs, '/', '\\');
-    return abs;
-}
-
-fn hashAt(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) ?receipt.Hash {
-    var buffer: [2 * std.fs.max_path_bytes]u8 = undefined;
-    var fixed = std.heap.FixedBufferAllocator.init(&buffer);
-    const abs = absOf(fixed.allocator(), root_abs, rel) catch return null;
-    const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, gpa, .limited(max_hashed_bytes)) catch return null;
-    defer gpa.free(bytes);
-    return receipt.blake3(bytes);
-}
-
-const max_hashed_bytes = 256 * 1024 * 1024;
+const max_hashed_bytes = run_stamps.max_hashed_bytes;
 
 pub const Tail = struct {
     text: []const u8,

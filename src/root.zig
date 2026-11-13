@@ -117,6 +117,7 @@ pub const checker = @import("verify/checker.zig");
 pub const runner = @import("platform/runner.zig");
 pub const gate = @import("platform/gate.zig");
 pub const run_command = @import("platform/run_command.zig");
+pub const run_stamps = @import("platform/run_stamps.zig");
 pub const open_shell = @import("platform/open_shell.zig");
 pub const low_run = @import("platform/low_run.zig");
 pub const commit_guard = @import("platform/commit_guard.zig");
