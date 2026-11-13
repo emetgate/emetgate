@@ -312,7 +312,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_expand",
         .read_only = true,
-        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle from the collapsed line; the body is verified byte-identical, or flagged stale when its source files changed. With file, returns only that file's section of the result (e.g. one file from a search match-map).",
+        .description = "Returns the full body behind a collapsed #handle (only with --compact), flagged stale if its files changed. file narrows it to one file's section.",
         .props = &.{
             .{ .name = "handle", .desc = "the handle from a collapsed result line" },
             .{ .name = "file", .desc = "optional: return only this file's section", .optional = true },

@@ -1513,6 +1513,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "IsDirectory", "the path is a directory; emetgate_list with dir lists its files" },
     .{ "MissingPath", "sub blame needs path, the file to blame" },
     .{ "MissingArgument", "an argument is missing, out of range or of the wrong type; the tool's input schema lists them (line_start and line_end go together)" },
+    .{ "InvalidLineStart", "line_start is a line number of the output, from 1 to its last line; continue from the next_line the previous reply gave, or pass path to read one file" },
     .{ "InvalidOffset", "offset is a whole number from 0 to 100000; matches past 100000 cannot be paged, so narrow the search with dir or a longer pattern" },
     .{ "UnknownKind", "kinds is an array of \"code\", \"comment\" and \"string\"" },
     .{ "UnknownFormat", "format is \"json\" or \"text\"" },
