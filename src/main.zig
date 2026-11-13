@@ -17,7 +17,6 @@ const lockdown_slash = emetgate.lockdown_slash;
 const doctor = emetgate.doctor;
 const prompt_hook = emetgate.prompt_hook;
 const pretool_hook = emetgate.pretool_hook;
-const precompact_hook = emetgate.precompact_hook;
 const context_epoch = emetgate.context_epoch;
 const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
@@ -52,7 +51,6 @@ const usage =
     \\       emetgate hook prompt
     \\       emetgate hook pretool
     \\       emetgate hook session
-    \\       emetgate hook precompact
     \\       emetgate recover [--shadow-root <dir>] [--cache-max-age-days <n>] [--cache-max-mb <n>]
     \\       emetgate verify <commit> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
     \\       emetgate verify --branch <base[..head]> [--test <command>] [--typecheck <command>] [--skip-tests] [--json]
@@ -97,10 +95,6 @@ const usage =
     \\new context epoch, so that after a compaction or /clear emetgate mcp sends every
     \\file again instead of answering unchanged. It prints nothing, and it records the
     \\epoch even when stdin is empty or not JSON.
-    \\hook precompact is the PreCompact hook that lockdown gives claude: it raises the
-    \\number in .emetgate\compacted of the repository it runs in, so the server can
-    \\tell that the model no longer has what it was shown. It prints nothing and
-    \\exits 0 whatever happens, so it never stops a compaction.
     \\
     \\A ledger committed to git (.emetgate/ledger.ndjson) came with the clone:
     \\its cmd: and q: rules never run unless try/mcp is started with --allow-repo-memory;
@@ -231,9 +225,6 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     }
     if (args.len == 1 + context_epoch.hook_args.len and std.mem.eql(u8, command, context_epoch.hook_args[0]) and std.mem.eql(u8, args[2], context_epoch.hook_args[1])) {
         return hookSessionCmd(init, runtime);
-    }
-    if (args.len == 1 + precompact_hook.hook_args.len and std.mem.eql(u8, command, precompact_hook.hook_args[0]) and std.mem.eql(u8, args[2], precompact_hook.hook_args[1])) {
-        return hookPrecompactCmd(init, runtime);
     }
     if (std.mem.eql(u8, command, "recover")) {
         const options = parseRecover(args[2..]) orelse exitWithUsage();
@@ -764,16 +755,6 @@ fn hookSessionCmd(init: std.process.Init, runtime: *Runtime) u8 {
         std.debug.print("error: {t}: the new context epoch was not recorded\n", .{err});
         return 1;
     };
-    return 0;
-}
-
-fn hookPrecompactCmd(init: std.process.Init, runtime: *Runtime) u8 {
-    const gpa = runtime.gpa;
-    var buffer: [4096]u8 = undefined;
-    var reader = stdio.stdinReader(init.io, &buffer);
-    const input = reader.interface.allocRemaining(gpa, .limited(precompact_hook.max_input_bytes)) catch null;
-    defer if (input) |bytes| gpa.free(bytes);
-    _ = precompact_hook.record(gpa, init.io, ".", input orelse "");
     return 0;
 }
 

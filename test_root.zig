@@ -185,8 +185,6 @@ pub const mirror = src.mirror;
 pub const known_files = src.known_files;
 pub const sent_ledger = src.sent_ledger;
 pub const context_epoch = src.context_epoch;
-pub const compaction_marker = src.compaction_marker;
-pub const precompact_hook = src.precompact_hook;
 pub const outline = src.outline;
 pub const read_cache = src.read_cache;
 pub const raw_reply = src.raw_reply;
@@ -347,7 +345,6 @@ test {
     _ = @import("tests/commit_guard.zig");
     _ = @import("tests/run_audit.zig");
     _ = @import("tests/context_epoch.zig");
-    _ = @import("tests/precompact_hook.zig");
     _ = @import("tests/sent_ledger.zig");
     _ = @import("tests/launch_path.zig");
     _ = @import("tests/symbol.zig");

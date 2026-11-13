@@ -10,8 +10,6 @@ pub const pretool_args = [_][]const u8{ "hook", "pretool" };
 pub const pretool_event = "PreToolUse";
 pub const session_args = [_][]const u8{ "hook", "session" };
 pub const session_event = "SessionStart";
-pub const precompact_args = [_][]const u8{ "hook", "precompact" };
-pub const precompact_event = "PreCompact";
 pub const context_variable = "EMETGATE_CONTEXT";
 pub const context_dir = "context";
 pub const context_extension = ".epoch";
@@ -64,8 +62,6 @@ pub fn settingsJson(gpa: Allocator, exe_abs: []const u8) ![]u8 {
     try writeHook(&js, pretool_matcher, exe_abs, &pretool_args);
     try js.objectField(session_event);
     try writeHook(&js, null, exe_abs, &session_args);
-    try js.objectField(precompact_event);
-    try writeHook(&js, null, exe_abs, &precompact_args);
     try js.endObject();
     try js.endObject();
     return out.toOwnedSlice();

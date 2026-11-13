@@ -28,7 +28,7 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
     try testing.expectEqual(@as(usize, 2), parsed.value.object.count());
     try testing.expectEqual(false, parsed.value.object.get("disableAllHooks").?.bool);
     const events = parsed.value.object.get("hooks").?.object;
-    try testing.expectEqual(@as(usize, 4), events.count());
+    try testing.expectEqual(@as(usize, 3), events.count());
     const prompt_groups = events.get("UserPromptSubmit").?.array.items;
     try testing.expectEqual(@as(usize, 1), prompt_groups.len);
     try testing.expectEqual(@as(usize, 1), prompt_groups[0].object.count());
@@ -44,11 +44,6 @@ test "lockdown slash: the hooks are commands in exec form that name this executa
     try testing.expectEqual(@as(usize, 1), session_groups.len);
     try testing.expectEqual(@as(usize, 1), session_groups[0].object.count());
     try expectHandler(session_groups[0], "session");
-
-    const compact_groups = events.get("PreCompact").?.array.items;
-    try testing.expectEqual(@as(usize, 1), compact_groups.len);
-    try testing.expectEqual(@as(usize, 1), compact_groups[0].object.count());
-    try expectHandler(compact_groups[0], "precompact");
 }
 
 test "lockdown slash: the settings keep every hook on over a project disableAllHooks" {
