@@ -6,7 +6,7 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3021**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3027**
 - Mutations declared in `tests/mutations.json`: **2030**
   - killed: **1980**
   - equivalent: **9**
