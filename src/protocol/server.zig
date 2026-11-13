@@ -53,7 +53,9 @@ pub const server_version = @import("version").version;
 const max_message_bytes = 4 * 1024 * 1024;
 
 pub const Prop = struct { name: []const u8, desc: []const u8, optional: bool = false, ty: []const u8 = "string", nested: bool = false };
-pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop };
+/// read_only marks a tool that never changes the working tree, the git repository
+/// or the rule ledger; tools/list serves it as annotations.readOnlyHint.
+pub const Tool = struct { name: []const u8, description: []const u8, props: []const Prop, read_only: bool = false };
 
 const budget_text = std.fmt.comptimePrint("{d}", .{read_budget.default_budget});
 
@@ -75,6 +77,7 @@ pub fn servedDef(tool: Tool, open: bool) Tool {
 pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_explore",
+        .read_only = true,
         .description = map_tools.explore_description,
         .props = &.{
             .{ .name = "question", .desc = "" },
@@ -83,6 +86,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_evidence",
+        .read_only = true,
         .description = map_tools.evidence_description,
         .props = &.{.{ .name = "names", .desc = "Class.method or function", .ty = "array" }},
     },
@@ -97,11 +101,13 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_symbols",
+        .read_only = true,
         .description = "Lists a source file's symbols.",
         .props = &.{.{ .name = "file", .desc = "" }},
     },
     .{
         .name = "emetgate_skeleton",
+        .read_only = true,
         .description = "Outline of a source file (whole if under 8 KiB) with file_hash and covering rules.",
         .props = &.{
             .{ .name = "file", .desc = "" },
@@ -110,6 +116,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_symbol",
+        .read_only = true,
         .description = "Reads symbol bodies with hashes by symbol, symbols or line_start+line_end; docs fold, bodies over " ++ budget_text ++ " chars too, unless detail:\"full\". nodes:true adds node ids for emetgate_change.",
         .props = &.{
             .{ .name = "file", .desc = "" },
@@ -172,6 +179,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_mutate",
+        .read_only = true,
         .description = "Previews a symbol body replacement without writing.",
         .props = &.{
             .{ .name = "file", .desc = "" },
@@ -182,7 +190,8 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_read_file",
-        .description = "Reads up to 32 files: .json key tree or pointer value; .md headings or heading section; else 16 KiB or lines.",
+        .read_only = true,
+        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files 16 KiB.",
         .props = &.{
             .{ .name = "file", .desc = "", .optional = true },
             .{ .name = "files", .desc = "", .optional = true, .ty = "array" },
@@ -196,11 +205,13 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_list",
+        .read_only = true,
         .description = "Lists up to 2000 tracked files under dir.",
         .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
     },
     .{
         .name = "emetgate_search",
+        .read_only = true,
         .description = "Finds a case-sensitive literal (or regex:true) in tracked text under dir: path, then line:text per hit (* definition, |N legend). Ends \u{2713} if complete, else next offset; detail:\"full\" allows 200.",
         .props = &.{
             .{ .name = "pattern", .desc = "" },
@@ -213,11 +224,13 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_find",
+        .read_only = true,
         .description = find_tools.description,
         .props = &.{.{ .name = "pattern", .desc = "1 to 4096 bytes" }},
     },
     .{
         .name = "emetgate_scan",
+        .read_only = true,
         .description = "Lists up to 100 violations of one check.",
         .props = &.{
             .{ .name = "check", .desc = "e.g. forbid:networkidle" },
@@ -231,6 +244,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_git",
+        .read_only = true,
         .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
@@ -294,6 +308,7 @@ pub const tool_defs = [_]Tool{
     },
     .{
         .name = "emetgate_expand",
+        .read_only = true,
         .description = "Returns the full body of a result collapsed to a #handle. Pass the handle from the collapsed line; the body is verified byte-identical, or flagged stale when its source files changed. With file, returns only that file's section of the result (e.g. one file from a search match-map).",
         .props = &.{
             .{ .name = "handle", .desc = "the handle from a collapsed result line" },
@@ -570,7 +585,7 @@ fn rawCall(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, argu
 }
 
 pub fn compactReply(gpa: Allocator, io: std.Io, policy: Policy, name: []const u8, args: ?Value, text: []const u8, is_error: bool) !?[]u8 {
-    if (is_error or policy.no_compact or !shouldCompact(name)) return null;
+    if (is_error or !policy.compact or !shouldCompact(name)) return null;
     const stash = policy.stash orelse return null;
     const file = fileArg(args);
     var tgts_buf: [1]ledger_mod.Target = undefined;
@@ -738,6 +753,13 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: boo
         if (with_message) try js.write(commit_prop.name);
         try js.endArray();
         try js.endObject();
+        if (tool.read_only) {
+            try js.objectField("annotations");
+            try js.beginObject();
+            try js.objectField("readOnlyHint");
+            try js.write(true);
+            try js.endObject();
+        }
         try js.endObject();
     }
     if (legacy) try writeBatchToolDef(&js, commit);

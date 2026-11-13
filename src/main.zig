@@ -43,7 +43,7 @@ const usage =
     \\       emetgate stats <file.ts>...
     \\       emetgate mutate <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--json]
     \\       emetgate try <file.ts> --symbol <ref> --hash (<hex> | absent) (--body <code> | --body-file <path>) [--test <command>] [--test-scoped <command>] [--typecheck <command>] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>] [--allow-repo-config] [--allow-repo-memory] [--json]
-    \\       emetgate mcp [--test <command> | --detect-test] [--test-scoped <command>] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools]
+    \\       emetgate mcp [--test <command> | --detect-test] [--test-scoped <command>] [--typecheck <command> | --no-typecheck] [--allow-run <command>]... [--commit] [--shadow-root <dir>] [--shadow-tree (kept | copy)] [--shadow-private <path>]... [--read-budget <chars>] [--cache-max-age-days <n>] [--cache-max-mb <n>] [--allow-repo-config] [--allow-repo-memory] [--search-internals] [--tool-prefix <prefix>] [--legacy-tools] [--compact]
     \\       emetgate scan [--check <spec> [--in <where>]] [--allow-repo-memory] [--json]
     \\
 ++ rule_command.usage("       emetgate rule ") ++

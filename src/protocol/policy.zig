@@ -55,7 +55,7 @@ pub const Policy = struct {
     allow_run: [run_command.max_entries][]const u8 = undefined,
     allow_run_len: usize = 0,
     commit: bool = false,
-    no_compact: bool = false,
+    compact: bool = false,
     open_run: bool = false,
     shadow_tree: ?shadow.TreeMode = null,
     shadow_private: [max_private][]const u8 = undefined,
@@ -104,6 +104,7 @@ pub fn parsePolicy(args: anytype) ?Policy {
     var policy: Policy = .{ .search_text = true, .search_internals = false, .mirror_enabled = true, .raw_code = true };
     var json_code = false;
     var mirror_flag = false;
+    var compact_flag = false;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const arg: []const u8 = args[i];
@@ -140,9 +141,10 @@ pub fn parsePolicy(args: anytype) ?Policy {
         } else if (std.mem.eql(u8, arg, "--commit")) {
             if (policy.commit) return null;
             policy.commit = true;
-        } else if (std.mem.eql(u8, arg, "--no-compact")) {
-            if (policy.no_compact) return null;
-            policy.no_compact = true;
+        } else if (std.mem.eql(u8, arg, "--compact") or std.mem.eql(u8, arg, "--no-compact")) {
+            if (compact_flag) return null;
+            compact_flag = true;
+            policy.compact = arg.len == "--compact".len;
         } else if (std.mem.eql(u8, arg, open_run_flag)) {
             if (policy.open_run) return null;
             policy.open_run = true;
