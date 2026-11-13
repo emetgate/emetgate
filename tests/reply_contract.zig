@@ -58,6 +58,8 @@ const cases = [_]Case{
     .{ .tool = "emetgate_symbols", .args = "{\"file\":\"@/big.ts\",\"detail\":\"full\"}", .budget = .symbols, .cut = true },
     .{ .tool = "emetgate_expand", .args = "{\"handle\":\"$H\"}", .budget = .expand, .cut = true },
     .{ .tool = "emetgate_git", .args = "{\"sub\":\"diff\",\"path\":\"@/diffme.txt\",\"detail\":\"full\"}", .budget = .git, .cut = true },
+    .{ .tool = "emetgate_git", .args = "{\"sub\":\"log\",\"path\":\"@/logs\",\"detail\":\"full\"}", .budget = .git, .cut = true },
+    .{ .tool = "emetgate_git", .args = "{\"sub\":\"status\",\"path\":\"@/untracked\",\"detail\":\"full\"}", .budget = .git, .cut = true },
     // Bounded by their own changes, which use reply_contract; flip `enforced`
     // when they land.
     .{ .tool = "emetgate_search", .args = "{\"pattern\":\"id=\"}", .budget = .search, .cut = true, .enforced = false },
@@ -121,8 +123,31 @@ const Fixture = struct {
         errdefer testing.allocator.free(self.root);
         try git_fixture.initRepo(self.root);
         try git_fixture.commitInit(self.root, false);
+        try self.tmp.dir.createDirPath(testing.io, "logs");
+        for (0..3) |c| {
+            const name = try std.fmt.bufPrint(&name_buf, "logs/c{d}.txt", .{c});
+            try self.write(name, name);
+            try self.write(".git/LOGMSG", "\"quoted\" subject \\ " ** 600);
+            try self.git(&.{ "add", name });
+            try self.git(&.{ "commit", "-q", "-F", ".git/LOGMSG" });
+        }
+        try self.tmp.dir.createDirPath(testing.io, "untracked");
+        for (0..600) |f| try self.write(try std.fmt.bufPrint(&name_buf, "untracked/untracked_file_{d:0>4}_with_a_long_name.txt", .{f}), "u\n");
         try self.build("diffme.txt", 20_000, "changed line {d} of {d}\n", .{}, "", "");
         return self;
+    }
+
+    fn git(self: *Fixture, argv_tail: []const []const u8) !void {
+        var argv: [8][]const u8 = undefined;
+        argv[0] = try git_fixture.git();
+        @memcpy(argv[1..][0..argv_tail.len], argv_tail);
+        const result = try @import("emetgate").bounded_run.run(testing.allocator, testing.io, .{ .argv = argv[0 .. argv_tail.len + 1], .cwd = .{ .path = self.root } });
+        testing.allocator.free(result.stdout);
+        testing.allocator.free(result.stderr);
+        switch (result.term) {
+            .exited => |code| if (code != 0) return error.GitSetupFailed,
+            else => return error.GitSetupFailed,
+        }
     }
 
     fn deinit(self: *Fixture) void {

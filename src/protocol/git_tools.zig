@@ -286,10 +286,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         }
         if (!std.mem.eql(u8, sub, "log")) return error.NoCommitYet;
         opts.unborn = true;
-        var js: std.json.Stringify = .{ .writer = w };
-        try writeLog(gpa, &js, path, "", &.{}, opts);
-        try w.writeByte('\n');
-        return;
+        return writeResult(gpa, w, sub, path, "", &.{}, null, null, opts);
     }
 
     const annotated: []const []const u8 = if (std.mem.eql(u8, sub, "log"))
@@ -455,59 +452,54 @@ fn writeBase(js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, opts: 
     try js.write(viewLabel(opts));
 }
 
-fn writeRaw(gpa: Allocator, js: *std.json.Stringify, stdout: []const u8) !void {
-    var lines = std.mem.splitScalar(u8, stdout, '\n');
-    var kept: std.ArrayList([]const u8) = .empty;
-    defer kept.deinit(gpa);
-    var total: usize = 0;
-    while (lines.next()) |line| {
-        total += 1;
-        if (kept.items.len < max_output_lines) try kept.append(gpa, line);
-    }
-    const truncated = total > kept.items.len;
-    try js.objectField("output");
-    var joined: std.Io.Writer.Allocating = .init(gpa);
-    defer joined.deinit();
-    for (kept.items, 0..) |line, i| {
-        if (i != 0) try joined.writer.writeByte('\n');
-        try joined.writer.writeAll(line);
-    }
-    try js.write(joined.written());
-    try js.objectField("lines_shown");
-    try js.write(kept.items.len);
-    try js.objectField("lines_total");
-    try js.write(total);
-    try js.objectField("truncated");
-    try js.write(truncated);
+fn writeRaw(gpa: Allocator, js: *std.json.Stringify, stdout: []const u8, opts: Options) !?DiffRest {
+    const lines = try splitLines(gpa, stdout);
+    defer gpa.free(lines);
+    const from: usize = if (opts.line_start) |ls| @intCast(@max(ls, 1)) else 1;
+    const to: usize = if (opts.line_end) |le| @intCast(@max(le, 0)) else std.math.maxInt(usize);
+    const page = try pageLines(gpa, lines, from, to, opts.budget -| js.writer.end, max_output_lines, noBoundary);
+    defer page.deinit(gpa);
+    try writePageFields(js, page, opts.cut);
+    const next = page.next orelse return null;
+    return .{ .next = next, .total = page.total };
+}
+
+fn noBoundary(line: []const u8) bool {
+    _ = line;
+    return false;
 }
 
 fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, summary: ?*const git_symbols.Summary, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
     var js: std.json.Stringify = .{ .writer = w };
-    if (std.mem.eql(u8, sub, "log")) {
-        try writeLog(gpa, &js, path, stdout, annotated, opts);
-    } else if (std.mem.eql(u8, sub, "status")) {
-        try writeStatus(gpa, &js, path, stdout, opts);
-    } else if (std.mem.eql(u8, sub, "diff") or std.mem.eql(u8, sub, "show")) {
-        const rest = try writeDiffShow(gpa, &js, sub, path, stdout, summary, opts);
-        try w.writeByte('\n');
-        const left = rest orelse return;
-        return reply_contract.writeTrailer(w, "{s} lines {d}-{d}", .{ sub, left.next, left.total }, "emetgate_git", .{
-            .sub = sub,
-            .path = path,
-            .staged = if (opts.staged) @as(?bool, true) else null,
-            .commit = opts.show,
-            .detail = if (opts.detail == .full) @as(?[]const u8, "full") else null,
-            .line_start = left.next,
-            .line_end = opts.line_end,
-        });
-    } else if (std.mem.eql(u8, sub, "blame")) {
+    const is_log = std.mem.eql(u8, sub, "log");
+    const rest = if (is_log)
+        try writeLog(gpa, &js, path, stdout, annotated, opts)
+    else if (std.mem.eql(u8, sub, "status"))
+        try writeStatus(gpa, &js, path, stdout, opts)
+    else if (std.mem.eql(u8, sub, "diff") or std.mem.eql(u8, sub, "show"))
+        try writeDiffShow(gpa, &js, sub, path, stdout, summary, opts)
+    else if (std.mem.eql(u8, sub, "blame")) blk: {
         try writeBlame(gpa, &js, path, stdout, blame, opts);
-    } else {
+        break :blk null;
+    } else blk: {
         try writeBase(&js, sub, path, opts);
-        try writeRaw(gpa, &js, stdout);
+        const left = try writeRaw(gpa, &js, stdout, opts);
         try js.endObject();
-    }
+        break :blk left;
+    };
     try w.writeByte('\n');
+    const left = rest orelse return;
+    return reply_contract.writeTrailer(w, "{s} lines {d}-{d}", .{ sub, left.next, left.total }, "emetgate_git", .{
+        .sub = sub,
+        .path = path,
+        .n = if (is_log) @as(?i64, opts.requested) else null,
+        .cursor = opts.cursor,
+        .staged = if (opts.staged) @as(?bool, true) else null,
+        .commit = opts.show,
+        .detail = if (opts.detail == .full) @as(?[]const u8, "full") else null,
+        .line_start = left.next,
+        .line_end = opts.line_end,
+    });
 }
 
 fn oidOf(line: []const u8) []const u8 {
@@ -515,7 +507,7 @@ fn oidOf(line: []const u8) []const u8 {
     return line[0..tab];
 }
 
-fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, opts: Options) !void {
+fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, annotated: []const []const u8, opts: Options) !?DiffRest {
     var lines = std.mem.splitScalar(u8, stdout, '\n');
     var rows: std.ArrayList([]const u8) = .empty;
     defer rows.deinit(gpa);
@@ -539,6 +531,10 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
             next_cursor = oidOf(line);
             break;
         }
+        if (opts.detail == .full and shown > 0 and js.writer.end > opts.budget / 2) {
+            next_cursor = oidOf(line);
+            break;
+        }
         const oid = oidOf(line);
         var date: []const u8 = "";
         var subject: []const u8 = "";
@@ -555,7 +551,7 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
         try js.objectField("date");
         try js.write(date);
         try js.objectField("subject");
-        try js.write(subject);
+        try js.write(reply_contract.cut(subject, opts.budget / 4, .json).kept);
         try js.objectField("verification");
         try js.write(if (isAnnotated(annotated, oid)) "receipt" else "no_receipt");
         try js.endObject();
@@ -581,8 +577,9 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
         try js.objectField("note");
         try js.write("more commits follow; pass cursor:<next_cursor> to page from there");
     }
-    if (opts.detail == .full) try writeRaw(gpa, js, stdout);
+    const rest = if (opts.detail == .full) try writeRaw(gpa, js, stdout, opts) else null;
     try js.endObject();
+    return rest;
 }
 
 const StatusEntry = struct { code: u8, path: []const u8 };
@@ -592,15 +589,17 @@ fn statusPath(field: []const u8) []const u8 {
     return field;
 }
 
-fn writeEntryGroup(js: *std.json.Stringify, name: []const u8, entries: []const StatusEntry) !void {
+fn writeEntryGroup(js: *std.json.Stringify, name: []const u8, entries: []const StatusEntry, limit: usize) !void {
     try js.objectField(name);
     try js.beginObject();
     try js.objectField("count");
     try js.write(entries.len);
     try js.objectField("files");
     try js.beginArray();
-    const cap = @min(entries.len, max_status_entries);
-    for (entries[0..cap]) |e| {
+    var cap: usize = 0;
+    for (entries[0..@min(entries.len, max_status_entries)]) |e| {
+        if (js.writer.end > limit) break;
+        cap += 1;
         try js.beginObject();
         try js.objectField("code");
         const code = [_]u8{e.code};
@@ -617,7 +616,7 @@ fn writeEntryGroup(js: *std.json.Stringify, name: []const u8, entries: []const S
     try js.endObject();
 }
 
-fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, opts: Options) !void {
+fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: []const u8, opts: Options) !?DiffRest {
     var staged: std.ArrayList(StatusEntry) = .empty;
     defer staged.deinit(gpa);
     var unstaged: std.ArrayList(StatusEntry) = .empty;
@@ -668,17 +667,21 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     const untracked_total = untracked_files.items.len + dir_counts.items.len;
     const clean = staged.items.len == 0 and unstaged.items.len == 0 and untracked_total == 0 and conflicted.items.len == 0;
 
+    const limit = if (opts.detail == .full) opts.budget / 2 else opts.budget;
     try writeBase(js, "status", path, opts);
     try js.objectField("clean");
     try js.write(clean);
     if (conflicted.items.len != 0) {
         try js.objectField("conflicted");
         try js.beginArray();
-        for (conflicted.items[0..@min(conflicted.items.len, max_status_entries)]) |p| try js.write(p);
+        for (conflicted.items[0..@min(conflicted.items.len, max_status_entries)]) |p| {
+            if (js.writer.end > limit) break;
+            try js.write(p);
+        }
         try js.endArray();
     }
-    try writeEntryGroup(js, "staged", staged.items);
-    try writeEntryGroup(js, "unstaged", unstaged.items);
+    try writeEntryGroup(js, "staged", staged.items, limit);
+    try writeEntryGroup(js, "unstaged", unstaged.items, limit);
 
     try js.objectField("untracked");
     try js.beginObject();
@@ -686,8 +689,12 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     try js.write(untracked_total);
     try js.objectField("files");
     try js.beginArray();
-    const fcap = @min(untracked_files.items.len, max_status_entries);
-    for (untracked_files.items[0..fcap]) |p| try js.write(p);
+    var fcap: usize = 0;
+    for (untracked_files.items[0..@min(untracked_files.items.len, max_status_entries)]) |p| {
+        if (js.writer.end > limit) break;
+        fcap += 1;
+        try js.write(p);
+    }
     try js.endArray();
     if (untracked_files.items.len > fcap) {
         try js.objectField("files_more");
@@ -696,7 +703,10 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     if (dir_names.items.len != 0) {
         try js.objectField("dirs");
         try js.beginArray();
+        var dirs_shown: usize = 0;
         for (dir_names.items, dir_counts.items) |d, c| {
+            if (js.writer.end > limit) break;
+            dirs_shown += 1;
             try js.beginObject();
             try js.objectField("dir");
             try js.write(d);
@@ -705,11 +715,16 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
             try js.endObject();
         }
         try js.endArray();
+        if (dir_names.items.len > dirs_shown) {
+            try js.objectField("dirs_more");
+            try js.write(dir_names.items.len - dirs_shown);
+        }
     }
     try js.endObject();
 
-    if (opts.detail == .full) try writeRaw(gpa, js, stdout);
+    const rest = if (opts.detail == .full) try writeRaw(gpa, js, stdout, opts) else null;
     try js.endObject();
+    return rest;
 }
 
 // --- bounded replies -------------------------------------------------------
