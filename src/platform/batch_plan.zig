@@ -233,7 +233,11 @@ fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, text: Tex
     const code = registry.forPath(edit.file_abs) != null;
     const base = try file_edit.readBase(gpa, io, edit.file_abs, code);
     defer if (base) |b| gpa.free(b);
-    const after = try textAfter(gpa, base, edit.expected_hash, text);
+    var matches: usize = 0;
+    const after = switch (text) {
+        .replace => |r| try file_edit.replaceUniqueIn(gpa, edit.file_abs, base orelse return error.FileNotFound, r.old, r.new, r.all, &matches),
+        else => try textAfter(gpa, base, edit.expected_hash, text),
+    };
     defer gpa.free(after);
     return file_edit.prepare(gpa, runtime, edit.file_abs, rel, base, after);
 }

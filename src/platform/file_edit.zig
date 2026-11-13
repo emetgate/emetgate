@@ -11,6 +11,7 @@ const batch_plan = @import("batch_plan.zig");
 const commit_plan = @import("commit_plan.zig");
 const file_move = @import("file_move.zig");
 const runner = @import("runner.zig");
+const fuzzy_match = @import("fuzzy_match.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -103,6 +104,24 @@ pub fn replaceUnique(gpa: Allocator, source: []const u8, old: []const u8, new: [
         if (matches.* != 0) return replaceCounted(gpa, source, crlf_old, crlf_new, all, matches.*);
     }
     return replaceCounted(gpa, source, old, new, all, matches.*);
+}
+
+/// replaceUnique for a file at `path`: when old matches nowhere byte for byte, the one range it
+/// matches ignoring whitespace and comments (fuzzy_match) is replaced instead and the fallback
+/// is marked used. Several exact matches stay an ambiguity error; no single normalised match
+/// stays OldStringNotFound.
+pub fn replaceUniqueIn(gpa: Allocator, path: []const u8, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: *usize) ![]u8 {
+    if (replaceUnique(gpa, source, old, new, all, matches)) |out| {
+        return out;
+    } else |err| if (err != error.OldStringNotFound) return err;
+    var normalised: usize = 0;
+    const span = (try fuzzy_match.locate(gpa, source, old, fuzzy_match.syntaxFor(path), &normalised)) orelse return error.OldStringNotFound;
+    const crlf = std.mem.indexOf(u8, source, "\r\n") != null and std.mem.indexOfScalar(u8, new, '\r') == null;
+    const replacement = if (crlf) try std.mem.replaceOwned(u8, gpa, new, "\n", "\r\n") else try gpa.dupe(u8, new);
+    defer gpa.free(replacement);
+    matches.* = 1;
+    fuzzy_match.markUsed();
+    return std.mem.concat(gpa, u8, &.{ source[0..span.start], replacement, source[span.end..] });
 }
 
 fn replaceCounted(gpa: Allocator, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: usize) ![]u8 {
@@ -204,7 +223,7 @@ pub fn apply(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ma
     const base = try readBase(gpa, io, options.file_abs, code);
     defer if (base) |b| gpa.free(b);
     const after = switch (options.change) {
-        .replace => |r| try replaceUnique(gpa, base orelse return error.FileNotFound, r.old, r.new, r.all, matches),
+        .replace => |r| try replaceUniqueIn(gpa, options.file_abs, base orelse return error.FileNotFound, r.old, r.new, r.all, matches),
         .whole => |content| try gpa.dupe(u8, content),
     };
     defer gpa.free(after);

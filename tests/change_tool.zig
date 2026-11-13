@@ -306,6 +306,23 @@ test "emetgate_change leaves after out when it only writes edits" {
     try testing.expect(std.mem.indexOf(u8, reply.text, "\"after\"") == null);
 }
 
+test "emetgate_change matches a dense old_string ignoring whitespace and comments and says so in the reply" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/sum.js", .data = "// sums\nexport function sum(xs) {\n    let t = 0;\n\n    // walk them\n    for (const x of xs) t += x;\n    return t;\n}\n" });
+    const sum = try repo.path("src\\sum.js");
+    defer gpa.free(sum);
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = sum, .old_string = "  let t = 0;\n  for (const x of xs) t += x;", .new_string = "let t = xs.reduce((a, b) => a + b, 0);" },
+    } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try reply.expectStatus("applied");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"matched\":\"ignoring whitespace and comments\"") != null);
+    try repo.expectFile("src/sum.js", "// sums\nexport function sum(xs) {\n    let t = xs.reduce((a, b) => a + b, 0);\n    return t;\n}\n");
+}
+
 test "emetgate_change skips an edit whose old_string equals its new_string and writes the others" {
     var repo = try Repo.init();
     defer repo.deinit();

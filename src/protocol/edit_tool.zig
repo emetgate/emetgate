@@ -7,6 +7,7 @@ const tool_result = @import("tool_result.zig");
 const runner = @import("../platform/runner.zig");
 const shadow_root = @import("../platform/shadow_root.zig");
 const file_edit = @import("../platform/file_edit.zig");
+const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const receipts = @import("../platform/receipts.zig");
 const receipt_note = @import("receipt_note.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -50,13 +51,14 @@ fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *tele
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var matches: usize = 0;
+    fuzzy_match.reset();
     const is_error = applyInto(gpa, io, runtime, args, policy, request, &matches, &buffer.writer, event) catch |err| blk: {
         if (err == error.OutOfMemory) return err;
         event.fail(@errorName(err));
         buffer.clearRetainingCapacity();
         switch (err) {
             error.WrittenButNotIndexed => try wire.writeNotIndexed(&buffer.writer, request.file),
-            error.OldStringNotFound => try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), "old_string matches 0 times; copy it exactly from the file"),
+            error.OldStringNotFound => try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), "old_string matches 0 times; " ++ fuzzy_match.also_tried ++ "; copy it exactly from the file"),
             error.OldStringNotUnique => {
                 var text: [96]u8 = undefined;
                 const message = std.fmt.bufPrint(&text, "old_string matches {d} times; add context or set replace_all", .{matches}) catch unreachable;
@@ -66,6 +68,11 @@ fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *tele
         }
         break :blk true;
     };
+    if (fuzzy_match.wasUsed()) {
+        const noted = try fuzzy_match.annotate(gpa, buffer.written());
+        defer gpa.free(noted);
+        return .{ .text = try tool_result.dupTrim(gpa, noted), .is_error = is_error };
+    }
     return .{ .text = try tool_result.dupTrim(gpa, buffer.written()), .is_error = is_error };
 }
 

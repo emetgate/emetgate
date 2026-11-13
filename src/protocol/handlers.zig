@@ -47,6 +47,7 @@ const repo = @import("../platform/repo.zig");
 const git_commit = @import("../platform/git_commit.zig");
 const known_files = @import("known_files.zig");
 const file_edit = @import("../platform/file_edit.zig");
+const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
 const forgive = @import("forgive.zig");
@@ -1308,6 +1309,14 @@ fn changeStep(arena: Allocator, js: *std.json.Stringify, field: []const u8, text
 }
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    fuzzy_match.reset();
+    const reply = try tryBatchReply(gpa, io, runtime, args, event, policy);
+    if (!fuzzy_match.wasUsed()) return reply;
+    defer gpa.free(reply.text);
+    return .{ .text = try fuzzy_match.annotate(gpa, reply.text), .is_error = reply.is_error };
+}
+
+fn tryBatchReply(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return tool_result.missing(edits_missing, .{});
     const retry = getString(arguments, "retry");
     const given: []const Value = if (getField(arguments, "edits")) |edits_val| switch (edits_val) {

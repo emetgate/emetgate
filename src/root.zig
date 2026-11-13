@@ -83,6 +83,7 @@ pub const rename_graph = @import("platform/rename_graph.zig");
 pub const move_batch = @import("platform/move_batch.zig");
 pub const file_move = @import("platform/file_move.zig");
 pub const file_edit = @import("platform/file_edit.zig");
+pub const fuzzy_match = @import("platform/fuzzy_match.zig");
 pub const module_paths = @import("platform/module_paths.zig");
 pub const search_index = @import("platform/search_index.zig");
 pub const search_index_file = @import("platform/search_index_file.zig");

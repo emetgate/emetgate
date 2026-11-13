@@ -84,6 +84,7 @@ pub const rename_graph = src.rename_graph;
 pub const move_batch = src.move_batch;
 pub const file_move = src.file_move;
 pub const file_edit = src.file_edit;
+pub const fuzzy_match = src.fuzzy_match;
 pub const module_paths = src.module_paths;
 pub const search_index = src.search_index;
 pub const search_index_file = src.search_index_file;
@@ -315,6 +316,7 @@ test {
     _ = @import("tests/move_file_tool.zig");
     _ = @import("tests/edit_tool.zig");
     _ = @import("tests/change_tool.zig");
+    _ = @import("tests/fuzzy_match.zig");
     _ = @import("tests/move_file_crash.zig");
     _ = @import("tests/verify_receipts.zig");
     _ = @import("tests/verify_branch.zig");

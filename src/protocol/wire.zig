@@ -1395,7 +1395,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "DuplicateBatchFile", "one file is in two items that cannot be combined (a symbol, node, delete or doc item next to another item for it); several old_string/new_string and line-range items for one file are fine, otherwise send one item per file" },
     .{ "ConflictingBatchEdits", "a whole-file item and another item name the same file; send that file once with its final content" },
     .{ "OverlappingLineRanges", "two line-range items for one file overlap; merge them into one item" },
-    .{ "OldStringNotFound", "old_string matches 0 times; copy it exactly from emetgate_read_file raw:true" },
+    .{ "OldStringNotFound", "old_string matches 0 times, and a whitespace- and comment-insensitive search also found no single match; copy it exactly from emetgate_read_file raw:true" },
     .{ "OldStringNotUnique", "old_string matches several places; add surrounding lines so it matches once, or pass replace_all:true" },
     .{ "NoChange", "old_string equals new_string; nothing to change" },
     .{ "EmptyOldString", "old_string is empty; give the exact text to replace" },
