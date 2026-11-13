@@ -12,6 +12,7 @@ const tree_cache_mod = @import("../engine/tree_cache.zig");
 const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
+const map_tools = @import("map_tools.zig");
 const read_tools = @import("read_tools.zig");
 const read_budget = @import("read_budget.zig");
 const read_cache = @import("read_cache.zig");
@@ -1087,6 +1088,7 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         try changeStep(arena, &js, "edits", reply.text);
         if (reply.is_error) failed = "edits";
         if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);
+        if (!reply.is_error) if (policy.map_session) |session| try writeUnreached(arena, io, &js, session, root, list);
     };
     const committed_with_edits = policy.commit and edits != null;
     if (failed == null and !committed_with_edits) if (message) |text| {
@@ -1104,6 +1106,58 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+pub const unreached_shown: usize = 8;
+
+/// Names the changed functions that no test reaches, so a passing gate never hides
+/// code the tests did not exercise. Skipped silently while the fact store is building.
+fn writeUnreached(arena: Allocator, io: std.Io, js: *std.json.Stringify, session: *map_tools.Session, root: []const u8, list: Value) !void {
+    var edited: std.ArrayList(map_tools.Edited) = .empty;
+    for (list.array.items) |item| {
+        if (item != .object) continue;
+        const file = getString(item, "file") orelse continue;
+        const abs = try std.fs.path.resolve(arena, &.{ root, file });
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(max_known_bytes)) catch continue;
+        const span = writtenSpan(bytes, item) orelse continue;
+        try edited.append(arena, .{ .path = try storePath(arena, root, abs), .start = span.start, .end = span.end });
+    }
+    if (edited.items.len == 0) return;
+    const found = (session.untested(arena, edited.items) catch return) orelse return;
+    if (found.len == 0) return;
+    try js.objectField("no_test_reaches");
+    try js.beginArray();
+    for (found[0..@min(found.len, unreached_shown)]) |u| {
+        try js.write(try std.fmt.allocPrint(arena, "{s} ({s}:{d})", .{ u.qname, u.path, u.line }));
+    }
+    if (found.len > unreached_shown) try js.write(try std.fmt.allocPrint(arena, "and {d} more", .{found.len - unreached_shown}));
+    try js.endArray();
+}
+
+pub const Span = struct { start: u32, end: u32 };
+
+/// Where an edit's new text sits in the file as written; a whole-file write spans the file.
+pub fn writtenSpan(bytes: []const u8, item: Value) ?Span {
+    if (getString(item, "new_string")) |text| {
+        if (text.len == 0) return null;
+        const at = std.mem.indexOf(u8, bytes, text) orelse return null;
+        return .{ .start = @intCast(at), .end = @intCast(at + text.len) };
+    }
+    if (getString(item, "content") != null) return .{ .start = 0, .end = @intCast(bytes.len) };
+    return null;
+}
+
+/// A path as the fact store keys it: relative to the root, '/' separated.
+pub fn storePath(arena: Allocator, root: []const u8, abs: []const u8) ![]const u8 {
+    const root_abs = try std.fs.path.resolve(arena, &.{root});
+    var rel = abs;
+    if (abs.len > root_abs.len and std.ascii.startsWithIgnoreCase(abs, root_abs)) {
+        rel = abs[root_abs.len..];
+        while (rel.len > 0 and (rel[0] == '\\' or rel[0] == '/')) rel = rel[1..];
+    }
+    const out = try arena.dupe(u8, rel);
+    std.mem.replaceScalar(u8, out, '\\', '/');
+    return out;
 }
 
 fn withKnownHashes(arena: Allocator, io: std.Io, root: []const u8, list: Value, known: *known_files.KnownFiles) !Value {

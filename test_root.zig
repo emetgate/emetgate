@@ -35,6 +35,7 @@ pub const facts_tests = src.facts_tests;
 pub const facts_signature = src.facts_signature;
 pub const evidence_request = src.evidence_request;
 pub const evidence = src.evidence;
+pub const test_reach = src.test_reach;
 pub const question_lexicon = src.question_lexicon;
 pub const question_terms = src.question_terms;
 pub const question_intent = src.question_intent;
@@ -280,6 +281,7 @@ test {
     _ = @import("tests/facts_query.zig");
     _ = @import("tests/fact_store.zig");
     _ = @import("tests/evidence.zig");
+    _ = @import("tests/test_reach.zig");
     _ = @import("tests/facts_outline.zig");
     _ = @import("tests/facts_tests.zig");
     _ = @import("tests/facts_signature.zig");

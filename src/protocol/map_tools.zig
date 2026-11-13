@@ -12,6 +12,8 @@ const rank = @import("../engine/map_region_rank.zig");
 const term_index = @import("../engine/term_index.zig");
 const evidence = @import("../engine/evidence.zig");
 const facts_query = @import("../engine/facts_query.zig");
+const facts_store = @import("../engine/facts_store.zig");
+const test_reach = @import("../engine/test_reach.zig");
 const tool_result = @import("tool_result.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -64,6 +66,11 @@ pub const explore_description = "Answers a code question: named symbols' definit
 pub const evidence_description = "Full code of up to 6 functions by qualified name.";
 
 pub const Phase = enum(u8) { idle, building, ready, failed };
+
+/// A written byte range of a repository file, path relative to the root with '/'.
+pub const Edited = struct { path: []const u8, start: u32, end: u32 };
+
+pub const Unreached = struct { qname: []const u8, path: []const u8, line: u32 };
 
 pub const waited_note = "waited for the fact store build";
 
@@ -356,6 +363,29 @@ pub const Session = struct {
 
     pub fn answer(self: *Session, arena: Allocator, question: []const u8, names: []const []const u8) ![]const u8 {
         return self.dense(arena, question, names, reply_budget);
+    }
+
+    /// Changed callables that no test reaches through the static reference graph.
+    /// Null while the fact store is still building: a write never waits for it.
+    pub fn untested(self: *Session, arena: Allocator, edited: []const Edited) !?[]const Unreached {
+        if (self.phase.load(.acquire) != .ready) return null;
+        _ = self.settle();
+        self.sync();
+        const store = &self.repo.?.store;
+        var out: std.ArrayList(Unreached) = .empty;
+        for (edited) |e| {
+            const id = store.fileId(e.path) orelse continue;
+            const state = store.file(id);
+            if (state.status != .indexed or test_reach.isTestFile(state)) continue;
+            for (try test_reach.changedDefs(arena, state, e.start, e.end)) |index| {
+                if (index >= state.slots.len) continue;
+                const def = state.facts.defs[index];
+                const def_id: facts_store.DefId = .{ .file = id, .slot = state.slots[index] };
+                if (try test_reach.reach(arena, store, def_id) != .untested) continue;
+                try out.append(arena, .{ .qname = def.qname, .path = state.path, .line = def.line });
+            }
+        }
+        return out.items;
     }
 
     pub fn evidenceTool(self: *Session, gpa: Allocator, args: ?Value) !ToolResult {
