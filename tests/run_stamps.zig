@@ -38,6 +38,21 @@ const Tree = struct {
     }
 
     fn age(self: *Tree, rel: []const u8) !void {
+        try self.putWriteTimeBack(rel);
+        try self.setChangeTime(rel, old_ns);
+    }
+
+    fn setChangeTime(self: *Tree, rel: []const u8, ns: i96) !void {
+        const file = try self.tmp.dir.openFile(io, rel, .{ .mode = .read_write });
+        defer file.close(io);
+        const win = std.os.windows;
+        var info = std.mem.zeroes(win.FILE.BASIC_INFORMATION);
+        info.ChangeTime = @intCast(@divTrunc(ns, 100) + 116_444_736_000_000_000);
+        var iosb: win.IO_STATUS_BLOCK = undefined;
+        if (win.ntdll.NtSetInformationFile(file.handle, &iosb, &info, @sizeOf(win.FILE.BASIC_INFORMATION), .Basic) != .SUCCESS) return error.ChangeTimeNotSet;
+    }
+
+    fn putWriteTimeBack(self: *Tree, rel: []const u8) !void {
         const file = try self.tmp.dir.openFile(io, rel, .{ .mode = .read_write });
         defer file.close(io);
         try file.setTimestamps(io, .{ .modify_timestamp = .{ .new = .{ .nanoseconds = old_ns } } });
@@ -84,7 +99,7 @@ const Reference = struct {
             const was = self.seen.get(rel);
             if (was == null) {
                 const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch continue;
-                if (run_stamps.untouchedSince(stat.mtime.nanoseconds, started_ns)) continue;
+                if (run_stamps.untouchedSince(.{ .mtime_ns = @intCast(stat.mtime.nanoseconds), .ctime_ns = @intCast(stat.ctime.nanoseconds), .size = stat.size }, started_ns)) continue;
             }
             const hash = r.hash(rel) orelse continue;
             if (was) |h| if (std.mem.eql(u8, &h, &hash)) continue;
@@ -213,8 +228,8 @@ test "run stamps: the memo spares unchanged old files the read on the next snaps
     try testing.expectEqualDeep(first.files.get("a.ts").?.hash, second.files.get("a.ts").?.hash);
     try run_stamps.rememberAll(&memo, &second);
 
-    // Same size, write time put back: the change time still moves the stamp.
-    try tree.writeOld("b.ts", "BETA");
+    try tree.write("b.ts", "BETA");
+    try tree.putWriteTimeBack("b.ts");
     r.reads = 0;
     const third = try tree.take(&r, &files, &memo);
     try testing.expectEqual(@as(usize, 2), r.reads);
@@ -287,4 +302,28 @@ test "run stamps: a file the platform gives no stamp for is always read" {
     const compared = try run_stamps.compare(tree.arena(), &r, &files, &none, &before, started_ns);
     try testing.expectEqual(@as(usize, 1), compared.changes.len);
     try testing.expectEqual(@as(usize, 1), r.reads);
+}
+
+test "run stamps: a same-size rewrite inside one clock tick, with its write time put back, is read again while its change time is recent" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var tree = try Tree.init();
+    defer tree.deinit();
+    const files = [_][]const u8{"tick.ts"};
+    const changed_ns = now() - std.time.ns_per_s;
+    try tree.write("tick.ts", "first");
+    try tree.putWriteTimeBack("tick.ts");
+    try tree.setChangeTime("tick.ts", changed_ns);
+    var memo = run_stamps.Memo.init(gpa);
+    defer memo.deinit();
+    var r = tree.reader();
+    const before = try tree.take(&r, &files, &memo);
+    try run_stamps.rememberAll(&memo, &before);
+
+    try tree.write("tick.ts", "FIRST");
+    try tree.putWriteTimeBack("tick.ts");
+    try tree.setChangeTime("tick.ts", changed_ns);
+    r.reads = 0;
+    const after = try tree.take(&r, &files, &memo);
+    try testing.expectEqual(@as(usize, 1), r.reads);
+    try testing.expect(!std.mem.eql(u8, &before.files.get("tick.ts").?.hash, &after.files.get("tick.ts").?.hash));
 }
