@@ -599,7 +599,7 @@ pub const Session = struct {
                 return patch;
             }
         }
-        patch.read_at = now(io);
+        patch.read_at = if (builtin.is_test) fixed_read_at orelse now(io) else now(io);
         if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel, null);
         return patch;
     }

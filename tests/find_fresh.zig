@@ -252,7 +252,6 @@ fn rebuildRightAfterTouching(repo: *Repo) !void {
     const touched = try repo.tmp.dir.statFile(testing.io, "repo/src/app.js", .{});
     const read_at = @as(i64, @truncate(touched.mtime.nanoseconds)) + std.time.ns_per_s;
     find_tools.fixed_read_at = read_at;
-    defer find_tools.fixed_read_at = null;
     try repo.session.prepare(.build);
     try testing.expectEqual(read_at, repo.session.base.?.read_at);
 }
@@ -283,6 +282,7 @@ test "find after write: a watched find fences the change watcher, so a write who
 test "find after write: a same-size rewrite that puts back the old mtime is found while the index read is under two seconds old" {
     var repo = try Repo.init(false);
     defer repo.deinit();
+    defer find_tools.fixed_read_at = null;
     try rebuildRightAfterTouching(&repo);
     try repo.expectFind("total", "2 hits in 2 files");
     try rewriteKeepingStamp(repo.tmp.dir, "repo/src/app.js", fresh_js);
@@ -293,6 +293,7 @@ test "find after write: a same-size rewrite that puts back the old mtime is foun
 test "find after write: an index loaded from disk judges stamps by the time its build read the files, not by the index file's mtime" {
     var repo = try Repo.init(false);
     defer repo.deinit();
+    defer find_tools.fixed_read_at = null;
     try rebuildRightAfterTouching(&repo);
     const built = repo.session.base.?;
     try testing.expectEqual(built.read_at, built.ix.h.read_at);
