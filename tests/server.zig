@@ -432,6 +432,59 @@ test "red line: the served tool surface is exactly this list, so a new tool cann
     }
 }
 
+const read_only_tools = [_][]const u8{
+    "emetgate_explore",
+    "emetgate_evidence",
+    "emetgate_symbols",
+    "emetgate_skeleton",
+    "emetgate_read_symbol",
+    "emetgate_mutate",
+    "emetgate_read_file",
+    "emetgate_list",
+    "emetgate_search",
+    "emetgate_find",
+    "emetgate_scan",
+    "emetgate_git",
+    "emetgate_expand",
+};
+
+test "red line: exactly these tools carry readOnlyHint in tools/list, in every serving mode, so a write tool cannot be marked read-only" {
+    const line =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list"}
+    ;
+    const modes = [_]server.Policy{
+        .{},
+        .{ .legacy_tools = true, .commit = true },
+        .{ .open_run = true },
+        .{ .open_run = true, .legacy_tools = true, .nested_roots = &.{"sub"} },
+    };
+    for (modes) |mode| {
+        const response = (try respondWithPolicy(testing.allocator, testing.io, undefined, line, mode)).?;
+        defer testing.allocator.free(response);
+        const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, response, .{});
+        defer parsed.deinit();
+        var marked: usize = 0;
+        for (parsed.value.object.get("result").?.object.get("tools").?.array.items) |tool| {
+            const name = tool.object.get("name").?.string;
+            var expected = false;
+            for (read_only_tools) |listed| expected = expected or std.mem.eql(u8, listed, name);
+            errdefer std.debug.print("{s}\n", .{name});
+            if (tool.object.get("annotations")) |annotations| {
+                try testing.expect(expected);
+                try testing.expectEqual(@as(usize, 1), annotations.object.count());
+                try testing.expect(annotations.object.get("readOnlyHint").?.bool);
+                marked += 1;
+            } else try testing.expect(!expected);
+        }
+        try testing.expectEqual(read_only_tools.len, marked);
+    }
+    for (server.tool_defs) |tool| {
+        errdefer std.debug.print("{s}\n", .{tool.name});
+        if (handlers.readOnly(tool.name)) try testing.expect(tool.read_only);
+    }
+    try testing.expect(!server.open_run_def.read_only);
+}
+
 test "red line: no tool on the model side can adopt, change or forget a rule" {
     const writers = [_][]const u8{
         "emetgate_rule",

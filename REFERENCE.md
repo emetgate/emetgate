@@ -554,7 +554,7 @@ in a session started by `emetgate lockdown` (see "Rules from the prompt" under L
 model-facing tools cannot adopt, change or remove a rule, or change an `enforce` rule to
 `advisory`; under lockdown a command run through `emetgate_run` could, and the `PreToolUse` hook asks the user before an `emetgate rule add`, `supersede` or `forget`. A test (`red line: the served tool surface is exactly this list`) pins the served
 tool names and fails if another tool is added. A second test verifies that the dispatcher
-rejects rule-writing tool names.
+rejects rule-writing tool names. In `tools/list` the tools that never change the working tree, the git repository or the rule ledger (`emetgate_explore`, `emetgate_evidence`, `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_mutate`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_find`, `emetgate_scan`, `emetgate_git` and `emetgate_expand`) carry `"annotations":{"readOnlyHint":true}`, so a client may run them in parallel; a third test pins that list.
 
 When `emetgate rule` refuses a check it does not know (`UnknownCheck`), it prints the names
 that exist before the error: `no_comment forbid no_literal q frozen cmd: added:` and the `message:`
