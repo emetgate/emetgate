@@ -391,7 +391,7 @@ fn exitWithRunRefusal(refused: server.RunRefusal) noreturn {
     std.process.exit(2);
 }
 
-fn exitWithBadArgs(command: []const u8, args: []const [:0]const u8, comptime parse: anytype) noreturn {
+fn exitWithBadArgs(command: []const u8, args: anytype, comptime parse: anytype) noreturn {
     if (wire.badArgument(args, parse)) |bad| {
         std.debug.print("emetgate {s}: cannot use \"{s}\": it is not an option of this command, or its value is missing or invalid\n\n", .{ command, bad });
     } else if (args.len == 0) {
