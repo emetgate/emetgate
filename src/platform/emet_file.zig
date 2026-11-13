@@ -494,6 +494,7 @@ const Slurp = struct {
     gpa: Allocator,
     raws: []?[]u8,
     stamps: []Stamp,
+    links_out: []bool,
     cancel: *const std.atomic.Value(bool),
     root_path: []const u8,
     cursor: std.atomic.Value(usize) = .init(0),
@@ -513,7 +514,10 @@ const Slurp = struct {
             const own = s.root.statFile(s.io, s.paths[i], .{ .follow_symlinks = false }) catch continue;
             const stat = if (own.kind == .file) own else stat: {
                 // A file link is read only when its target stays inside the root.
-                if (own.kind == .sym_link and !s.linkInside(s.paths[i])) continue;
+                if (own.kind == .sym_link and !s.linkInside(s.paths[i])) {
+                    s.links_out[i] = true;
+                    continue;
+                }
                 break :stat s.root.statFile(s.io, s.paths[i], .{}) catch continue;
             };
             if (stat.kind != .file) continue;
@@ -524,7 +528,7 @@ const Slurp = struct {
     }
 };
 
-pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: [][]const u8, target: Target, cancel: *const std.atomic.Value(bool)) !Index {
+pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, paths: [][]const u8, target: Target, cancel: *const std.atomic.Value(bool), links_out: ?*std.ArrayList([]const u8)) !Index {
     if (build_profile) |p| p.last = Io.Timestamp.now(p.io, .awake);
     var root = try Io.Dir.cwd().openDir(io, root_path, .{});
     defer root.close(io);
@@ -550,14 +554,20 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     @memset(raws, null);
     const stamps = try gpa.alloc(Stamp, kept);
     defer gpa.free(stamps);
+    const linked_out = try gpa.alloc(bool, kept);
+    defer gpa.free(linked_out);
+    @memset(linked_out, false);
     {
-        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .cancel = cancel, .root_path = root_path };
+        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .links_out = linked_out, .cancel = cancel, .root_path = root_path };
         var pool: worker_pool.Pool = undefined;
         pool.start(worker_pool.max_threads);
         defer _ = pool.release();
         pool.run(worker_pool.max_threads, Slurp.run, &slurp);
     }
     try check(cancel);
+    if (links_out) |out| for (paths[0..kept], linked_out) |p, out_of_root| {
+        if (out_of_root) try out.append(arena, try arena.dupe(u8, p));
+    };
 
     var binary: std.ArrayList(usize) = .empty;
     for ([_]bool{ false, true }) |second| {
@@ -814,27 +824,35 @@ pub fn ignored(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, 
     return out.items;
 }
 
-pub fn stampEach(io: Io, arena: Allocator, root_path: []const u8, paths: []const []const u8) ![]?Stamp {
+pub fn stampEach(io: Io, arena: Allocator, root_path: []const u8, paths: []const []const u8, links_out: *std.ArrayList([]const u8)) ![]?Stamp {
     const out = try arena.alloc(?Stamp, paths.len);
     @memset(out, null);
-    try statMissing(io, root_path, paths, out);
+    try statMissing(io, arena, root_path, paths, out, links_out);
     return out;
 }
 
-pub fn stampTree(io: Io, arena: Allocator, root_path: []const u8, paths: []const []const u8) ![]?Stamp {
+pub fn stampTree(io: Io, arena: Allocator, root_path: []const u8, paths: []const []const u8, links_out: *std.ArrayList([]const u8)) ![]?Stamp {
     const out = try arena.alloc(?Stamp, paths.len);
     @memset(out, null);
     if (builtin.os.tag == .windows) scanStamps(io, arena, root_path, paths, out) catch {};
-    try statMissing(io, root_path, paths, out);
+    try statMissing(io, arena, root_path, paths, out, links_out);
     return out;
 }
 
-fn statMissing(io: Io, root_path: []const u8, paths: []const []const u8, out: []?Stamp) !void {
+fn statMissing(io: Io, arena: Allocator, root_path: []const u8, paths: []const []const u8, out: []?Stamp, links_out: *std.ArrayList([]const u8)) !void {
     var root = try Io.Dir.cwd().openDir(io, root_path, .{});
     defer root.close(io);
     for (paths, out) |p, *stamp| {
         if (stamp.* != null) continue;
-        const stat = root.statFile(io, p, .{}) catch continue;
+        const own = root.statFile(io, p, .{ .follow_symlinks = false }) catch continue;
+        if (own.kind == .sym_link) {
+            const abs = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_path, p });
+            if (!(confine.within(arena, root_path, abs) catch false)) {
+                try links_out.append(arena, p);
+                continue;
+            }
+        }
+        const stat = if (own.kind == .file) own else root.statFile(io, p, .{}) catch continue;
         if (stat.kind == .file) stamp.* = .of(stat);
     }
 }

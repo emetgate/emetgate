@@ -154,3 +154,57 @@ test "confine: the working listing leaves out a junction to outside the reposito
     try testing.expectEqual(@as(usize, 1), outside.items.len);
     try testing.expectEqualStrings("junc_out/", outside.items[0]);
 }
+
+test "confine: list names the folder under dir that leads outside the repository in skipped_outside" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    var args: std.json.ObjectMap = .empty;
+    defer args.deinit(gpa);
+    try args.put(gpa, "dir", .{ .string = f.root_abs });
+    var event: telemetry.Event = .{ .tool = "emetgate_list" };
+    const result = try emetgate.read_tools.callList(gpa, testing.io, .{ .object = args }, &event, f.root_abs);
+    defer gpa.free(result.text);
+    errdefer std.debug.print("list: {s}\n", .{result.text});
+    try testing.expect(!result.is_error);
+    const parsed = try std.json.parseFromSlice(std.json.Value, gpa, result.text, .{});
+    defer parsed.deinit();
+    const skipped = parsed.value.object.get("skipped_outside") orelse return error.NoSkippedOutside;
+    try testing.expectEqual(@as(usize, 1), skipped.array.items.len);
+    try testing.expect(std.mem.endsWith(u8, skipped.array.items[0].string, "junc_out/"));
+    try testing.expect(std.mem.indexOf(u8, result.text, "secret.txt") == null);
+}
+
+test "confine: find does not index a file link to outside the repository and names it" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const target = try std.fmt.allocPrint(gpa, "{s}\\secret.txt", .{f.outside_abs});
+    defer gpa.free(target);
+    f.tmp.dir.symLink(testing.io, target, "repo/link_secret.txt", .{}) catch return error.SkipZigTest;
+    const session = try find_tools.Session.create(gpa, testing.io, f.root_abs);
+    defer session.destroy();
+    try session.prepare(.build);
+
+    const hidden = try find(session, "OUTSIDE SECRET");
+    defer gpa.free(hidden);
+    errdefer std.debug.print("find: {s}\n", .{hidden});
+    try testing.expect(std.mem.startsWith(u8, hidden, "0 hits"));
+    try testing.expect(std.mem.indexOf(u8, hidden, "link_secret.txt") != null);
+}
+
+test "confine: a stamp is not taken through a file link to outside the repository, and the link is reported" {
+    var f = try Fixture.init();
+    defer f.deinit();
+    const target = try std.fmt.allocPrint(gpa, "{s}\\secret.txt", .{f.outside_abs});
+    defer gpa.free(target);
+    f.tmp.dir.symLink(testing.io, target, "repo/link_secret.txt", .{}) catch return error.SkipZigTest;
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var links_out: std.ArrayList([]const u8) = .empty;
+    const paths = [_][]const u8{ "src/app.js", "link_secret.txt" };
+    const stamps = try emetgate.emet_file.stampEach(testing.io, arena, f.root_abs, &paths, &links_out);
+    try testing.expect(stamps[0] != null);
+    try testing.expect(stamps[1] == null);
+    try testing.expectEqual(@as(usize, 1), links_out.items.len);
+    try testing.expectEqualStrings("link_secret.txt", links_out.items[0]);
+}

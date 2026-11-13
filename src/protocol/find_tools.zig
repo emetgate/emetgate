@@ -497,7 +497,7 @@ pub const Session = struct {
             errdefer self.gpa.free(path);
             var links_out: std.ArrayList([]const u8) = .empty;
             const paths = try emet_file.list(self.io, self.gpa, arena, self.root, &links_out);
-            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel), .path = path };
+            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel, &links_out), .path = path };
             for (links_out.items) |p| putOwned(self.gpa, &b.links_out, p) catch {};
         }
         return b;
@@ -567,7 +567,7 @@ pub const Session = struct {
         var stamps: std.ArrayList(emet_file.Stamp) = .empty;
         var bytes: u64 = 0;
         const keys = candidates.keys();
-        const found = if (job.dirt.all) try emet_file.stampTree(io, arena, self.root, keys) else try emet_file.stampEach(io, arena, self.root, keys);
+        const found = if (job.dirt.all) try emet_file.stampTree(io, arena, self.root, keys, &links_out) else try emet_file.stampEach(io, arena, self.root, keys, &links_out);
         for (keys, found) |p, stamp| {
             if (base.lookup(p)) |f| {
                 const gone = stamp == null or ((job.dirt.all or within(relisted.items, p)) and !listed.contains(p));
@@ -599,7 +599,7 @@ pub const Session = struct {
                 return patch;
             }
         }
-        if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel);
+        if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel, null);
         return patch;
     }
 

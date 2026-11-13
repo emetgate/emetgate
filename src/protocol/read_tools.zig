@@ -737,9 +737,22 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, of
     const offset: usize = @intCast(offset_arg);
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
-    const files = try shadow.workingFiles(gpa, io, place.root);
+    var outside: std.ArrayList([]u8) = .empty;
+    defer {
+        for (outside.items) |p| gpa.free(p);
+        outside.deinit(gpa);
+    }
+    const files = try shadow.workingListing(gpa, io, place.root, &outside);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
+    var skipped: std.ArrayList([]const u8) = .empty;
+    defer skipped.deinit(gpa);
+    var skipped_cost: usize = 0;
+    for (outside.items) |p| {
+        if (!inDirectory(std.mem.trimEnd(u8, p, "/"), place.rel)) continue;
+        try skipped.append(gpa, p);
+        skipped_cost += pathCost(p);
+    }
 
     var matched: std.ArrayList([]const u8) = .empty;
     defer matched.deinit(gpa);
@@ -749,7 +762,7 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, of
         try matched.append(gpa, f);
         flat_cost += pathCost(f);
     }
-    const room = reply_contract.room(.list) -| (2 * dir.len);
+    const room = reply_contract.room(.list) -| (2 * dir.len) -| skipped_cost;
 
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
@@ -763,6 +776,12 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, of
     }
     try js.objectField("total");
     try js.write(matched.items.len);
+    if (skipped.items.len != 0) {
+        try js.objectField("skipped_outside");
+        try js.beginArray();
+        for (skipped.items) |p| try writeShownPath(gpa, &js, p);
+        try js.endArray();
+    }
     if (offset == 0 and flat_cost <= room) {
         try js.objectField("files");
         try js.beginArray();
