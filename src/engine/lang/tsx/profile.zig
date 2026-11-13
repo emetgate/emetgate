@@ -21,6 +21,7 @@ const field_shape: ecma.FieldShape = .{ .node = "public_field_definition", .name
 
 pub const profile: Profile = .{
     .name = "tsx",
+    .grammar_verifies = true,
     .extensions = &.{".tsx"},
     .grammar = grammar,
     .functions = &ecma.function_nodes,

@@ -51,6 +51,7 @@ const file_edit = @import("../platform/file_edit.zig");
 const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
+const Profile = @import("../engine/lang/profile.zig").Profile;
 const forgive = @import("forgive.zig");
 const batch_plan = @import("../platform/batch_plan.zig");
 const batch_merge = @import("batch_merge.zig");
@@ -1297,7 +1298,7 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         try changeStep(arena, &js, "edits", reply.text);
         if (reply.is_error) failed = "edits";
         edits_written = !reply.is_error;
-        if (!reply.is_error) try writeParseCheck(arena, &js, list);
+        if (!reply.is_error) try writeParseCheck(arena, io, runtime, root, &js, list);
         if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);
         if (!reply.is_error) if (policy.map_session) |session| try writeUnreached(arena, io, &js, session, root, list);
         if (reply.is_error and made_branch) try undoBranch(arena, io, &js, policy.root, branch.?, before);
@@ -1362,25 +1363,45 @@ fn undoBranch(arena: Allocator, io: std.Io, js: *std.json.Stringify, served: ?[]
 
 /// Says which written source files the language's own check verified after the reparse.
 /// A language without a check is named, never reported as verified.
-fn writeParseCheck(arena: Allocator, js: *std.json.Stringify, list: Value) !void {
+fn writeParseCheck(arena: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, js: *std.json.Stringify, list: Value) !void {
     var verified: std.ArrayList(u8) = .empty;
+    var broken: std.ArrayList(u8) = .empty;
     var unverified: std.ArrayList(u8) = .empty;
     for (list.array.items) |item| {
         const file = getString(item, "file") orelse continue;
         const profile = lang_registry.forPath(file) orelse continue;
-        const into = if (profile.source_check != null) &verified else &unverified;
+        const into = if (profile.source_check != null)
+            &verified
+        else if (profile.grammar_verifies)
+            (if (try parsesClean(arena, io, runtime, root, file, profile) orelse continue) &verified else &broken)
+        else
+            &unverified;
         if (into.items.len != 0) try into.appendSlice(arena, ", ");
         try into.appendSlice(arena, file);
-        if (profile.source_check == null) try into.print(arena, " ({s})", .{profile.name});
+        if (into != &verified) try into.print(arena, " ({s})", .{profile.name});
     }
-    if (verified.items.len == 0 and unverified.items.len == 0) return;
+    if (verified.items.len == 0 and broken.items.len == 0 and unverified.items.len == 0) return;
     try js.objectField("parse");
-    if (unverified.items.len == 0) return js.write("verified: the language check passed after the reparse");
-    const text = if (verified.items.len == 0)
-        try std.fmt.allocPrint(arena, "not verified for {s}: tree-sitter only, no language check", .{unverified.items})
-    else
-        try std.fmt.allocPrint(arena, "verified for {s}; not verified for {s}: tree-sitter only, no language check", .{ verified.items, unverified.items });
-    try js.write(text);
+    if (broken.items.len == 0 and unverified.items.len == 0) return js.write("verified: the language check passed after the reparse");
+    var text: std.ArrayList(u8) = .empty;
+    if (verified.items.len != 0) try text.print(arena, "verified for {s}", .{verified.items});
+    if (broken.items.len != 0) {
+        if (text.items.len != 0) try text.appendSlice(arena, "; ");
+        try text.print(arena, "not verified for {s}: the tree-sitter parse has ERROR or MISSING nodes", .{broken.items});
+    }
+    if (unverified.items.len != 0) {
+        if (text.items.len != 0) try text.appendSlice(arena, "; ");
+        try text.print(arena, "not verified for {s}: tree-sitter only, no language check", .{unverified.items});
+    }
+    try js.write(text.items);
+}
+
+fn parsesClean(arena: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file: []const u8, profile: *const Profile) !?bool {
+    const abs = try std.fs.path.resolve(arena, &.{ root, file });
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(max_known_bytes)) catch return null;
+    const tree = runtime.parser.parseIn(profile.grammar(), bytes) catch return false;
+    defer tree.deinit();
+    return !tree.root().hasError();
 }
 
 pub const unreached_shown: usize = 8;

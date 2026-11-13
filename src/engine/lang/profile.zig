@@ -503,6 +503,7 @@ pub const Profile = struct {
     /// write after the reparse. null: the reply says the parse was not verified, since
     /// tree-sitter alone recovers from some errors the compiler refuses.
     source_check: ?source_check.Check = null,
+    grammar_verifies: bool = false,
 
     pub fn hasVisibilityKeyword(self: *const Profile, tree: ts.Tree, node: ts.Node) bool {
         if (self.visibility_keywords.len == 0) return false;

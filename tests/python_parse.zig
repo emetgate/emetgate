@@ -82,21 +82,6 @@ test "python parse: a file that already failed the check can still be edited els
     try testing.expect(!reply.is_error);
 }
 
-test "python parse: a language with no check of its own is reported as not verified, never as verified" {
-    var repo = try Repo.init(&.{});
-    defer repo.deinit();
-    const file = try repo.path("src\\app.js");
-    defer gpa.free(file);
-    var reply = try repo.call(.{ .edits = .{
-        .{ .file = file, .old_string = "return a + b;", .new_string = "return b + a;" },
-    } }, green);
-    defer reply.deinit();
-    errdefer std.debug.print("reply: {s}\n", .{reply.text});
-    try testing.expect(!reply.is_error);
-    try testing.expect(reply.has("\"parse\":\"not verified for"));
-    try testing.expect(reply.has("(javascript)"));
-}
-
 test "python parse: the indentation check follows CPython on blocks, continuations, strings and tabs" {
     try testing.expect(python_indent.check("def f(a,\n  b):\n    return [a,\n b]\n") == null);
     try testing.expect(python_indent.check("s = '''\n  x\n'''\ny = 1\n") == null);

@@ -85,6 +85,7 @@ const literal_values: LiteralValues = .{
 
 pub const profile: Profile = .{
     .name = "csharp",
+    .grammar_verifies = true,
     .extensions = &.{".cs"},
     .grammar = grammar,
     .functions = &function_nodes,

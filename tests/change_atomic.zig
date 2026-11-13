@@ -233,3 +233,70 @@ test "change atomic: legacy emetgate_write refuses to overwrite an existing file
     try testing.expect(!created.is_error);
     try repo.expectFile("new.txt", "fresh\n");
 }
+
+test "change atomic: an edit that leaves a TypeScript, JavaScript, Zig or C# file with an error-free tree-sitter parse is reported verified" {
+    var repo = try Repo.init(&.{
+        .{ "src/w.ts", "export const n: number = 1;\n" },
+        .{ "src/w.zig", "pub fn one() u8 {\n    return 1;\n}\n" },
+        .{ "src/W.cs", "class C {\n    int One() { return 1; }\n}\n" },
+    });
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const ts_file = try repo.path("src\\w.ts");
+    defer gpa.free(ts_file);
+    const zig_file = try repo.path("src\\w.zig");
+    defer gpa.free(zig_file);
+    const cs_file = try repo.path("src\\W.cs");
+    defer gpa.free(cs_file);
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+        .{ .file = ts_file, .old_string = "= 1;", .new_string = "= 2;" },
+        .{ .file = zig_file, .old_string = "return 1;", .new_string = "return 2;" },
+        .{ .file = cs_file, .old_string = "return 1;", .new_string = "return 2;" },
+    } }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(reply.has("\"parse\":\"verified: the language check passed after the reparse\""));
+    try testing.expect(!reply.has("not verified"));
+}
+
+test "change atomic: an edit that leaves a TypeScript, JavaScript, Zig or C# file with a syntax error is not reported verified" {
+    var repo = try Repo.init(&.{
+        .{ "src/b.ts", "export function f() {\n  return 1;\n" },
+        .{ "src/b.js", "export function g() {\n  return 1;\n" },
+        .{ "src/b.zig", "pub fn one() u8 {\n    return 1;\n" },
+        .{ "src/B.cs", "class C {\n    int One() { return 1; }\n" },
+    });
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const ts_file = try repo.path("src\\b.ts");
+    defer gpa.free(ts_file);
+    const js_file = try repo.path("src\\b.js");
+    defer gpa.free(js_file);
+    const zig_file = try repo.path("src\\b.zig");
+    defer gpa.free(zig_file);
+    const cs_file = try repo.path("src\\B.cs");
+    defer gpa.free(cs_file);
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+        .{ .file = ts_file, .old_string = "return 1;", .new_string = "return 2;" },
+        .{ .file = js_file, .old_string = "return 1;", .new_string = "return 2;" },
+        .{ .file = zig_file, .old_string = "return 1;", .new_string = "return 2;" },
+        .{ .file = cs_file, .old_string = "return 1;", .new_string = "return 2;" },
+    } }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try testing.expect(!reply.has("\"parse\":\"verified:"));
+    try testing.expect(reply.has("\"parse\":\"verified for "));
+    try testing.expect(reply.has("app.js; not verified for "));
+    try testing.expect(reply.has("ERROR or MISSING nodes"));
+    for ([_][]const u8{ "b.ts (typescript)", "b.js (javascript)", "b.zig (zig)", "B.cs (csharp)" }) |label| {
+        try testing.expect(reply.has(label));
+    }
+}
