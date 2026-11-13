@@ -236,6 +236,7 @@ test {
     _ = @import("tests/find_fresh.zig");
     _ = @import("tests/confine.zig");
     _ = @import("tests/search_answers.zig");
+    _ = @import("tests/claims.zig");
     _ = @import("tests/search_text.zig");
     _ = @import("tests/git_index.zig");
     _ = @import("tests/git_native.zig");

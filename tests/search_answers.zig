@@ -674,7 +674,7 @@ test "search answers: a tracked path that is now a directory makes the answer pa
     try testing.expectEqualStrings("unreadable", missing[0].object.get("reason").?.string);
 }
 
-test "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large" {
+test "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk" {
     const limit = search_index.max_indexed_file_bytes;
     const at_cap = try gpa.alloc(u8, limit);
     defer gpa.free(at_cap);
@@ -695,13 +695,12 @@ test "search answers: a tracked file of exactly the size limit is searched and o
     var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root, .certificate = true });
     defer answer.deinit();
     try testing.expectEqualStrings("complete", answer.status());
-    try testing.expectEqual(@as(usize, 1), answer.groups().len);
+    try testing.expectEqual(@as(usize, 2), answer.groups().len);
     try testing.expectEqualStrings("at_cap.txt", answer.groups()[0].object.get("file").?.string);
-    try testing.expect(std.mem.endsWith(u8, answer.line(), "; excluded 1 > 16 MiB"));
+    try testing.expectEqualStrings("over_cap.txt", answer.groups()[1].object.get("file").?.string);
+    try testing.expect(std.mem.indexOf(u8, answer.line(), "excluded") == null);
     const listed = answer.get("certificate").?.object.get("scope").?.object.get("excluded_paths").?.array.items;
-    try testing.expectEqual(@as(usize, 1), listed.len);
-    try testing.expectEqualStrings("over_cap.txt", listed[0].object.get("path").?.string);
-    try testing.expectEqualStrings("too_large", listed[0].object.get("rule").?.string);
+    try testing.expectEqual(@as(usize, 0), listed.len);
 }
 
 test "search answers: a tracked binary file is excluded as binary and listed in the certificate" {

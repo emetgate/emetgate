@@ -629,8 +629,8 @@ The dependency direction is strict: `protocol → platform → engine`. The engi
 
 | Tool | Purpose |
 |---|---|
-| `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used. Test code is left out in every language: a TS, JS, Python or C# file is test code by its folder and file name, a Python file also when it imports `pytest`, `nose` or `hypothesis`, declares a `TestCase` subclass or calls `unittest.main`, and a C# file also when it carries xUnit, NUnit or MSTest attributes or imports. So a test named in the question is reported as not a symbol. The reply ends with a closure: how many functions it shows whole and how many by address, then the definitions of this repository that the shown code calls, constructs or names as a constant, with at most two definitions per name and test code left out, each as one line of qualified name, path, line and signature, up to 2,500 characters with the rest counted, and a last line telling the model to answer from the reply |
-| `emetgate_evidence` | The full code of up to 6 names. A name defined in several files returns every definition; `file.name` picks the definition in that file; an accessor is found by its bare name. A name that is not a symbol is reported with the closest symbols, and names past the limit are listed. The reply ends with the same closure over the code it returns |
+| `emetgate_explore` | For a question and optional names: every definition of each named symbol whole, then the functions and top-level constants ranked by BM25 over names, paths and bodies. A ranked definition is sent whole while its size costs less than the model call it may save; the others are listed by address. A named class is listed and shown through its matching members. Every line carries its number. No call graph is used. Test code is left out in every language: a TS, JS, Python or C# file is test code by its folder and file name, a Python file also when it imports `pytest`, `nose` or `hypothesis`, declares a `TestCase` subclass or calls `unittest.main`, and a C# file also when it carries xUnit, NUnit or MSTest attributes or imports. So a test named in the question is reported as not a symbol. The reply ends with a closure: how many functions it shows whole and how many by address, then the definitions of this repository that the shown code calls, constructs or names as a constant, with at most two definitions per name and test code left out, each as one line of qualified name, path, line and signature, up to 2,500 characters with the rest counted, and a last line telling the model to answer from the reply. That line says `This is everything the index matched` only when every matching function (named, named in the question, or ranked, including ranked matches past the 1,024 considered) is shown whole or by address; otherwise the closure first says `The index matched N functions: W shown whole above, A by address, R not shown.` and the last line says not everything is above and how to get more (a narrower question, the names in `names`, or search) |
+| `emetgate_evidence` | The full code of up to 6 names. A name defined in several files returns every definition; `file.name` picks the definition in that file; an accessor is found by its bare name. A name that is not a symbol is reported with the closest symbols, and names past the limit are listed. The reply ends with the same closure over the code it returns; its last line makes no completeness claim |
 | `emetgate_symbols` | Symbols in a file, with references, positions and content hashes |
 | `emetgate_skeleton` | Signatures and structure without bodies, a C# `=>` body shortened like a block, plus every adopted rule that covers the file (read-only) |
 | `emetgate_read_symbol` | The source of one symbol, declaration or statement, several at once, or a line range widened to the symbols it overlaps; a body over the read budget comes back folded (see Reader); with `nodes:true`, each declaration (or exactly the requested lines) with a node hash on every line that starts a node |
@@ -1192,9 +1192,14 @@ The text output is one header line (`branch <verdict>: N commit(s)`), then one l
 JIT-compiled) in the git-tracked text files under `dir`, which may name a directory or one
 file. A file up to 16 MiB is indexed and searched; a file over 1 MiB is searched line by
 line without a parse, so its lines carry no definition mark and, under a `kinds` filter, a
-source file of that size is named `unclassified`. A binary file, a file over 16 MiB and the
-internal paths are left out. A hit's column and text are where the match starts and the
-text it matched.
+source file of that size is named `unclassified`. A tracked file over 16 MiB is not indexed
+but is read from disk in 4 MiB chunks cut at line ends and searched the same way, so a match
+in a 70 MB log is found; only a file over 1 GiB, one with a single line over 64 MiB, or one
+that cannot be read is skipped, and a skipped file makes the answer partial and is named in
+it (`partial: skipped huge.bin (1288.5 MB, over the 1024 MiB limit or a line over 64 MiB)`), so
+`✓ no match` is never shown when a file was not searched. A binary file and the internal
+paths are left out. A hit's column and text are where the match starts and the text it
+matched.
 
 **The reply.** Inside `emetgate mcp` the reply is plain text (`src/protocol/search_text.zig`),
 shaped to cost fewer characters than ripgrep's own output for the same pattern:
@@ -1274,7 +1279,7 @@ but obeys `format:"json"` (an unknown format is `UnknownFormat`), and a call the
 `certificate:true` or `stats:true` gets the structured reply as well. It starts
 with `answer`, one line built by `src/engine/answer.zig` (`✓ 18 matches in 157 files @3fa2`
 or `partial: 31 matches in 120 of 157 files @3fa2; missing 37 match_limit`, with `;
-excluded 412 binary, 2 > 16 MiB` when a declared rule left files out), then `status`,
+excluded 412 binary` when a declared rule left files out), then `status`,
 `groups` (by enclosing symbol with its ref and content hash, by JSON pointer in a `.json`
 file, by heading in a `.md` file; each hit with `line`, `kind`, `role` and `text`),
 `truncated`, `total` (the exact number of matches, with `total_exact:false` when a `kinds`
@@ -1631,7 +1636,14 @@ reports not exported. A Python definition is `exported` when it is listed in `__
 no `__all__` when its name has no leading `_`; a function imported by another module is not
 bounded unless it is private by that rule.
 
-The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v9`: versioned, with a
+A code file that looks minified or generated is left unindexed with the note `minified`:
+its name ends in `.min.js`, `.min.mjs` or `.min.cjs`, or it is at least 4 KiB and has a line
+over 32 KiB or lines averaging over 400 bytes. Its identifiers are kept, so when a word of an
+explore question or an evidence name is one of them the reply opens with `Not indexed,
+minified or generated (long lines), so no function of them is above:` and the paths. (One
+300 KB `min.js` with 15,000 functions on one line held the first explore for minutes.)
+
+The store lives in `%LOCALAPPDATA%\emetgate\facts\<repo hash>\facts.v10`: versioned, with a
 BLAKE3 checksum, written to a temporary file and moved into place. A refresh lists the
 tracked files, compares directory stamps, re-reads only changed files (a file stamped within
 2 s of the store's write time is always re-hashed), extracts a file again only when its

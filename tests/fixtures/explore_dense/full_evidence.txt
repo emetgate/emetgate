@@ -18,4 +18,4 @@ src/billing/tax.ts
 ✓ 2 targets in 2 files @83ab
 -- closure
 Whole above: 2 functions. By address above: 0.
-This is everything the index matched. Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.
+Answer from it now; for a named item that is not above, write that it is not in the evidence.

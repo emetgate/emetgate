@@ -33,6 +33,34 @@ pub const racy_window_ns: i96 = 2 * std.time.ns_per_s;
 
 pub const unindexed_code = [_][]const u8{ ".vue", ".svelte", ".astro", ".mts", ".cts" };
 
+/// The note of a code file left unindexed because it looks minified or generated: its
+/// thousands of definitions on a few huge lines make every explore that touches it slow
+/// (one 300 KB min.js with 15,000 functions on one line held explore for minutes).
+pub const minified_note = "minified";
+/// A code file is treated as minified when its name says so, or when it is at least
+/// minified_min_bytes and has a line over minified_line_bytes or lines averaging over
+/// minified_average_line bytes.
+pub const minified_min_bytes: usize = 4 * 1024;
+pub const minified_line_bytes: usize = 32 * 1024;
+pub const minified_average_line: usize = 400;
+const minified_names = [_][]const u8{ ".min.js", ".min.mjs", ".min.cjs" };
+
+pub fn looksMinified(path: []const u8, bytes: []const u8) bool {
+    for (minified_names) |ext| {
+        if (std.ascii.endsWithIgnoreCase(path, ext)) return true;
+    }
+    if (bytes.len < minified_min_bytes) return false;
+    var lines: usize = 1;
+    var start: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, bytes, start, '\n')) |nl| {
+        if (nl - start > minified_line_bytes) return true;
+        lines += 1;
+        start = nl + 1;
+    }
+    if (bytes.len - start > minified_line_bytes) return true;
+    return bytes.len / lines > minified_average_line;
+}
+
 pub const Stamp = struct {
     mtime_ns: i96 = 0,
     size: u64 = 0,
@@ -135,7 +163,7 @@ const Outcome = union(enum) {
     pending,
     same,
     indexed: struct { profile: *const Profile, arena: *std.heap.ArenaAllocator, found: facts.FileFacts, hash: facts.Hash, tokens: []const []const u8 },
-    unindexed: struct { arena: *std.heap.ArenaAllocator, tokens: []const []const u8, hash: facts.Hash },
+    unindexed: struct { arena: *std.heap.ArenaAllocator, tokens: []const []const u8, hash: facts.Hash, note: []const u8 = "" },
     failed: struct { status: facts_store.Status, note: []const u8 },
 };
 
@@ -226,6 +254,10 @@ const Job = struct {
         }
         const profile = registry.forPath(rel) orelse return self.unindexed(i, arena, bytes, hash);
         if (!facts_extract.supports(profile)) return self.unindexed(i, arena, bytes, hash);
+        if (looksMinified(rel, bytes)) {
+            self.outcomes[i] = .{ .unindexed = .{ .arena = arena, .tokens = try tokensOf(arena.allocator(), bytes), .hash = hash, .note = minified_note } };
+            return;
+        }
         if (parser.* == null) parser.* = ts.Parser.create();
         const tree = try parser.*.?.parseIn(profile.grammar(), bytes);
         defer tree.deinit();
@@ -596,7 +628,7 @@ pub const Repo = struct {
                     report.extracted += 1;
                 },
                 .unindexed => |x| {
-                    if (try self.store.markUnindexed(id, .unindexed, "", x.tokens)) try reshaped.append(arena, id);
+                    if (try self.store.markUnindexed(id, .unindexed, x.note, x.tokens)) try reshaped.append(arena, id);
                     self.store.files.items[id].content_hash = x.hash;
                     report.extracted += 1;
                 },

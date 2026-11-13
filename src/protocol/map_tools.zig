@@ -29,7 +29,31 @@ pub const closure_max_defs: usize = 2;
 pub const closure_signature: usize = 140;
 /// Room kept in a dense reply for the closure's fixed lines around its rows.
 pub const closure_reserve: usize = 360;
-pub const closure_footer = "This is everything the index matched. Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.";
+pub const closure_footer = "This is everything the index matched. " ++ closure_answer;
+/// The closure's last line when the reply did not show every matching function: the
+/// counts line above it says how many matched and how many were shown.
+pub const closure_partial_footer = "Not everything the index matched is above. For more, ask a narrower question, or put the names you need in names (a named definition is sent whole); search lists every textual use. " ++ closure_answer;
+/// Evidence returns named definitions, not a ranked match set, so it claims no completeness.
+pub const evidence_footer = "Answer from it now; for a named item that is not above, write that it is not in the evidence.";
+/// Opens the line that names code files left out of the fact store because their lines are
+/// minified or generated: explore and evidence know no function of them.
+pub const minified_note = "Not indexed, minified or generated (long lines), so no function of them is above:";
+pub const closure_answer = "Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.";
+
+/// What an explore reply covered of the functions the index matched.
+pub const Coverage = struct {
+    /// Distinct matching definitions: named, named in the question, and ranked, including
+    /// the ranked ones past max_ranked that were never considered.
+    matched: usize,
+    /// Of those, shown whole above (or inside a block shown whole, or already shown).
+    whole: usize,
+    /// Of those, listed by path and line.
+    addressed: usize,
+
+    pub fn complete(self: Coverage) bool {
+        return self.whole + self.addressed >= self.matched;
+    }
+};
 pub const pointer_budget: usize = 6_000;
 pub const evidence_budget: usize = 16_000;
 pub const header_chars: usize = 16;
@@ -388,6 +412,30 @@ pub const Session = struct {
         return out.items;
     }
 
+    /// Names the code files left out of the fact store as minified whose identifiers include
+    /// a word of `text`: their functions cannot be in the reply, so the reply says so
+    /// instead of implying the repository has no such code.
+    fn minifiedNote(self: *Session, arena: Allocator, w: *Writer, text: []const u8) !void {
+        var words: std.StringHashMapUnmanaged(void) = .empty;
+        var it = std.mem.tokenizeAny(u8, text, " \t\r\n.,;:!?()[]{}'\"`/\\");
+        while (it.next()) |word| {
+            if (word.len >= 3) try words.put(arena, word, {});
+        }
+        if (words.count() == 0) return;
+        var listed: usize = 0;
+        for (self.repo.?.store.files.items) |*state| {
+            if (state.status != .unindexed or !std.mem.eql(u8, state.note, fact_store.minified_note)) continue;
+            const hit = for (state.tokens) |t| {
+                if (words.contains(t)) break true;
+            } else false;
+            if (!hit) continue;
+            if (listed == 0) try w.writeAll(minified_note);
+            try w.print("{s} {s}{s}", .{ if (listed == 0) "" else ",", display_path.prefix, state.path });
+            listed += 1;
+        }
+        if (listed != 0) try w.writeByte('\n');
+    }
+
     fn unknown(self: *Session, arena: Allocator, w: *Writer, name: []const u8) !void {
         try w.print("No symbol named {s}.", .{name});
         const near = try self.symbolScores(arena, name);
@@ -482,6 +530,9 @@ pub const Session = struct {
         if (names.len == 0) return plain(gpa, "no names were given", false);
         const wanted = names[0..@min(names.len, max_evidence_names)];
         var out: Writer.Allocating = .init(arena);
+        var asked: Writer.Allocating = .init(arena);
+        for (wanted) |n| try asked.writer.print("{s} ", .{n});
+        try self.minifiedNote(arena, &out.writer, asked.written());
         try out.writer.writeAll(try self.evidenceText(arena, wanted, self.evidenceBudget()));
         if (names.len > wanted.len) {
             try out.writer.print("Not read, the limit is {d} names per call: ", .{max_evidence_names});
@@ -499,7 +550,7 @@ pub const Session = struct {
             }
         }
         const none: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        try self.closure(arena, &out.writer, &texts, shown.items, &none);
+        try self.closure(arena, &out.writer, &texts, shown.items, &none, null);
         return plain(gpa, out.written(), false);
     }
 
@@ -510,6 +561,7 @@ pub const Session = struct {
         const store = &self.repo.?.store;
 
         var notes: Writer.Allocating = .init(arena);
+        try self.minifiedNote(arena, &notes.writer, joined.written());
         var containers: Writer.Allocating = .init(arena);
         var picks: std.ArrayList(Picked) = .empty;
         var at: std.AutoHashMapUnmanaged(u64, void) = .empty;
@@ -537,7 +589,8 @@ pub const Session = struct {
             }
         }
         try self.freshTerms();
-        const hits = try self.terms.?.rank(arena, joined.written(), max_ranked);
+        const ranked = try self.terms.?.rankCounted(arena, joined.written(), max_ranked);
+        const hits = ranked.hits;
         const top: f64 = @max(try self.terms.?.ceiling(arena, joined.written()), 1e-9);
         for (hits) |hit| {
             const f = self.term_docs.items[hit.doc];
@@ -573,6 +626,7 @@ pub const Session = struct {
         const limit = if (compact) budget -| (pointer_room + self.closureBudget() + closure_reserve + dense_note.len) else budget -| pointer_room;
         var used: usize = out.written().len;
         var densified = false;
+        var picks_whole: usize = 0;
         for (picks.items) |pk| {
             const state = store.file(pk.f.file);
             if (state.status != .indexed or pk.f.def >= state.facts.defs.len) continue;
@@ -580,7 +634,10 @@ pub const Session = struct {
             const ft = (try self.fileText(arena, &texts, pk.f.path)) orelse continue;
             const first = @max(d.line, 1);
             const last = @max(ft.lineOf(d.span.end), first);
-            if (inside(shown.items, pk.f.file, first, last)) continue;
+            if (inside(shown.items, pk.f.file, first, last)) {
+                picks_whole += 1;
+                continue;
+            }
             const base = indentOf(ft.line(first));
             // A definition the model named is sent verbatim: it is the code it is likely to edit.
             const block: ?[]const u8 = if (compact and !pk.whole and used < limit) try denseBlock(arena, ft, state.facts.defs, pk.f.path, first, last) else null;
@@ -591,10 +648,12 @@ pub const Session = struct {
                 const line = try std.fmt.allocPrint(arena, "{s}{s}:{d} {s} {s}\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname, already_shown });
                 try out.writer.writeAll(line);
                 used += line.len;
+                picks_whole += 1;
                 try shown.append(arena, .{ .file = pk.f.file, .first = first, .last = last });
                 continue;
             }
             if (worth and used + size <= limit) {
+                picks_whole += 1;
                 if (block) |b| {
                     try out.writer.print("{s}{s}:{d} {s}{s}\n{s}", .{ display_path.prefix, pk.f.path, first, pk.f.qname, dense_marker, b });
                     densified = true;
@@ -684,12 +743,14 @@ pub const Session = struct {
             try out.writer.writeAll("Matching functions not shown:\n");
             try out.writer.writeAll(pointers.written());
         }
-        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);
+        const coverage: Coverage = .{ .matched = picks.items.len + (ranked.matched -| hits.len), .whole = picks_whole, .addressed = addressed.count() };
+        try self.closure(arena, &out.writer, &texts, shown.items, &addressed, coverage);
         if (densified) return std.mem.concat(arena, u8, &.{ dense_note, out.written() });
         return out.written();
     }
 
-    fn closure(self: *Session, arena: Allocator, w: *Writer, texts: *std.StringHashMapUnmanaged(FileText), shown: []const Shown, addressed: *const std.AutoHashMapUnmanaged(u64, void)) !void {
+    /// `coverage` is null for evidence, which returns named definitions rather than a match set.
+    fn closure(self: *Session, arena: Allocator, w: *Writer, texts: *std.StringHashMapUnmanaged(FileText), shown: []const Shown, addressed: *const std.AutoHashMapUnmanaged(u64, void), coverage: ?Coverage) !void {
         if (shown.len == 0) return;
         const store = &self.repo.?.store;
         var names: std.StringArrayHashMapUnmanaged(void) = .empty;
@@ -730,7 +791,10 @@ pub const Session = struct {
             try w.writeAll(rows.written());
         }
         if (more != 0) try w.print("  +{d} more named definitions, not listed\n", .{more});
-        try w.print("{s}\n", .{closure_footer});
+        const c = coverage orelse return w.print("{s}\n", .{evidence_footer});
+        if (c.complete()) return w.print("{s}\n", .{closure_footer});
+        try w.print("The index matched {d} functions: {d} shown whole above, {d} by address, {d} not shown.\n", .{ c.matched, c.whole, c.addressed, c.matched - c.whole - c.addressed });
+        try w.print("{s}\n", .{closure_partial_footer});
     }
 
     pub fn graph(self: *Session, arena: Allocator, w: *Writer, f: Fn) !void {
