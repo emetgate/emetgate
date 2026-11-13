@@ -62,7 +62,11 @@ fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *tele
         buffer.clearRetainingCapacity();
         switch (err) {
             error.WrittenButNotIndexed => try wire.writeNotIndexed(&buffer.writer, request.file),
-            error.OldStringNotFound => try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), "old_string matches 0 times; " ++ fuzzy_match.also_tried ++ "; copy it exactly from the file"),
+            error.OldStringNotFound => {
+                const message = try std.mem.concat(gpa, u8, &.{ "old_string matches 0 times; ", fuzzy_match.notFoundReason(), if (fuzzy_match.refusal() == null) "; copy it exactly from the file" else "" });
+                defer gpa.free(message);
+                try wire.writeErrorMessage(&buffer.writer, @errorName(err), wire.exitCode(err), message);
+            },
             error.OldStringNotUnique => {
                 var text: [96]u8 = undefined;
                 const message = std.fmt.bufPrint(&text, "old_string matches {d} times; add context or set replace_all", .{matches}) catch unreachable;

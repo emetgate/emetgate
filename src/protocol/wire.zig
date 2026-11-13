@@ -13,6 +13,7 @@ const scan = @import("../platform/scan.zig");
 const runner = @import("../platform/runner.zig");
 const baseline = @import("../platform/baseline.zig");
 const shadow = @import("../platform/shadow.zig");
+const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const gate_tree = @import("../platform/gate_tree.zig");
 const read_budget = @import("read_budget.zig");
 const doc_fold = @import("../engine/doc_fold.zig");
@@ -1643,6 +1644,12 @@ fn takeFix(name: []const u8) ?Fix {
     }
     if (std.mem.eql(u8, name, "SyntaxCheckFailed")) {
         if (source_check.takeFix(&fix_buffer)) |text| return .{ .text = text, .dynamic = true };
+    }
+    if (std.mem.eql(u8, name, "OldStringNotFound")) {
+        if (fuzzy_match.takeRefusal()) |why| {
+            const text = std.fmt.bufPrint(&fix_buffer, "old_string matches 0 times; {s}", .{fuzzy_match.refusalText(why)}) catch fix_buffer[0..];
+            return .{ .text = text, .dynamic = true };
+        }
     }
     return .{ .text = fixFor(name) orelse unexpected_fix, .dynamic = false };
 }

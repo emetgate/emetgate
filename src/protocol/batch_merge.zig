@@ -90,7 +90,7 @@ pub fn merge(gpa: Allocator, base: ?[]const u8, file: []const u8, parts: []const
 
 fn replaceFailed(err: anyerror, index: usize, file: []const u8, matches: usize) anyerror {
     switch (err) {
-        error.OldStringNotFound => wire.setFix("edits[{d}].old_string is not in {s} once the earlier items for that file are applied (items for one file apply in order, line ranges first); copy it from the text as it reads after them; {s}", .{ index, file, fuzzy_match.also_tried }),
+        error.OldStringNotFound => wire.setFix("edits[{d}].old_string is not in {s} once the earlier items for that file are applied (items for one file apply in order, line ranges first); copy it from the text as it reads after them; {s}", .{ index, file, fuzzy_match.notFoundReason() }),
         error.OldStringNotUnique => wire.setFix("edits[{d}].old_string matches {d} places in {s}; add surrounding lines so it matches once, or pass replace_all:true", .{ index, matches, file }),
         error.NoChange => wire.setFix("edits[{d}]: old_string equals new_string; drop that item", .{index}),
         error.EmptyOldString => wire.setFix("edits[{d}].old_string is empty; give the exact text to replace", .{index}),

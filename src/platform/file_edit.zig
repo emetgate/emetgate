@@ -109,20 +109,20 @@ pub fn replaceUnique(gpa: Allocator, source: []const u8, old: []const u8, new: [
 
 /// replaceUnique for a file at `path`: when old matches nowhere byte for byte, the one range it
 /// matches ignoring whitespace and comments (fuzzy_match) is replaced instead and the fallback
-/// is marked used. Several exact matches stay an ambiguity error; no single normalised match
-/// stays OldStringNotFound.
+/// is marked used. Several exact matches stay an ambiguity error; no single normalised match,
+/// or one the fallback refuses (fuzzy_match.refusal says why), stays OldStringNotFound.
 pub fn replaceUniqueIn(gpa: Allocator, path: []const u8, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: *usize) ![]u8 {
     if (replaceUnique(gpa, source, old, new, all, matches)) |out| {
         return out;
     } else |err| if (err != error.OldStringNotFound) return err;
-    var normalised: usize = 0;
-    const span = (try fuzzy_match.locate(gpa, source, old, fuzzy_match.syntaxFor(path), &normalised)) orelse return error.OldStringNotFound;
+    const found = (try fuzzy_match.replacementFor(gpa, path, source, old, new)) orelse return error.OldStringNotFound;
+    defer gpa.free(found.text);
     const crlf = std.mem.indexOf(u8, source, "\r\n") != null and std.mem.indexOfScalar(u8, new, '\r') == null;
-    const replacement = if (crlf) try std.mem.replaceOwned(u8, gpa, new, "\n", "\r\n") else try gpa.dupe(u8, new);
+    const replacement = if (crlf) try std.mem.replaceOwned(u8, gpa, found.text, "\n", "\r\n") else try gpa.dupe(u8, found.text);
     defer gpa.free(replacement);
     matches.* = 1;
     fuzzy_match.markUsed();
-    return std.mem.concat(gpa, u8, &.{ source[0..span.start], replacement, source[span.end..] });
+    return std.mem.concat(gpa, u8, &.{ source[0..found.start], replacement, source[found.end..] });
 }
 
 fn replaceCounted(gpa: Allocator, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: usize) ![]u8 {

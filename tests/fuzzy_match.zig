@@ -33,10 +33,10 @@ test "fuzzy_match: an exact old_string is replaced as before and the fallback st
     try testing.expect(!fuzzy_match.wasUsed());
 }
 
-test "fuzzy_match: a dense old_string matches the commented original once and comments outside the range stay" {
+test "fuzzy_match: a dense old_string that sends the comment inside the range matches once and comments outside it stay" {
     fuzzy_match.reset();
     var matches: usize = 0;
-    const out = try file_edit.replaceUniqueIn(gpa, "src/a.ts", source_ts, "const sum = a + b;\n  return sum;", "return a + b;", false, &matches);
+    const out = try file_edit.replaceUniqueIn(gpa, "src/a.ts", source_ts, "const sum = a + b;\n  /* keep it */ return sum;", "return a + b;", false, &matches);
     defer gpa.free(out);
     try testing.expectEqualStrings(
         \\export function total(a: number, b: number) {
@@ -78,7 +78,7 @@ test "fuzzy_match: a comment-like sequence inside a string literal is kept as te
 
     const source = "const a = \"x // y\";\n// note\nconst b = 1;\n";
     var matches: usize = 0;
-    const out = try file_edit.replaceUniqueIn(gpa, "a.ts", source, "const a = \"x // y\";\nconst b = 1;", "const c = 2;", false, &matches);
+    const out = try file_edit.replaceUniqueIn(gpa, "a.ts", source, "const a = \"x // y\"; // note\nconst b = 1;", "const c = 2;", false, &matches);
     defer gpa.free(out);
     try testing.expectEqualStrings("const c = 2;\n", out);
 
@@ -90,7 +90,7 @@ test "fuzzy_match: a comment-like sequence inside a string literal is kept as te
 test "fuzzy_match: a dense LF old_string in a CRLF file is replaced with CRLF lines" {
     const source = "fn main() void {\r\n    // say it\r\n    a();\r\n    b();\r\n}\r\n";
     var matches: usize = 0;
-    const out = try file_edit.replaceUniqueIn(gpa, "main.zig", source, "a();\n b();", "a();\n    c();", false, &matches);
+    const out = try file_edit.replaceUniqueIn(gpa, "main.zig", source, "a();\nb();", "a();\nc();", false, &matches);
     defer gpa.free(out);
     try testing.expectEqualStrings("fn main() void {\r\n    // say it\r\n    a();\r\n    c();\r\n}\r\n", out);
 }
@@ -111,4 +111,75 @@ test "fuzzy_match: a batch item with no single match says the insensitive search
     };
     try testing.expectError(error.OldStringNotFound, batch_merge.merge(gpa, "a\n", "f.txt", &parts));
     try testing.expect(std.mem.indexOf(u8, wire.takeFixForTest(), fuzzy_match.also_tried) != null);
+}
+
+test "fuzzy_match: F02 a JavaScript comment inside the range that old_string leaves out is never deleted; the edit is refused" {
+    fuzzy_match.reset();
+    const source = "function a() {\n  first();\n  // IMPORTANT: keep this note\n  second();\n}\n";
+    var matches: usize = 0;
+    try testing.expectError(error.OldStringNotFound, file_edit.replaceUniqueIn(gpa, "a.js", source, "  first();\n  second();", "  first();\n  third();", false, &matches));
+    try testing.expectEqual(fuzzy_match.Refusal.comments, fuzzy_match.refusal().?);
+    try testing.expect(!fuzzy_match.wasUsed());
+    const why = fuzzy_match.notFoundReason();
+    try testing.expect(std.mem.indexOf(u8, why, "delete") != null);
+    try testing.expect(std.mem.indexOf(u8, why, "emetgate_read_symbol") != null);
+
+    const b_js = "function mul(a, b) {\n  // multiply\n  return a * b;\n}\n";
+    try testing.expectError(error.OldStringNotFound, file_edit.replaceUniqueIn(gpa, "b.js", b_js, "function mul(a, b) {\n    return a * b;\n}", "function mul(a, b) {\n  return b * a;\n}", false, &matches));
+    try testing.expectEqual(fuzzy_match.Refusal.comments, fuzzy_match.refusal().?);
+}
+
+test "fuzzy_match: F04 a YAML comment inside the range that old_string leaves out is never deleted; the edit is refused" {
+    fuzzy_match.reset();
+    const source = "alpha: 1\n# do not remove: license key below\nbeta: 2\n";
+    var matches: usize = 0;
+    try testing.expectError(error.OldStringNotFound, file_edit.replaceUniqueIn(gpa, "conf.yaml", source, "alpha: 1\nbeta: 2", "alpha: 1\nbeta: 3", false, &matches));
+    try testing.expectEqual(fuzzy_match.Refusal.comments, fuzzy_match.refusal().?);
+    try testing.expect(!fuzzy_match.wasUsed());
+}
+
+test "fuzzy_match: F06 Python lines whose nesting differs from old_string's are refused, never collapsed" {
+    fuzzy_match.reset();
+    const source = "def f(x):\n    if x:\n        a = 1\n    b = 2\n    return x\n";
+    var matches: usize = 0;
+    try testing.expectError(error.OldStringNotFound, file_edit.replaceUniqueIn(gpa, "p.py", source, "if x:\n    a = 1\n    b = 2", "if x:\n    a = 1\n    c = 3", false, &matches));
+    try testing.expectEqual(fuzzy_match.Refusal.indentation, fuzzy_match.refusal().?);
+    try testing.expect(!fuzzy_match.wasUsed());
+    try testing.expect(std.mem.indexOf(u8, fuzzy_match.notFoundReason(), "indent") != null);
+}
+
+test "fuzzy_match: Python lines shifted by one uniform indentation are re-indented to the file's" {
+    fuzzy_match.reset();
+    const source = "def f(x):\n    if x:\n        a = 1\n        b = 2\n    return x\n";
+    var matches: usize = 0;
+    const out = try file_edit.replaceUniqueIn(gpa, "p.py", source, "if x:\n    a = 1\n    b = 2", "if x:\n    a = 1\n    c = 3", false, &matches);
+    defer gpa.free(out);
+    try testing.expectEqualStrings("def f(x):\n    if x:\n        a = 1\n        c = 3\n    return x\n", out);
+    try testing.expect(fuzzy_match.wasUsed());
+
+    const whole = try file_edit.replaceUniqueIn(gpa, "p.py", source, "if x:\n    a = 1\n    b = 2\n", "if x:\n    a = 1\n\n    c = 3\n", false, &matches);
+    defer gpa.free(whole);
+    try testing.expectEqualStrings("def f(x):\n    if x:\n        a = 1\n\n        c = 3\n    return x\n", whole);
+}
+
+test "fuzzy_match: an old_string indented deeper than the file is shifted back from the line's start" {
+    fuzzy_match.reset();
+    const source = "function a() {\n  first();\n  second();\n}\n";
+    var matches: usize = 0;
+    const out = try file_edit.replaceUniqueIn(gpa, "a.js", source, "    first();\n    second();", "    first();\n    third();", false, &matches);
+    defer gpa.free(out);
+    try testing.expectEqualStrings("function a() {\n  first();\n  third();\n}\n", out);
+
+    try testing.expectError(error.OldStringNotFound, file_edit.replaceUniqueIn(gpa, "a.js", source, "    first();\n    second();", "first();\n  third();", false, &matches));
+    try testing.expectEqual(fuzzy_match.Refusal.indentation, fuzzy_match.refusal().?);
+}
+
+test "fuzzy_match: a batch item the fallback refuses says why in its fix" {
+    const parts = [_]batch_merge.Part{
+        .{ .index = 0, .expected = .absent, .text = .{ .replace = .{ .old = "alpha: 1\nbeta: 2", .new = "beta: 3" } } },
+    };
+    try testing.expectError(error.OldStringNotFound, batch_merge.merge(gpa, "alpha: 1\n# keep\nbeta: 2\n", "c.yaml", &parts));
+    const fix = wire.takeFixForTest();
+    try testing.expect(std.mem.indexOf(u8, fix, "comments") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, fuzzy_match.also_tried) == null);
 }
