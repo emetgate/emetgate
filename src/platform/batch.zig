@@ -253,9 +253,27 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     return .{ .committed = committed };
 }
 
-pub const Restore = struct { abs: []const u8, now: ?[]const u8, before: ?[]const u8 };
+pub const Restore = struct { abs: []const u8, rel: []const u8, now: ?[]const u8, before: ?[]const u8, index: []const u8 };
 
-pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, files: []const Restore) !void {
+pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, files: []const Restore, created_dirs: []const []const u8) ![]const []const u8 {
+    try putBack(gpa, arena, io, root, files);
+    disk.removeEmptyDirs(io, created_dirs);
+    return restoreIndex(gpa, arena, io, root, files);
+}
+
+fn restoreIndex(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, files: []const Restore) ![]const []const u8 {
+    var unrestored: std.ArrayList([]const u8) = .empty;
+    const rels = try arena.alloc([]const u8, files.len);
+    for (files, rels) |f, *rel| rel.* = f.rel;
+    const now = try repo.indexEntriesOf(arena, io, root, rels);
+    for (files, now) |f, entry| {
+        if (std.mem.eql(u8, f.index, entry)) continue;
+        if (!try repo.putIndexEntry(gpa, io, root, f.rel, f.index)) try unrestored.append(arena, f.rel);
+    }
+    return unrestored.items;
+}
+
+fn putBack(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, files: []const Restore) !void {
     if (files.len == 0) return;
     var pendings: std.ArrayList(disk.Pending) = .empty;
     defer pendings.deinit(gpa);

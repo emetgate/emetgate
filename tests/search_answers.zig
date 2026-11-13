@@ -692,7 +692,7 @@ test "search answers: a tracked file of exactly the index size limit is searched
     const runtime = try Runtime.create(gpa);
     defer runtime.destroy() catch @panic("live snapshots");
 
-    var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root, .certificate = true });
+    var answer = try search(runtime, repo.root, .{ .pattern = "capneedle", .dir = repo.root, .certificate = true, .stats = true });
     defer answer.deinit();
     try testing.expectEqualStrings("complete", answer.status());
     try testing.expectEqual(@as(usize, 2), answer.groups().len);
@@ -701,6 +701,9 @@ test "search answers: a tracked file of exactly the index size limit is searched
     try testing.expect(std.mem.indexOf(u8, answer.line(), "excluded") == null);
     const listed = answer.get("certificate").?.object.get("scope").?.object.get("excluded_paths").?.array.items;
     try testing.expectEqual(@as(usize, 0), listed.len);
+    const stats = answer.get("stats").?.object;
+    try testing.expectEqual(@as(i64, 1), stats.get("files_candidates").?.integer);
+    try testing.expectEqual(@as(i64, limit), stats.get("candidate_bytes").?.integer);
 }
 
 test "search answers: a tracked binary file is excluded as binary and listed in the certificate" {

@@ -3,6 +3,8 @@ const batch = @import("batch.zig");
 const shadow = @import("shadow.zig");
 const receipts = @import("receipts.zig");
 const own_dir = @import("own_dir.zig");
+const repo = @import("repo.zig");
+const file_edit = @import("file_edit.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -10,35 +12,56 @@ const max_bytes = 64 << 20;
 
 pub const Entry = struct {
     abs: []const u8,
+    rel: []const u8,
     before: ?[]const u8,
+    index: []const u8,
 };
 
 pub const Snapshot = struct {
     root: []const u8,
     entries: []const Entry,
+    created_dirs: []const []const u8,
     receipts: []const []const u8,
 };
 
 pub fn take(arena: Allocator, io: std.Io, root: []const u8, files: []const []const u8) !Snapshot {
     var entries: std.ArrayList(Entry) = .empty;
+    var rels: std.ArrayList([]const u8) = .empty;
+    var dirs: std.ArrayList([]const u8) = .empty;
     outer: for (files) |file| {
         const abs = try std.fs.path.resolve(arena, &.{ root, file });
         for (entries.items) |seen| if (std.ascii.eqlIgnoreCase(seen.abs, abs)) continue :outer;
-        try entries.append(arena, .{ .abs = abs, .before = try readOrNull(arena, io, abs) });
+        const rel = repo.relativeUnder(arena, root, abs) catch continue;
+        std.mem.replaceScalar(u8, rel, '\\', '/');
+        const before = try readOrNull(arena, io, abs);
+        if (before == null) try newDirs(arena, io, root, file, &dirs);
+        try entries.append(arena, .{ .abs = abs, .rel = rel, .before = before, .index = "" });
+        try rels.append(arena, rel);
     }
-    return .{ .root = root, .entries = entries.items, .receipts = try receiptNames(arena, io, root) };
+    const index = try repo.indexEntriesOf(arena, io, root, rels.items);
+    for (entries.items, index) |*entry, held| entry.index = held;
+    return .{ .root = root, .entries = entries.items, .created_dirs = dirs.items, .receipts = try receiptNames(arena, io, root) };
 }
 
-pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, snapshot: Snapshot) !void {
+fn newDirs(arena: Allocator, io: std.Io, root: []const u8, file: []const u8, dirs: *std.ArrayList([]const u8)) !void {
+    const target = file_edit.jailWrite(arena, io, root, file, true) catch return;
+    outer: for (target.created_dirs) |dir| {
+        for (dirs.items) |have| if (std.ascii.eqlIgnoreCase(have, dir)) continue :outer;
+        try dirs.append(arena, dir);
+    }
+}
+
+pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, snapshot: Snapshot) ![]const []const u8 {
     var back: std.ArrayList(batch.Restore) = .empty;
     for (snapshot.entries) |entry| {
         const now = try readOrNull(arena, io, entry.abs);
         if (now == null and entry.before == null) continue;
         if (now != null and entry.before != null and std.mem.eql(u8, now.?, entry.before.?)) continue;
-        try back.append(arena, .{ .abs = entry.abs, .now = now, .before = entry.before });
+        try back.append(arena, .{ .abs = entry.abs, .rel = entry.rel, .now = now, .before = entry.before, .index = entry.index });
     }
-    try batch.restore(gpa, arena, io, snapshot.root, back.items);
+    const unrestored = try batch.restore(gpa, arena, io, snapshot.root, back.items, snapshot.created_dirs);
     try dropNewReceipts(arena, io, snapshot);
+    return unrestored;
 }
 
 fn readOrNull(arena: Allocator, io: std.Io, abs: []const u8) !?[]const u8 {

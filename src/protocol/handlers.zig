@@ -1423,8 +1423,8 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         if (made.is_error and edits_written) {
             try js.objectField("on_disk");
             if (undo) |snapshot| {
-                if (change_undo.restore(gpa, arena, io, snapshot)) |_| {
-                    try js.write(edits_undone);
+                if (change_undo.restore(gpa, arena, io, snapshot)) |unrestored| {
+                    if (unrestored.len == 0) try js.write(edits_undone) else try js.write(try std.fmt.allocPrint(arena, "{s}, except the git index: {s} held merge conflict stages, which cannot be put back, and now holds the restored file instead", .{ edits_undone, try std.mem.join(arena, ", ", unrestored) }));
                 } else |err| {
                     try js.write(try std.fmt.allocPrint(arena, "the edits are written to the work tree; the commit was refused and undoing the edits failed ({s}), so they are on disk but not committed", .{@errorName(err)}));
                     event.disk = "edits written, commit refused";

@@ -261,6 +261,190 @@ test "change atomic: a commit refused after the edits were written puts every fi
     }
 }
 
+const Before = struct {
+    status: []u8,
+    index: []u8,
+    receipts: []u8,
+
+    fn take(repo: *Repo) !Before {
+        const status = try repo.gitText(&.{ "status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).emetgate" });
+        errdefer gpa.free(status);
+        const index = try repo.gitText(&.{ "ls-files", "-s" });
+        errdefer gpa.free(index);
+        return .{ .status = status, .index = index, .receipts = try receiptNames(repo) };
+    }
+
+    fn deinit(self: Before) void {
+        gpa.free(self.status);
+        gpa.free(self.index);
+        gpa.free(self.receipts);
+    }
+
+    fn expectSame(self: Before, repo: *Repo) !void {
+        const now = try Before.take(repo);
+        defer now.deinit();
+        try testing.expectEqualStrings(self.status, now.status);
+        try testing.expectEqualStrings(self.index, now.index);
+        try testing.expectEqualStrings(self.receipts, now.receipts);
+    }
+};
+
+fn receiptNames(repo: *Repo) ![]u8 {
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |name| gpa.free(name);
+        names.deinit(gpa);
+    }
+    var receipts = repo.tmp.dir.openDir(testing.io, "repo/.emetgate/receipts", .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return gpa.dupe(u8, ""),
+        else => |e| return e,
+    };
+    defer receipts.close(testing.io);
+    var it = receipts.iterate();
+    while (try it.next(testing.io)) |entry| {
+        if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
+        try names.append(gpa, try gpa.dupe(u8, entry.name));
+    }
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn less(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.less);
+    return std.mem.join(gpa, "\n", names.items);
+}
+
+fn forbidEvalOutside(repo: *Repo) !void {
+    const id = try memory.remember(gpa, testing.io, repo.root_abs, .project, "no eval in src", true, "forbid:eval", "src/");
+    gpa.free(id);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/outside.js", .data = "eval('1');\n" });
+}
+
+fn expectUndone(reply: *Reply) !void {
+    try testing.expect(reply.is_error);
+    try testing.expect(reply.has("\"stopped_at\":\"commit\""));
+    try testing.expect(reply.has("the edits were not kept"));
+    try testing.expect(!reply.has("edits written, commit refused"));
+}
+
+test "change atomic: a refused commit removes the folders the call created for new files and keeps a folder that was there before" {
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+    try forbidEvalOutside(&repo);
+    try repo.tmp.dir.createDirPath(testing.io, "repo/src/kept");
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const deep = try repo.path("src\\new\\deep\\made.js");
+    defer gpa.free(deep);
+    const kept = try repo.path("src\\kept\\made.js");
+    defer gpa.free(kept);
+    const before = try Before.take(&repo);
+    defer before.deinit();
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+        .{ .file = deep, .content = "export const deep = 1;\n" },
+        .{ .file = kept, .content = "export const kept = 1;\n" },
+    }, .commit = "swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try expectUndone(&reply);
+    try repo.expectFile("src/app.js", app_js);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/new", .{}));
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/kept/made.js", .{}));
+    try repo.tmp.dir.access(testing.io, "repo/src/kept", .{});
+    try before.expectSame(&repo);
+}
+
+test "change atomic: a commit refused for drift after the edits were written puts the work tree, index and receipts back as they were" {
+    var repo = try Repo.init(&.{.{ "src/other.js", "export const other = 1;\n" }});
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const other = try repo.path("src\\other.js");
+    defer gpa.free(other);
+
+    var first = try repo.call(.{ .edits = .{
+        .{ .file = other, .old_string = "other = 1", .new_string = "other = 2" },
+    } }, green);
+    defer first.deinit();
+    errdefer std.debug.print("first: {s}\n", .{first.text});
+    try testing.expect(!first.is_error);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/other.js", .data = "export const other = 3;\n" });
+    const before = try Before.take(&repo);
+    defer before.deinit();
+    try testing.expect(before.receipts.len != 0);
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    }, .commit = "swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try expectUndone(&reply);
+    try testing.expect(reply.has("src/other.js"));
+    try repo.expectFile("src/app.js", app_js);
+    try repo.expectFile("src/other.js", "export const other = 3;\n");
+    try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "init");
+    try before.expectSame(&repo);
+}
+
+test "change atomic: a commit refused for a staged copy of a file it carries puts the work tree back and keeps the staged copy" {
+    var repo = try Repo.init(&.{});
+    defer repo.deinit();
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = "export const staged = 1;\n" });
+    gpa.free(try run(repo.root_abs, &.{ "add", "--", "src/app.js" }));
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = app_js });
+    const before = try Before.take(&repo);
+    defer before.deinit();
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+    }, .commit = "swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try expectUndone(&reply);
+    try testing.expect(reply.has("restore"));
+    try repo.expectFile("src/app.js", app_js);
+    try repo.expectGit(&.{ "show", ":src/app.js" }, "export const staged = 1;");
+    try repo.expectGit(&.{ "log", "-1", "--format=%s" }, "init");
+    try before.expectSame(&repo);
+}
+
+test "change atomic: a refused commit puts a deleted file back with the index entry it had, staged or untracked" {
+    var repo = try Repo.init(&.{.{ "src/gone.js", "export const gone = 1;\n" }});
+    defer repo.deinit();
+    try forbidEvalOutside(&repo);
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/gone.js", .data = "export const gone = 2;\n" });
+    gpa.free(try run(repo.root_abs, &.{ "add", "--", "src/gone.js" }));
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/gone.js", .data = "export const gone = 3;\n" });
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/loose.js", .data = "export const loose = 1;\n" });
+    const app = try repo.path("src\\app.js");
+    defer gpa.free(app);
+    const gone = try repo.path("src\\gone.js");
+    defer gpa.free(gone);
+    const loose = try repo.path("src\\loose.js");
+    defer gpa.free(loose);
+    const gone_hash = symbol.formatHash(symbol.fileHash("export const gone = 3;\n"));
+    const loose_hash = symbol.formatHash(symbol.fileHash("export const loose = 1;\n"));
+    const before = try Before.take(&repo);
+    defer before.deinit();
+
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = app, .old_string = "return a + b;", .new_string = "return b + a;" },
+        .{ .file = gone, .op = "delete", .hash = &gone_hash },
+        .{ .file = loose, .op = "delete", .hash = &loose_hash },
+    }, .commit = "swap" }, green);
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try expectUndone(&reply);
+    try repo.expectFile("src/app.js", app_js);
+    try repo.expectFile("src/gone.js", "export const gone = 3;\n");
+    try repo.expectFile("src/loose.js", "export const loose = 1;\n");
+    try repo.expectGit(&.{ "show", ":src/gone.js" }, "export const gone = 2;");
+    try before.expectSame(&repo);
+}
+
 test "change atomic: legacy emetgate_write refuses to overwrite an existing file without its file_hash, and accepts it with the hash" {
     var repo = try Repo.init(&.{.{ "seen.txt", "kept by the user\n" }});
     defer repo.deinit();
