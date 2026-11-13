@@ -212,6 +212,25 @@ test "search text: a reply lists each file once, its lines as line:text, a starr
     try testing.expectEqualStrings("\u{2713} no match in 4 file(s)", none.text);
 }
 
+test "search text: a tracked binary file holding the pattern is no hit and the check mark names its exclusion" {
+    var repo = try Repo.init(&.{
+        .{ "a.txt", "binneedle in text\n" },
+        .{ "blob.bin", "binneedle\x00binary\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const reply = try search(runtime, null, repo.root, .{ .pattern = "binneedle", .dir = repo.root });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("a.txt\n1:binneedle in text\n\u{2713} excluded 1 binary", reply.text);
+
+    const none = try search(runtime, null, repo.root, .{ .pattern = "binary", .dir = repo.root });
+    defer none.deinit();
+    try testing.expectEqualStrings("\u{2713} no match in 1 file(s); excluded 1 binary", none.text);
+}
+
 test "search text: every reply of the fixture queries is shorter than ripgrep's own output for the same pattern" {
     var repo = try Repo.init(&golden_files);
     defer repo.deinit();

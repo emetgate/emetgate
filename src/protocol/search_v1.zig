@@ -1166,6 +1166,8 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
         } else {
             try w.writeAll("\u{2713}");
             if (note.len != 0) try w.print(" {s}", .{note});
+            const binary = result.excluded.get(.binary);
+            if (binary != 0) try w.print("{s}excluded {d} binary", .{ if (note.len != 0) "; " else " ", binary });
         }
     } else {
         try w.writeAll("partial:");
