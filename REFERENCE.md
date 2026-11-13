@@ -1572,6 +1572,16 @@ whole index built again, in the background, and swapped in when ready. A file gi
 ignores never enters either index. When the server starts it compares every indexed
 file's size and modification time against the disk, reading each directory once.
 
+Nothing outside the repository enters the index. git follows a junction, so a folder
+that is a junction or symbolic link is resolved to its final path (`src/platform/confine.zig`)
+and its files are left out when that path is not under the repository's real root; a
+file link is read only when its target is inside. The reply then ends with a
+`skipped (junction or link to a place outside the repository, not searched):` line
+naming each such folder. A junction to another folder of the repository is followed as before.
+`shadow.workingListing` applies the same check to the working listing and returns the
+skipped folders, for `emetgate_list`; the shadow copy keeps the full listing, since it
+rebuilds linked folders such as a `node_modules` junction itself.
+
 ```
 emetgate find <pattern> [--root <dir>]
 emetgate find build [--root <dir>]

@@ -69,6 +69,7 @@ pub const session = @import("platform/session.zig");
 pub const shadow = @import("platform/shadow.zig");
 pub const link_tree = @import("platform/link_tree.zig");
 pub const dir_scan = @import("platform/dir_scan.zig");
+pub const confine = @import("platform/confine.zig");
 pub const gate_tree = @import("platform/gate_tree.zig");
 pub const shadow_root = @import("platform/shadow_root.zig");
 pub const cache_lease = @import("platform/cache_lease.zig");

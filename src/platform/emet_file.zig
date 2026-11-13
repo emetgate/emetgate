@@ -6,9 +6,10 @@ const builtin = @import("builtin");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const dir_scan = @import("dir_scan.zig");
+const confine = @import("confine.zig");
 const worker_pool = @import("worker_pool.zig");
 
-const magic = "EMETv006".*;
+const magic = "EMETv007".*;
 const binary_probe = 8000;
 const max_pattern = 4096;
 const empty: u32 = std.math.maxInt(u32);
@@ -494,7 +495,14 @@ const Slurp = struct {
     raws: []?[]u8,
     stamps: []Stamp,
     cancel: *const std.atomic.Value(bool),
+    root_path: []const u8,
     cursor: std.atomic.Value(usize) = .init(0),
+
+    fn linkInside(s: *Slurp, rel: []const u8) bool {
+        const abs = std.fmt.allocPrint(s.gpa, "{s}\\{s}", .{ s.root_path, rel }) catch return false;
+        defer s.gpa.free(abs);
+        return confine.within(s.gpa, s.root_path, abs) catch false;
+    }
 
     fn run(ctx: *anyopaque) void {
         const s: *Slurp = @alignCast(@ptrCast(ctx));
@@ -502,7 +510,12 @@ const Slurp = struct {
             const i = s.cursor.fetchAdd(1, .monotonic);
             if (i >= s.paths.len) return;
             if (s.cancel.load(.acquire)) return;
-            const stat = s.root.statFile(s.io, s.paths[i], .{}) catch continue;
+            const own = s.root.statFile(s.io, s.paths[i], .{ .follow_symlinks = false }) catch continue;
+            const stat = if (own.kind == .file) own else stat: {
+                // A file link is read only when its target stays inside the root.
+                if (own.kind == .sym_link and !s.linkInside(s.paths[i])) continue;
+                break :stat s.root.statFile(s.io, s.paths[i], .{}) catch continue;
+            };
             if (stat.kind != .file) continue;
             const raw = s.root.readFileAlloc(s.io, s.paths[i], s.gpa, .unlimited) catch continue;
             s.raws[i] = raw;
@@ -538,7 +551,7 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     const stamps = try gpa.alloc(Stamp, kept);
     defer gpa.free(stamps);
     {
-        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .cancel = cancel };
+        var slurp: Slurp = .{ .root = root, .io = io, .paths = paths[0..kept], .gpa = gpa, .raws = raws, .stamps = stamps, .cancel = cancel, .root_path = root_path };
         var pool: worker_pool.Pool = undefined;
         pool.start(worker_pool.max_threads);
         defer _ = pool.release();
@@ -718,22 +731,30 @@ fn check(cancel: *const std.atomic.Value(bool)) error{Canceled}!void {
     if (cancel.load(.acquire)) return error.Canceled;
 }
 
-pub fn list(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8) ![][]const u8 {
-    return listUnder(io, gpa, arena, root_path, null);
+pub fn list(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, outside: ?*std.ArrayList([]const u8)) ![][]const u8 {
+    return listUnder(io, gpa, arena, root_path, null, outside);
 }
 
-pub fn listUnder(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, specs: ?[]const []const u8) ![][]const u8 {
+/// Lists the working files under `specs` (all of them when null), leaving out
+/// every path whose folder is a junction or link to a place outside the root.
+/// Each such folder is added to `outside` (arena copies, trailing slash).
+pub fn listUnder(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, specs: ?[]const []const u8, outside: ?*std.ArrayList([]const u8)) ![][]const u8 {
     var root = try Io.Dir.cwd().openDir(io, root_path, .{ .iterate = true });
     defer root.close(io);
     var paths: std.ArrayList([]const u8) = .empty;
     if (specs) |given| {
         if (given.len == 0) return paths.items;
     }
-    if (try listGit(io, gpa, arena, root, root_path, specs, &paths)) return paths.items;
-    paths.clearRetainingCapacity();
-    const roots: []const []const u8 = specs orelse &.{""};
-    for (roots) |spec| try listTree(io, gpa, arena, root, spec, &paths);
-    return paths.items;
+    if (!try listGit(io, gpa, arena, root, root_path, specs, &paths)) {
+        paths.clearRetainingCapacity();
+        const roots: []const []const u8 = specs orelse &.{""};
+        for (roots) |spec| try listTree(io, gpa, arena, root, spec, &paths);
+    }
+    var confined = try confine.Confine.init(gpa, root_path);
+    defer confined.deinit();
+    const kept = try confined.filter([]const u8, paths.items);
+    if (outside) |out| for (confined.outside.items) |p| try out.append(arena, try arena.dupe(u8, p));
+    return kept;
 }
 
 const max_command = 24 << 10;

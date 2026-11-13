@@ -70,6 +70,7 @@ pub const session = src.session;
 pub const shadow = src.shadow;
 pub const link_tree = src.link_tree;
 pub const dir_scan = src.dir_scan;
+pub const confine = src.confine;
 pub const gate_tree = src.gate_tree;
 pub const shadow_root = src.shadow_root;
 pub const cache_lease = src.cache_lease;
@@ -233,6 +234,7 @@ test {
     _ = @import("tests/change_watch.zig");
     _ = @import("tests/search_fresh.zig");
     _ = @import("tests/find_fresh.zig");
+    _ = @import("tests/confine.zig");
     _ = @import("tests/search_answers.zig");
     _ = @import("tests/search_text.zig");
     _ = @import("tests/git_index.zig");
