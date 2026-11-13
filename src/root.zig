@@ -190,6 +190,7 @@ pub const batch_stage = @import("protocol/batch_stage.zig");
 pub const batch_merge = @import("protocol/batch_merge.zig");
 pub const recovery = @import("protocol/recovery.zig");
 pub const forgive = @import("protocol/forgive.zig");
+pub const arg_check = @import("protocol/arg_check.zig");
 pub const run_tool = @import("protocol/run_tool.zig");
 pub const open_run = @import("protocol/open_run.zig");
 pub const read_tools = @import("protocol/read_tools.zig");

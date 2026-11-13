@@ -33,6 +33,7 @@ const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const map_tools = @import("map_tools.zig");
 const find_tools = @import("find_tools.zig");
+const arg_check = @import("arg_check.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -520,6 +521,20 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     const params = getField(msg, "params") orelse return writeRpcError(out, id, -32602, "Missing params");
     const name = getString(params, "name") orelse return writeRpcError(out, id, -32602, "Missing tool name");
     const arguments = getField(params, "arguments");
+    tool_result.clearMissing();
+    const refusal = arg_check.check(gpa, name, arguments, policy) catch |err| switch (err) {
+        error.MissingArgument => return writeMissingArgument(out, id),
+        else => |e| return e,
+    };
+    if (refusal) |refused| {
+        defer gpa.free(refused);
+        if (observer) |obs| {
+            var refused_event: telemetry.Event = .{ .tool = name };
+            refused_event.fail("InvalidArguments");
+            obs.record(gpa, io, refused_event);
+        }
+        return writeToolResult(out, id, refused, true);
+    }
 
     var event: telemetry.Event = .{ .tool = name };
     tool_result.clearMissing();

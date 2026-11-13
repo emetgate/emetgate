@@ -180,6 +180,7 @@ pub const handlers = src.handlers;
 pub const policy = src.policy;
 pub const recovery = src.recovery;
 pub const forgive = src.forgive;
+pub const arg_check = src.arg_check;
 pub const run_tool = src.run_tool;
 pub const open_run = src.open_run;
 pub const read_tools = src.read_tools;
@@ -391,6 +392,7 @@ test {
     _ = @import("tests/git_commit.zig");
     _ = @import("tests/batch_doc_source.zig");
     _ = @import("tests/forgiving_edits.zig");
+    _ = @import("tests/arg_check.zig");
     _ = @import("tests/git_fixture_test.zig");
     _ = @import("tests/test_runner_harness.zig");
     _ = @import("tests/suites.zig");

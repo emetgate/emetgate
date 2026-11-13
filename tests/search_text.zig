@@ -503,8 +503,8 @@ test "search text: the model's tool offers and obeys no format, certificate or s
     }) |args| {
         const asked = try search(runtime, null, repo.root, args);
         defer asked.deinit();
-        try testing.expect(!asked.is_error);
-        try testing.expectEqualStrings(plain.text, asked.text);
+        try testing.expect(asked.is_error);
+        try testing.expect(std.mem.indexOf(u8, asked.text, "UnknownArgument") != null);
     }
 
     const internals = &[_][]const u8{"--search-internals"};
