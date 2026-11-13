@@ -220,3 +220,18 @@ test "facts store: a namespace's type files are the files with types directly in
     defer testing.allocator.free(none_left);
     try testing.expectEqual(@as(usize, 0), none_left.len);
 }
+
+test "facts store: a defined name is keyed by the store's own copy, never by the memory of the file's facts" {
+    const runtime = try test_util.openRuntime();
+    defer test_util.closeRuntime(runtime);
+    var repo = Repo.init(runtime);
+    defer repo.deinit();
+    const id = try repo.put("a.ts", "export function onlyHere() { return 1; }\n");
+    const key = repo.store.by_name.getKey("onlyHere") orelse return error.NameLost;
+    for (repo.store.file(id).facts.defs) |d| {
+        if (!std.mem.eql(u8, d.name, "onlyHere")) continue;
+        try testing.expect(key.ptr != d.name.ptr);
+    }
+    _ = try repo.put("a.ts", "export function other() { return 2; }\n");
+    try testing.expectEqualStrings("onlyHere", repo.store.by_name.getKey("onlyHere") orelse return error.NameLost);
+}
