@@ -4,6 +4,7 @@ const Runtime = @import("../engine/runtime.zig").Runtime;
 const tool_result = @import("tool_result.zig");
 const mirror_mod = @import("mirror.zig");
 const known_files_mod = @import("known_files.zig");
+const sent_ledger_mod = @import("../engine/sent_ledger.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const tsserver = @import("../platform/tsserver.zig");
@@ -29,6 +30,7 @@ pub const Policy = struct {
     no_typecheck: bool = false,
     allow_repo_config: bool = false,
     detect_test: bool = false,
+    allow_unverified: bool = false,
     allow_repo_memory: bool = false,
     shadow_root: ?[]const u8 = null,
     root: ?[]const u8 = null,
@@ -43,6 +45,7 @@ pub const Policy = struct {
     read_budget_set: bool = false,
     mirror: ?*mirror_mod.Mirror = null,
     known_files: ?*known_files_mod.KnownFiles = null,
+    sent_ledger: ?*sent_ledger_mod.Ledger = null,
     tree_cache: ?*tree_cache_mod.TreeCache = null,
     search_session: ?*search_session_mod.Session = null,
     search_text: bool = false,
@@ -63,9 +66,12 @@ pub const Policy = struct {
     cache: cache_gc.Flags = .{},
     tool_prefix: []const u8 = "",
     legacy_tools: bool = false,
+    explore_mode: map_tools.ExploreMode = .full,
 
-    pub fn invalidate(self: *const Policy) void {
-        if (self.find_session) |session| session.invalidate();
+    /// Forget what this session has shown the model, as after the client
+    /// compacted its context. No-op without a ledger.
+    pub fn ledgerReset(self: *const Policy) void {
+        if (self.sent_ledger) |ledger| ledger.reset();
     }
 
     pub fn treeChoice(self: *const Policy) shadow.Choice {
@@ -126,6 +132,9 @@ pub fn parsePolicy(args: anytype) ?Policy {
             const command: []const u8 = args[i];
             if (std.mem.trim(u8, command, " \t").len == 0) return null;
             policy.test_scoped_command = command;
+        } else if (std.mem.eql(u8, arg, "--allow-unverified")) {
+            if (policy.allow_unverified) return null;
+            policy.allow_unverified = true;
         } else if (std.mem.eql(u8, arg, "--detect-test")) {
             if (policy.detect_test) return null;
             policy.detect_test = true;

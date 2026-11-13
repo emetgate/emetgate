@@ -306,6 +306,41 @@ test "emetgate_change leaves after out when it only writes edits" {
     try testing.expect(std.mem.indexOf(u8, reply.text, "\"after\"") == null);
 }
 
+test "emetgate_change matches a dense old_string ignoring whitespace and comments and says so in the reply" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/sum.js", .data = "// sums\nexport function sum(xs) {\n    let t = 0;\n\n    // walk them\n    for (const x of xs) t += x;\n    return t;\n}\n" });
+    const sum = try repo.path("src\\sum.js");
+    defer gpa.free(sum);
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = sum, .old_string = "  let t = 0;\n  // walk them\n  for (const x of xs) t += x;", .new_string = "  let t = xs.reduce((a, b) => a + b, 0);" },
+    } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(!reply.is_error);
+    try reply.expectStatus("applied");
+    try testing.expect(std.mem.indexOf(u8, reply.text, "\"matched\":\"ignoring whitespace and comments\"") != null);
+    try repo.expectFile("src/sum.js", "// sums\nexport function sum(xs) {\n    let t = xs.reduce((a, b) => a + b, 0);\n    return t;\n}\n");
+}
+
+test "emetgate_change refuses a whitespace-insensitive match that would delete a comment and says why" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    const before = "function a() {\n  first();\n  // IMPORTANT: keep this note\n  second();\n}\n";
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/a.js", .data = before });
+    const a = try repo.path("src\\a.js");
+    defer gpa.free(a);
+    var reply = try repo.call(.{ .edits = .{
+        .{ .file = a, .old_string = "  first();\n  second();", .new_string = "  first();\n  third();" },
+    } }, "cmd /c exit 0");
+    defer reply.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{reply.text});
+    try testing.expect(reply.is_error);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "OldStringNotFound") != null);
+    try testing.expect(std.mem.indexOf(u8, reply.text, "would delete them") != null);
+    try repo.expectFile("src/a.js", before);
+}
+
 test "emetgate_change skips an edit whose old_string equals its new_string and writes the others" {
     var repo = try Repo.init();
     defer repo.deinit();

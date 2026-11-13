@@ -212,6 +212,25 @@ test "search text: a reply lists each file once, its lines as line:text, a starr
     try testing.expectEqualStrings("\u{2713} no match in 4 file(s)", none.text);
 }
 
+test "search text: a tracked binary file holding the pattern is no hit and the check mark names its exclusion" {
+    var repo = try Repo.init(&.{
+        .{ "a.txt", "binneedle in text\n" },
+        .{ "blob.bin", "binneedle\x00binary\n" },
+    });
+    defer repo.deinit();
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    const reply = try search(runtime, null, repo.root, .{ .pattern = "binneedle", .dir = repo.root });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    try testing.expectEqualStrings("a.txt\n1:binneedle in text\n\u{2713} excluded 1 binary", reply.text);
+
+    const none = try search(runtime, null, repo.root, .{ .pattern = "binary", .dir = repo.root });
+    defer none.deinit();
+    try testing.expectEqualStrings("\u{2713} no match in 1 file(s); excluded 1 binary", none.text);
+}
+
 test "search text: every reply of the fixture queries is shorter than ripgrep's own output for the same pattern" {
     var repo = try Repo.init(&golden_files);
     defer repo.deinit();
@@ -336,6 +355,7 @@ test "search text: a regex the index cannot run is searched by ripgrep with the 
     defer broken.deinit();
     try testing.expect(broken.is_error);
     try testing.expect(std.mem.startsWith(u8, broken.text, "error: InvalidRegex: "));
+    try testing.expect(std.mem.indexOf(u8, broken.text, "\nfix: the regex does not compile") != null);
 }
 
 test "search text: a text reply and a text error carry no session footer, while the structured reply keeps it" {
@@ -357,10 +377,11 @@ test "search text: a text reply and a text error carry no session footer, while 
     defer broken.deinit();
     try testing.expect(broken.is_error);
     try testing.expect(std.mem.startsWith(u8, broken.text, "error: InvalidRegex: "));
+    try testing.expect(std.mem.indexOf(u8, broken.text, "\nfix: the regex does not compile") != null);
     try testing.expect(std.mem.indexOf(u8, broken.text, "\nemetgate ") == null);
     const unknown = try searchObserved(runtime, null, repo.root, &.{"--search-internals"}, &observer, .{ .pattern = "greet", .dir = repo.root, .format = "xml" });
     defer unknown.deinit();
-    try testing.expectEqualStrings("error: UnknownFormat", unknown.text);
+    try testing.expectEqualStrings("error: UnknownFormat\nfix: format is \"json\" or \"text\"", unknown.text);
     const structured = try searchObserved(runtime, null, repo.root, &.{"--search-internals"}, &observer, .{ .pattern = "greet", .dir = repo.root, .format = "json" });
     defer structured.deinit();
     try testing.expect(std.mem.indexOf(u8, structured.text, "\nemetgate \u{2713} search") != null);
@@ -503,8 +524,8 @@ test "search text: the model's tool offers and obeys no format, certificate or s
     }) |args| {
         const asked = try search(runtime, null, repo.root, args);
         defer asked.deinit();
-        try testing.expect(!asked.is_error);
-        try testing.expectEqualStrings(plain.text, asked.text);
+        try testing.expect(asked.is_error);
+        try testing.expect(std.mem.indexOf(u8, asked.text, "UnknownArgument") != null);
     }
 
     const internals = &[_][]const u8{"--search-internals"};
@@ -514,7 +535,7 @@ test "search text: the model's tool offers and obeys no format, certificate or s
     const bad = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .format = "xml" });
     defer bad.deinit();
     try testing.expect(bad.is_error);
-    try testing.expectEqualStrings("error: UnknownFormat", bad.text);
+    try testing.expectEqualStrings("error: UnknownFormat\nfix: format is \"json\" or \"text\"", bad.text);
     const certified = try searchServed(runtime, null, repo.root, internals, .{ .pattern = "greet", .dir = repo.root, .certificate = true });
     defer certified.deinit();
     try testing.expect(std.mem.startsWith(u8, certified.text, "{\"answer\":"));

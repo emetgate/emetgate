@@ -23,6 +23,7 @@ const answer = @import("../engine/answer.zig");
 const trigram = @import("../engine/trigram.zig");
 const ts = @import("../engine/tree_sitter.zig");
 const tool_result = @import("tool_result.zig");
+const wire = @import("wire.zig");
 const telemetry = @import("telemetry.zig");
 const read_tools = @import("read_tools.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
@@ -49,6 +50,13 @@ pub const reply_budget = 5000;
 pub const max_offset = 100_000;
 pub const max_match_text = 200;
 pub const max_missing_listed = 20;
+/// A tracked file over the index size limit is not indexed; search reads it from
+/// disk in chunks cut at line ends instead, up to this size. A larger file, or one
+/// with a single line longer than max_stream_line_bytes, is reported as skipped and
+/// makes the answer partial.
+pub const max_streamed_file_bytes: u64 = 1024 * 1024 * 1024;
+pub const max_stream_line_bytes: usize = 64 * 1024 * 1024;
+const stream_chunk_bytes: usize = 4 * 1024 * 1024;
 const chunk_files = 64;
 
 pub const Stats = struct {
@@ -704,11 +712,10 @@ fn failAs(gpa: Allocator, format: Format, err: anyerror, event: *telemetry.Event
 
 fn textFailure(gpa: Allocator, err: anyerror, detail: []const u8, event: *telemetry.Event) !ToolResult {
     event.fail(@errorName(err));
-    const text = if (detail.len != 0)
-        try std.fmt.allocPrint(gpa, "error: {s}: {s}", .{ @errorName(err), detail })
-    else
-        try std.fmt.allocPrint(gpa, "error: {s}", .{@errorName(err)});
-    return .{ .text = text, .is_error = true };
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try wire.writeErrorText(&out.writer, @errorName(err), detail);
+    return .{ .text = try out.toOwnedSlice(), .is_error = true };
 }
 
 fn parseDetail(args: ?Value) !bool {
@@ -760,10 +767,13 @@ const Scope = struct {
     }
 };
 
+const LargeFile = struct { path: []const u8, size: u64 };
+
 const Result = struct {
     groups: std.ArrayList(Group) = .empty,
     missing: std.ArrayList(answer.Missing) = .empty,
     excluded_paths: std.ArrayList(answer.Excluded) = .empty,
+    large: std.ArrayList(LargeFile) = .empty,
     listed: u32 = 0,
     indexed: u32 = 0,
     excluded: answer.Exclusions = .initFill(0),
@@ -791,6 +801,12 @@ const Result = struct {
         self.groups.deinit(gpa);
         self.missing.deinit(gpa);
         self.excluded_paths.deinit(gpa);
+        self.large.deinit(gpa);
+    }
+
+    fn largeSize(self: Result, path: []const u8) ?u64 {
+        for (self.large.items) |f| if (std.mem.eql(u8, f.path, path)) return f.size;
+        return null;
     }
 
     fn partial(self: Result) bool {
@@ -826,7 +842,12 @@ const Result = struct {
                 return false;
             },
             .binary => .binary,
-            .large => .too_large,
+            .large => {
+                // Over the index size limit: not in the index, so runQuery streams it
+                // from disk (and counts it as evaluated) or reports it as skipped.
+                try self.large.append(gpa, .{ .path = path, .size = size });
+                return true;
+            },
             .deleted => {
                 try self.missing.append(gpa, .{ .path = path, .reason = .vanished });
                 return true;
@@ -967,7 +988,7 @@ fn renderSearch(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8
     const prefix = slashed(&prefix_buf, place.rel);
     var budgets_buf: [3]answer.Budget = undefined;
     var budget_count: usize = 0;
-    budgets_buf[budget_count] = .{ .limit = .file_bytes, .max = search_index.max_indexed_file_bytes, .used = @min(result.largest_file, search_index.max_indexed_file_bytes) };
+    budgets_buf[budget_count] = .{ .limit = .file_bytes, .max = max_streamed_file_bytes, .used = @min(result.largest_file, max_streamed_file_bytes) };
     budget_count += 1;
     budgets_buf[budget_count] = .{ .limit = .matches, .max = corpus.hit_limit, .used = result.hits };
     budget_count += 1;
@@ -1145,6 +1166,8 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
         } else {
             try w.writeAll("\u{2713}");
             if (note.len != 0) try w.print(" {s}", .{note});
+            const binary = result.excluded.get(.binary);
+            if (binary != 0) try w.print("{s}excluded {d} binary", .{ if (note.len != 0) "; " else " ", binary });
         }
     } else {
         try w.writeAll("partial:");
@@ -1168,7 +1191,13 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
             try w.writeAll(if (first) " " else ", ");
             first = false;
             if (m.path) |p| {
-                try w.print("{s} {s}", .{ p, @tagName(m.reason) });
+                if (m.reason == .too_large) {
+                    try w.print("skipped {s} (", .{p});
+                    try writeSize(w, result.largeSize(p) orelse 0);
+                    try w.print(", over the {d} MiB limit or a line over {d} MiB)", .{ max_streamed_file_bytes / (1024 * 1024), max_stream_line_bytes / (1024 * 1024) });
+                } else {
+                    try w.print("{s} {s}", .{ p, @tagName(m.reason) });
+                }
             } else {
                 try w.print("{d} files {s}", .{ m.files, @tagName(m.reason) });
             }
@@ -1186,6 +1215,12 @@ fn writeText(gpa: Allocator, w: *Writer, result: *const Result, shown: []const S
     if (more) try w.print("; next offset:{d}", .{page.skipped + page.shown});
 }
 
+fn writeSize(w: *Writer, bytes: u64) !void {
+    const mb = 1000 * 1000;
+    if (bytes >= mb) return w.print("{d}.{d} MB", .{ bytes / mb, (bytes % mb) / (mb / 10) });
+    return w.print("{d} bytes", .{bytes});
+}
+
 fn delegateQuery(corpus: *const Corpus, pattern: []const u8, diagnostic: *Writer) !Result {
     const gpa = corpus.gpa;
     if (corpus.kinds != null) return error.KindsNeedAnIndexedPattern;
@@ -1195,9 +1230,13 @@ fn delegateQuery(corpus: *const Corpus, pattern: []const u8, diagnostic: *Writer
     var sources: std.ArrayList(Source) = .empty;
     defer sources.deinit(gpa);
     try collectSources(corpus, &all, &result, &sources);
-    const paths = try gpa.alloc([]const u8, sources.items.len);
+    // ripgrep reads files of any size, so the files over the index size limit are
+    // searched here too and count as evaluated.
+    const paths = try gpa.alloc([]const u8, sources.items.len + result.large.items.len);
     defer gpa.free(paths);
-    for (sources.items, paths) |src, *path| path.* = src.path;
+    for (sources.items, paths[0..sources.items.len]) |src, *path| path.* = src.path;
+    for (result.large.items, paths[sources.items.len..]) |f, *path| path.* = f.path;
+    result.indexed += @intCast(result.large.items.len);
     if (paths.len == 0) return result;
     const rg = rg_search.find(gpa, corpus.root) catch |err| switch (err) {
         error.RgNotFound => return error.RegexNeedsRipgrep,
@@ -1585,43 +1624,155 @@ fn runQuery(corpus: *const Corpus, query: *const Query, timer: *?StageTimer) !Re
                 try liveFile(gpa, corpus.io, corpus.runtime, corpus.tree_cache, corpus.root, query, corpus.kinds, corpus.hit_limit, corpus.width, item);
                 if (stats_sink) |s| s.files_parsed += 1;
             }
-            result.most_steps = @max(result.most_steps, item.most_steps);
-            result.matched_lines += item.matched_lines;
-            for (std.enums.values(Kind)) |k| result.filtered.getPtr(k).* += item.filtered.get(k);
-            const declared = item.over_budget_lines != 0 or (item.unclassified and corpus.kinds != null and item.matched_lines != 0);
-            if (item.over_budget_lines != 0) {
-                try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });
-            } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {
-                try result.missing.append(gpa, .{ .path = item.path, .reason = .unclassified });
-            }
-            if (item.capped) result.total_exact = false;
-            const found_here = item.hits.items.len + item.extra_matches;
-            result.total += found_here;
-            if (counting or result.truncated) {
-                if (found_here != 0 and !declared) unrepresented += 1;
-                continue;
-            }
-            var kept: usize = 0;
-            for (item.hits.items) |*pending| {
-                if (result.hits >= corpus.hit_limit) {
-                    result.truncated = true;
-                    break;
-                }
-                try addHit(gpa, &result.groups, item.path, pending);
-                result.hits += 1;
-                kept += 1;
-            }
-            if (kept < found_here and !declared) {
-                if (kept == 0) unrepresented += 1 else result.cut_file = item.path;
-            }
+            try mergeItem(corpus, &result, item, counting, &unrepresented);
         }
         if (timer.*) |*t| if (stats_sink) |s| {
             s.parse_ns += t.lap();
         };
         at = end;
     }
+    for (result.large.items) |file| {
+        const counting = result.truncated;
+        if (counting and corpus.kinds != null) {
+            result.indexed += 1;
+            unrepresented += 1;
+            result.total_exact = false;
+            continue;
+        }
+        var item: FileWork = .{ .path = file.path, .content = &.{}, .spans = &.{} };
+        defer item.deinit(gpa);
+        switch (try streamLarge(corpus, query, file, counting, &item)) {
+            .searched => {},
+            .too_large, .unreadable => |why| {
+                try result.missing.append(gpa, .{ .path = file.path, .reason = if (why == .too_large) .too_large else .unreadable });
+                continue;
+            },
+        }
+        result.indexed += 1;
+        result.largest_file = @max(result.largest_file, file.size);
+        try mergeItem(corpus, &result, &item, counting, &unrepresented);
+    }
     result.unrepresented = unrepresented;
     return result;
+}
+
+fn mergeItem(corpus: *const Corpus, result: *Result, item: *FileWork, counting: bool, unrepresented: *u32) !void {
+    const gpa = corpus.gpa;
+    result.most_steps = @max(result.most_steps, item.most_steps);
+    result.matched_lines += item.matched_lines;
+    for (std.enums.values(Kind)) |k| result.filtered.getPtr(k).* += item.filtered.get(k);
+    const declared = item.over_budget_lines != 0 or (item.unclassified and corpus.kinds != null and item.matched_lines != 0);
+    if (item.over_budget_lines != 0) {
+        try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });
+    } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {
+        try result.missing.append(gpa, .{ .path = item.path, .reason = .unclassified });
+    }
+    if (item.capped) result.total_exact = false;
+    const found_here = item.hits.items.len + item.extra_matches;
+    result.total += found_here;
+    if (counting or result.truncated) {
+        if (found_here != 0 and !declared) unrepresented.* += 1;
+        return;
+    }
+    var kept: usize = 0;
+    for (item.hits.items) |*pending| {
+        if (result.hits >= corpus.hit_limit) {
+            result.truncated = true;
+            break;
+        }
+        try addHit(gpa, &result.groups, item.path, pending);
+        result.hits += 1;
+        kept += 1;
+    }
+    if (kept < found_here and !declared) {
+        if (kept == 0) unrepresented.* += 1 else result.cut_file = item.path;
+    }
+}
+
+/// Search one tracked file over the index size limit by reading it from disk in
+/// chunks cut at line ends, so a match in a 70 MB log is found rather than reported
+/// as "no match". Hits carry no symbol or kind classification (the file is not
+/// parsed); a code file with matches is marked unclassified, as for any file too
+/// large to parse. Says .too_large for a file over max_streamed_file_bytes or with a
+/// line over max_stream_line_bytes, .unreadable when it cannot be read.
+fn streamLarge(corpus: *const Corpus, query: *const Query, file: LargeFile, count_only: bool, item: *FileWork) !enum { searched, too_large, unreadable } {
+    if (file.size > max_streamed_file_bytes) return .too_large;
+    const gpa = corpus.gpa;
+    const abs = try std.fmt.allocPrint(gpa, "{s}\\{s}", .{ corpus.root, file.path });
+    defer gpa.free(abs);
+    const handle = std.Io.Dir.cwd().openFile(corpus.io, abs, .{}) catch return .unreadable;
+    defer handle.close(corpus.io);
+    var buf = try gpa.alloc(u8, stream_chunk_bytes);
+    defer gpa.free(buf);
+    const work = try query.scratch(gpa);
+    defer work.deinit(gpa);
+    item.unclassified = registry.forPath(file.path) != null;
+    var filled: usize = 0;
+    var offset: u64 = 0;
+    var first_line: u32 = 1;
+    var eof = false;
+    while (true) {
+        if (!eof) {
+            const n = handle.readPositional(corpus.io, &.{buf[filled..]}, offset) catch return .unreadable;
+            if (n == 0) eof = true;
+            offset += n;
+            filled += n;
+        }
+        if (filled == 0) break;
+        const cut: usize = if (eof) filled else if (std.mem.lastIndexOfScalar(u8, buf[0..filled], '\n')) |nl| nl + 1 else {
+            if (filled < buf.len) continue;
+            if (buf.len >= max_stream_line_bytes) return .too_large;
+            buf = try gpa.realloc(buf, @min(buf.len * 2, max_stream_line_bytes));
+            continue;
+        };
+        const chunk = buf[0..cut];
+        if (!try matchChunk(corpus, query, &work, chunk, first_line, count_only, item)) return .searched;
+        first_line +|= @intCast(std.mem.count(u8, chunk, "\n"));
+        std.mem.copyForwards(u8, buf[0 .. filled - cut], buf[cut..filled]);
+        filled -= cut;
+    }
+    return .searched;
+}
+
+/// Match the whole lines in `chunk`, numbering them from `first_line`. Returns
+/// false when a kinds filter met the hit cap, so the rest of the file is not read.
+fn matchChunk(corpus: *const Corpus, query: *const Query, work: *const text_query.Scratch, chunk: []const u8, first_line: u32, count_only: bool, item: *FileWork) !bool {
+    const gpa = corpus.gpa;
+    var cursor: LineCursor = .{ .bytes = chunk, .query = query, .number = first_line };
+    while (cursor.next()) |line| {
+        const counting = count_only or item.hits.items.len > corpus.hit_limit;
+        if (counting and corpus.kinds != null) {
+            item.capped = true;
+            return false;
+        }
+        if (counting and query.re == null and query.literals.len != 0) {
+            const n = countMatchedLines(chunk[line.start..], query.literals);
+            item.matched_lines += n;
+            item.extra_matches += n;
+            return true;
+        }
+        const found = if (query.re == null and cursor.hit != null) cursor.hit.? else switch (try query.matchLineCounting(work, line.text, &item.most_steps)) {
+            .none => continue,
+            .over_budget => {
+                item.over_budget_lines += 1;
+                continue;
+            },
+            .hit => |h| h,
+        };
+        item.matched_lines += 1;
+        if (counting) {
+            item.extra_matches += 1;
+            continue;
+        }
+        if (!kindAllowed(corpus.kinds, .code)) {
+            item.filtered.getPtr(.code).* += 1;
+            continue;
+        }
+        const text = try search_text.snippet(gpa, line.text, found.col, corpus.width);
+        errdefer gpa.free(text);
+        try item.hits.append(gpa, .{ .line = line.number, .text = text, .kind = .code, .role = null });
+    }
+    return true;
 }
 
 fn mergeSorted(items: []Source, split: usize) void {

@@ -2,6 +2,7 @@ const std = @import("std");
 const symbol = @import("../engine/symbol.zig");
 const docnode = @import("../engine/docnode.zig");
 const registry = @import("../engine/lang/registry.zig");
+const source_check = @import("../engine/source_check.zig");
 const repo = @import("repo.zig");
 const shadow = @import("shadow.zig");
 const sandbox = @import("sandbox.zig");
@@ -11,6 +12,7 @@ const batch_plan = @import("batch_plan.zig");
 const commit_plan = @import("commit_plan.zig");
 const file_move = @import("file_move.zig");
 const runner = @import("runner.zig");
+const fuzzy_match = @import("fuzzy_match.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -105,6 +107,24 @@ pub fn replaceUnique(gpa: Allocator, source: []const u8, old: []const u8, new: [
     return replaceCounted(gpa, source, old, new, all, matches.*);
 }
 
+/// replaceUnique for a file at `path`: when old matches nowhere byte for byte, the one range it
+/// matches ignoring whitespace and comments (fuzzy_match) is replaced instead and the fallback
+/// is marked used. Several exact matches stay an ambiguity error; no single normalised match,
+/// or one the fallback refuses (fuzzy_match.refusal says why), stays OldStringNotFound.
+pub fn replaceUniqueIn(gpa: Allocator, path: []const u8, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: *usize) ![]u8 {
+    if (replaceUnique(gpa, source, old, new, all, matches)) |out| {
+        return out;
+    } else |err| if (err != error.OldStringNotFound) return err;
+    const found = (try fuzzy_match.replacementFor(gpa, path, source, old, new)) orelse return error.OldStringNotFound;
+    defer gpa.free(found.text);
+    const crlf = std.mem.indexOf(u8, source, "\r\n") != null and std.mem.indexOfScalar(u8, new, '\r') == null;
+    const replacement = if (crlf) try std.mem.replaceOwned(u8, gpa, found.text, "\n", "\r\n") else try gpa.dupe(u8, found.text);
+    defer gpa.free(replacement);
+    matches.* = 1;
+    fuzzy_match.markUsed();
+    return std.mem.concat(gpa, u8, &.{ source[0..found.start], replacement, source[found.end..] });
+}
+
 fn replaceCounted(gpa: Allocator, source: []const u8, old: []const u8, new: []const u8, all: bool, matches: usize) ![]u8 {
     if (matches == 0) return error.OldStringNotFound;
     if (matches > 1 and !all) return error.OldStringNotUnique;
@@ -132,6 +152,7 @@ pub fn prepare(gpa: Allocator, runtime: *Runtime, file_abs: []const u8, rel: []u
         return .{ .rel = rel, .action = action, .base_hash = base_hash, .hash = symbol.hashOf(after), .doc_source = try gpa.dupe(u8, after) };
     };
     if (after.len > max_code_bytes) return error.DocTooLarge;
+    if (profile.source_check) |check| if (source_check.judge(check, base, after)) |fault| return source_check.refuse(rel, fault);
     const next = try Snapshot.fromSource(runtime, profile, try gpa.dupe(u8, after));
     errdefer next.destroy();
     const old = if (base) |b| try Snapshot.fromSource(runtime, profile, try gpa.dupe(u8, b)) else null;
@@ -204,7 +225,7 @@ pub fn apply(gpa: Allocator, io: std.Io, runtime: *Runtime, options: Options, ma
     const base = try readBase(gpa, io, options.file_abs, code);
     defer if (base) |b| gpa.free(b);
     const after = switch (options.change) {
-        .replace => |r| try replaceUnique(gpa, base orelse return error.FileNotFound, r.old, r.new, r.all, matches),
+        .replace => |r| try replaceUniqueIn(gpa, options.file_abs, base orelse return error.FileNotFound, r.old, r.new, r.all, matches),
         .whole => |content| try gpa.dupe(u8, content),
     };
     defer gpa.free(after);

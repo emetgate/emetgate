@@ -2,6 +2,7 @@ const std = @import("std");
 const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const Runtime = @import("emetgate").runtime.Runtime;
+const reply_contract = @import("emetgate").reply_contract;
 
 const testing = std.testing;
 const gpa = testing.allocator;
@@ -68,6 +69,10 @@ const Repo = struct {
 };
 
 fn callTool(runtime: *Runtime, root_abs: []const u8, args: anytype) !Reply {
+    return callToolWith(runtime, .{ .root = root_abs }, args);
+}
+
+fn callToolWith(runtime: *Runtime, policy: server.Policy, args: anytype) !Reply {
     var line: std.Io.Writer.Allocating = .init(gpa);
     defer line.deinit();
     var js: std.json.Stringify = .{ .writer = &line.writer };
@@ -75,7 +80,7 @@ fn callTool(runtime: *Runtime, root_abs: []const u8, args: anytype) !Reply {
 
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
-    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, .{ .root = root_abs });
+    _ = try server.handleMessageObserved(gpa, testing.io, runtime, line.written(), &out.writer, null, policy);
 
     const parsed = try std.json.parseFromSlice(Value, gpa, out.written(), .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
@@ -295,7 +300,8 @@ test "git diff folds a big diff under the budget and names the elided span" {
     var full_body = try full.payload();
     defer full_body.deinit();
     try testing.expectEqualStrings("full", full_body.value.object.get("view").?.string);
-    try testing.expect(full_body.value.object.get("output").?.string.len > body.value.object.get("output").?.string.len);
+    try testing.expect(std.mem.indexOf(u8, full_body.value.object.get("output").?.string, "@@ ") != null);
+    try testing.expect(std.mem.indexOf(u8, body.value.object.get("output").?.string, "@@ ") == null);
 
     var so = try callTool(runtime, repo.root_abs, .{ .sub = "diff", .path = repo.root_abs, .symbols_only = true });
     defer so.deinit();
@@ -305,7 +311,7 @@ test "git diff folds a big diff under the budget and names the elided span" {
     try testing.expect(so_body.value.object.get("symbol_changes") != null);
 }
 
-test "git diff full caps raw output at the line limit and marks it truncated" {
+test "git diff full pages raw output under the reply budget and names the next line" {
     var repo = try Repo.init();
     defer repo.deinit();
     var big_before: std.Io.Writer.Allocating = .init(gpa);
@@ -327,9 +333,12 @@ test "git diff full caps raw output at the line limit and marks it truncated" {
     try testing.expect(!reply.is_error);
     var body = try reply.payload();
     defer body.deinit();
-    try testing.expect(body.value.object.get("truncated").?.bool);
-    try testing.expectEqual(@as(i64, 800), body.value.object.get("lines_shown").?.integer);
-    try testing.expect(body.value.object.get("lines_shown").?.integer < body.value.object.get("lines_total").?.integer);
+    try testing.expect(reply.text.len <= reply_contract.budget(.git));
+    try testing.expectEqual(@as(i64, 1), body.value.object.get("line_start").?.integer);
+    const last = body.value.object.get("line_end").?.integer;
+    try testing.expect(last < body.value.object.get("lines_total").?.integer);
+    try testing.expectEqual(last + 1, body.value.object.get("next_line").?.integer);
+    try testing.expect(reply_contract.findTrailer(reply.text) != null);
 }
 
 // --- symbol-level diff / show / blame --------------------------------------
@@ -619,6 +628,100 @@ test "whole-file blame over the raw output cap answers in ranges under the budge
     defer missing_body.deinit();
     try testing.expectEqualStrings("GitCommandFailed", missing_body.value.object.get("error").?.string);
     try testing.expect(missing_body.value.object.get("message").?.string.len != 0);
+}
+
+test "blame detail full keeps the read budget and pages by next_line" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try manyFunctions(&text, "", "x");
+    try repo.writeFile("big.py", text.written());
+    try repo.writeFile("big.txt", text.written());
+    try repo.commitAll("add big");
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    for ([_][]const u8{ "big.py", "big.txt" }) |name| {
+        const file_abs = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ repo.root_abs, name });
+        defer gpa.free(file_abs);
+        var full = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .detail = "full" });
+        defer full.deinit();
+        errdefer std.debug.print("{s}: {d} chars\n", .{ name, full.text.len });
+        try testing.expect(!full.is_error);
+        try testing.expect(full.text.len <= 16 * 1024);
+        var body = try full.payload();
+        defer body.deinit();
+        try testing.expect(body.value.object.get("output").?.string.len != 0);
+        const next = body.value.object.get("next_line").?.integer;
+        try testing.expect(next > 1);
+
+        var page = try callTool(runtime, repo.root_abs, .{ .sub = "blame", .path = file_abs, .detail = "full", .line_start = next });
+        defer page.deinit();
+        try testing.expect(!page.is_error);
+        try testing.expect(page.text.len <= 16 * 1024);
+        var page_body = try page.payload();
+        defer page_body.deinit();
+        var first_buf: [16]u8 = undefined;
+        const first = try std.fmt.bufPrint(&first_buf, "{d} ", .{next});
+        try testing.expect(std.mem.startsWith(u8, page_body.value.object.get("output").?.string, first));
+    }
+}
+
+test "blame and diff detail full stay within the git reply budget under a huge configured read budget, and diff names its continuation" {
+    var repo = try Repo.init();
+    defer repo.deinit();
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try manyFunctions(&text, "", "x");
+    try repo.writeFile("big.py", text.written());
+    try repo.writeFile("big.txt", text.written());
+    try repo.commitAll("add big");
+    var changed: std.Io.Writer.Allocating = .init(gpa);
+    defer changed.deinit();
+    try manyFunctions(&changed, "", "x + 1");
+    try repo.writeFile("big.txt", changed.written());
+
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const policy: server.Policy = .{ .root = repo.root_abs, .read_budget = 4 * 1024 * 1024 };
+    const limit = reply_contract.budget(.git);
+    for ([_][]const u8{ "big.py", "big.txt" }) |name| {
+        const file_abs = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ repo.root_abs, name });
+        defer gpa.free(file_abs);
+        var blame = try callToolWith(runtime, policy, .{ .sub = "blame", .path = file_abs, .detail = "full" });
+        defer blame.deinit();
+        errdefer std.debug.print("blame {s}: {d} chars" ++ "\n", .{ name, blame.text.len });
+        try testing.expect(!blame.is_error);
+        try testing.expect(blame.text.len <= limit);
+        var body = try blame.payload();
+        defer body.deinit();
+        try testing.expect(body.value.object.get("next_line") != null);
+    }
+
+    const file_abs = try std.fmt.allocPrint(gpa, "{s}/big.txt", .{repo.root_abs});
+    defer gpa.free(file_abs);
+    var diff = try callToolWith(runtime, policy, .{ .sub = "diff", .path = file_abs, .detail = "full" });
+    defer diff.deinit();
+    errdefer std.debug.print("diff: {d} chars" ++ "\n", .{diff.text.len});
+    try testing.expect(!diff.is_error);
+    try testing.expect(diff.text.len <= limit);
+    var body = try diff.payload();
+    defer body.deinit();
+    const next = body.value.object.get("next_line").?.integer;
+    const trailer = reply_contract.findTrailer(diff.text) orelse return error.TestNoTrailer;
+    var want_buf: [48]u8 = undefined;
+    const want = try std.fmt.bufPrint(&want_buf, "\"line_start\":{d}", .{next});
+    try testing.expect(std.mem.indexOf(u8, trailer, want) != null);
+    try testing.expect(std.mem.indexOf(u8, trailer, "\"detail\":\"full\"") != null);
+
+    var page = try callToolWith(runtime, policy, .{ .sub = "diff", .path = file_abs, .detail = "full", .line_start = next });
+    defer page.deinit();
+    try testing.expect(!page.is_error);
+    try testing.expect(page.text.len <= limit);
+    var page_body = try page.payload();
+    defer page_body.deinit();
+    try testing.expectEqual(next, page_body.value.object.get("line_start").?.integer);
 }
 
 test "git log on a repository with no commits answers no commits yet, show refuses with NoCommitYet" {

@@ -13,6 +13,7 @@ const tsserver = @import("tsserver.zig");
 const rename = @import("../engine/rename.zig");
 const line_range = @import("../engine/line_range.zig");
 const registry = @import("../engine/lang/registry.zig");
+const source_check = @import("../engine/source_check.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -117,9 +118,23 @@ pub fn planDoc(gpa: Allocator, io: std.Io, edit: DocEdit, rel: []u8) !Prepared {
 
 pub fn plan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     return switch (edit.op) {
-        .write => planWrite(gpa, io, runtime, root, edit, rel),
+        .write => if (edit.text != null) planWrite(gpa, io, runtime, root, edit, rel) else checked(gpa, try planWrite(gpa, io, runtime, root, edit, rel)),
         .delete => if (edit.ref_text.len == 0) planFileDeletion(gpa, io, edit, rel) else planSymbolDeletion(gpa, io, runtime, edit, rel),
     };
+}
+
+/// Runs the language's source check on a symbol or node write; text writes ran it in
+/// file_edit.prepare. On a refusal the caller still owns rel, so it is kept out of deinit.
+fn checked(gpa: Allocator, p: Prepared) !Prepared {
+    const next = p.snapshot orelse return p;
+    const check = next.profile.source_check orelse return p;
+    const base: ?[]const u8 = if (p.base) |b| b.source else null;
+    const fault = source_check.judge(check, base, next.source) orelse return p;
+    const err = source_check.refuse(p.rel, fault);
+    var rest = p;
+    rest.rel = &.{};
+    rest.deinit(gpa);
+    return err;
 }
 
 fn holeBefore(_: void, a: symbol.Hole, b: symbol.Hole) bool {
@@ -164,7 +179,7 @@ fn planNodes(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, rel: []u
 
 fn planWrite(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, rel: []u8) !Prepared {
     if (edit.nodes.len != 0) return planNodes(gpa, io, runtime, edit, rel);
-    if (edit.text) |text| return planText(gpa, io, runtime, edit, text, rel);
+    if (edit.text) |text| return planText(gpa, io, runtime, root, edit, text, rel);
     const ref = try symbol.Ref.parse(gpa, edit.ref_text);
     defer ref.deinit(gpa);
     switch (edit.expected_hash) {
@@ -228,12 +243,19 @@ pub fn regionUnderFileHash(gpa: Allocator, parser: ts.Parser, source: []const u8
     return applied.source;
 }
 
-fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, edit: Edit, text: Text, rel: []u8) !Prepared {
+fn planText(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, edit: Edit, text: Text, rel: []u8) !Prepared {
     try repo.refuseInternal(rel);
     const code = registry.forPath(edit.file_abs) != null;
     const base = try file_edit.readBase(gpa, io, edit.file_abs, code);
     defer if (base) |b| gpa.free(b);
-    const after = try textAfter(gpa, base, edit.expected_hash, text);
+    // git refuses to index an ignored path, so a new file there would land on disk untracked
+    // while the reply says the write failed: refuse it before anything is written.
+    if (base == null and try repo.isIgnored(gpa, io, root, rel)) return error.IgnoredPath;
+    var matches: usize = 0;
+    const after = switch (text) {
+        .replace => |r| try file_edit.replaceUniqueIn(gpa, edit.file_abs, base orelse return error.FileNotFound, r.old, r.new, r.all, &matches),
+        else => try textAfter(gpa, base, edit.expected_hash, text),
+    };
     defer gpa.free(after);
     return file_edit.prepare(gpa, runtime, edit.file_abs, rel, base, after);
 }

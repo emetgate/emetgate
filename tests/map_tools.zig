@@ -518,8 +518,10 @@ test "map tools: explore ends with a closure that lists by signature the called 
     try expectHas(tail, "Named in the code above and defined in this repository, not shown (signature only):\n");
     try expectHas(tail, "  Logger.log  packages/common/services/logger.ts:14  ");
     try expectLacks(tail, "Injector.loadInstance  ");
-    try expectHas(tail, map_tools.closure_footer ++ "\n");
-    try testing.expect(std.mem.endsWith(u8, text, map_tools.closure_footer ++ "\n"));
+    // More functions match "instance loaded" than the reply sends, so it says so instead of "everything".
+    try expectHas(tail, "The index matched ");
+    try expectLacks(tail, map_tools.closure_footer);
+    try testing.expect(std.mem.endsWith(u8, text, map_tools.closure_partial_footer ++ "\n"));
     try expectLacks(text, "emetgate_");
 }
 
@@ -535,7 +537,7 @@ test "map tools: evidence ends with a closure of the definitions its code calls"
     try expectHas(result.text, "public async loadInstance(wrapper: InstanceWrapper");
     try expectHas(result.text, "-- closure\nWhole above: 1 functions. By address above: 0.\n");
     try expectHas(result.text, "  Logger.log  packages/common/services/logger.ts:14  ");
-    try testing.expect(std.mem.endsWith(u8, result.text, map_tools.closure_footer));
+    try testing.expect(std.mem.endsWith(u8, result.text, map_tools.evidence_footer));
 }
 
 test "map tools: the closure takes call sites, constructed classes and constant names, and leaves plain words and keywords out" {

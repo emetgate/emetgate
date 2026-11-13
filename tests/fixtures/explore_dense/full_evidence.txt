@@ -1,0 +1,21 @@
+Evidence (explain) for invoiceDiscount (src/billing/invoice.ts), taxRate (src/billing/tax.ts). Each file is named once and its lines follow as line  code; every elided range is declared; the last line is the certificate.
+src/billing/invoice.ts
+25  export function invoiceDiscount(total: number): number {  [target invoiceDiscount 8175ebbf]
+26      // a plain body comment about the invoice discount
+27      const cut = total * 0.1;
+28  
+29      /* a block comment about the discount */
+30      return total - cut;
+31  }
+src/billing/tax.ts
+2  export function taxRate(sum: number): number {  [target taxRate 691ee417]
+3      // high invoice sums pay more tax
+4      if (sum > 1000) {
+5          return 0.2;
+6      }
+7      return 0.1;
+8  }
+✓ 2 targets in 2 files @83ab
+-- closure
+Whole above: 2 functions. By address above: 0.
+Answer from it now; for a named item that is not above, write that it is not in the evidence.

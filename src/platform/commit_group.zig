@@ -112,6 +112,14 @@ pub const Result = union(enum) {
     }
 };
 
+pub fn admit(gpa: Allocator, io: std.Io, root: []const u8, message: []const u8) !?Result {
+    return switch (try rules.messageGate(gpa, io, root, message)) {
+        .ok => null,
+        .violated => |report| .{ .rule_violation = report },
+        .failed => |failure| .{ .rule_check_failed = failure },
+    };
+}
+
 /// One file the pending receipts attest, with the digest the latest receipt
 /// claims for it. `after == null` means the receipts attest a deletion.
 const Attested = struct {
@@ -295,11 +303,7 @@ pub fn commit(gpa: Allocator, io: std.Io, root: []const u8, options: Options) !R
         .violated => |report| return .{ .rule_violation = report },
         .failed => |failure| return .{ .rule_check_failed = failure },
     }
-    switch (try rules.messageGate(gpa, io, root, options.message)) {
-        .ok => {},
-        .violated => |report| return .{ .rule_violation = report },
-        .failed => |failure| return .{ .rule_check_failed = failure },
-    }
+    if (try admit(gpa, io, root, options.message)) |refused| return refused;
     if (options.runtime) |runtime| {
         var staged: commit_guard.Staged = .{};
         defer staged.deinit(gpa);

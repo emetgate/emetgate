@@ -5,6 +5,7 @@ const server = @import("emetgate").server;
 const telemetry = @import("emetgate").telemetry;
 const bounded_run = @import("emetgate").bounded_run;
 const memory = @import("emetgate").memory;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -86,6 +87,16 @@ const Repo = struct {
         self.tmp.cleanup();
     }
 
+    /// emetgate_write with the file's current file_hash when it exists, as an overwrite needs.
+    fn write(self: *Repo, file: []const u8, content: []const u8) !Reply {
+        const sub = try std.fmt.allocPrint(gpa, "repo/{s}", .{file});
+        defer gpa.free(sub);
+        const before = self.tmp.dir.readFileAlloc(testing.io, sub, gpa, .unlimited) catch return self.call("emetgate_write", .{ .file = file, .content = content });
+        defer gpa.free(before);
+        const hex = symbol.formatHash(symbol.fileHash(before));
+        return self.call("emetgate_write", .{ .file = file, .content = content, .hash = @as([]const u8, &hex) });
+    }
+
     fn call(self: *Repo, tool: []const u8, args: anytype) !Reply {
         var line: std.Io.Writer.Allocating = .init(gpa);
         defer line.deinit();
@@ -122,7 +133,7 @@ test "regression gate: a test written first is accepted as debt, commit is refus
     var repo = try Repo.init(&.{.{ .rel = "test_old.py", .text = passing }});
     defer repo.deinit();
 
-    var first = try repo.call("emetgate_write", .{ .file = "test_calc.py", .content = calc_test });
+    var first = try repo.write("test_calc.py", calc_test);
     defer first.deinit();
     errdefer std.debug.print("{s}\n", .{first.text});
     try testing.expect(!first.is_error);
@@ -142,7 +153,7 @@ test "regression gate: a test written first is accepted as debt, commit is refus
     try testing.expectEqualStrings("test_calc.py", named[0].string);
     try testing.expect(refused.string("fix").len != 0);
 
-    var fixed = try repo.call("emetgate_write", .{ .file = "calc.py", .content = calc_ok });
+    var fixed = try repo.write("calc.py", calc_ok);
     defer fixed.deinit();
     errdefer std.debug.print("{s}\n", .{fixed.text});
     try testing.expect(!fixed.is_error);
@@ -160,7 +171,7 @@ test "regression gate: a write that breaks a test that passed is rejected and na
     var repo = try Repo.init(&.{ .{ .rel = "calc.py", .text = calc_ok }, .{ .rel = "test_calc.py", .text = calc_test } });
     defer repo.deinit();
 
-    var broken = try repo.call("emetgate_write", .{ .file = "calc.py", .content = calc_wrong });
+    var broken = try repo.write("calc.py", calc_wrong);
     defer broken.deinit();
     errdefer std.debug.print("{s}\n", .{broken.text});
     try testing.expect(broken.is_error);
@@ -181,14 +192,14 @@ fn expectEveryForm(forms: []const []const u8, test_file: File, regressed: []cons
         defer repo.deinit();
         repo.test_command = form;
 
-        var broken = try repo.call("emetgate_write", .{ .file = "calc.py", .content = calc_wrong });
+        var broken = try repo.write("calc.py", calc_wrong);
         defer broken.deinit();
         errdefer std.debug.print("{s}: {s}\n", .{ form, broken.text });
         try testing.expect(broken.is_error);
         try testing.expectEqualStrings(regressed, broken.string("regressed"));
         try repo.expectFile("calc.py", calc_ok);
 
-        var added = try repo.call("emetgate_write", .{ .file = new_file.rel, .content = new_file.text });
+        var added = try repo.write(new_file.rel, new_file.text);
         defer added.deinit();
         errdefer std.debug.print("{s}: {s}\n", .{ form, added.text });
         try testing.expect(!added.is_error);
@@ -221,12 +232,12 @@ test "regression gate: a pytest that refuses the report flags still judges the w
     defer repo.deinit();
     repo.test_command = "python -m pytest -p no:junitxml";
 
-    var fine = try repo.call("emetgate_write", .{ .file = "calc.py", .content = "def add(a, b):\n    return b + a\n" });
+    var fine = try repo.write("calc.py", "def add(a, b):\n    return b + a\n");
     defer fine.deinit();
     errdefer std.debug.print("{s}\n", .{fine.text});
     try testing.expect(!fine.is_error);
 
-    var broken = try repo.call("emetgate_write", .{ .file = "calc.py", .content = calc_wrong });
+    var broken = try repo.write("calc.py", calc_wrong);
     defer broken.deinit();
     errdefer std.debug.print("{s}\n", .{broken.text});
     try testing.expect(broken.is_error);
@@ -249,19 +260,19 @@ test "regression gate: a type error that was already there blocks nothing and le
     repo.test_command = "python -m pytest";
     repo.typecheck_command = "python check.py";
 
-    var fine = try repo.call("emetgate_write", .{ .file = "calc.py", .content = "def add(a, b):\n    return b + a\n" });
+    var fine = try repo.write("calc.py", "def add(a, b):\n    return b + a\n");
     defer fine.deinit();
     errdefer std.debug.print("{s}\n", .{fine.text});
     try testing.expect(!fine.is_error);
     try testing.expect(std.mem.indexOf(u8, fine.text, "legacy.py") != null);
 
-    var broken = try repo.call("emetgate_write", .{ .file = "calc.py", .content = calc_wrong });
+    var broken = try repo.write("calc.py", calc_wrong);
     defer broken.deinit();
     errdefer std.debug.print("{s}\n", .{broken.text});
     try testing.expect(broken.is_error);
     try testing.expectEqualStrings("test_calc.py::test_add", broken.string("regressed"));
 
-    var added = try repo.call("emetgate_write", .{ .file = "fresh.py", .content = old_type_error });
+    var added = try repo.write("fresh.py", old_type_error);
     defer added.deinit();
     errdefer std.debug.print("{s}\n", .{added.text});
     try testing.expect(added.is_error);
@@ -274,7 +285,7 @@ test "regression gate: a catalog rule for one language leaves the files of anoth
     const id = try memory.remember(gpa, testing.io, repo.root_abs, .global, "no console.log", true, "forbid:console.log", null);
     defer gpa.free(id);
 
-    var python = try repo.call("emetgate_write", .{ .file = "text.py", .content = "HELP = 'call console.log here'\n" });
+    var python = try repo.write("text.py", "HELP = 'call console.log here'\n");
     defer python.deinit();
     errdefer std.debug.print("{s}\n", .{python.text});
     try testing.expect(!python.is_error);
@@ -290,7 +301,7 @@ test "regression gate: a test that failed before the session neither blocks a wr
     var repo = try Repo.init(&.{ .{ .rel = "test_old.py", .text = passing }, .{ .rel = "test_broken.py", .text = "def test_broken():\n    assert False\n" } });
     defer repo.deinit();
 
-    var write = try repo.call("emetgate_write", .{ .file = "other.py", .content = "X = 1\n" });
+    var write = try repo.write("other.py", "X = 1\n");
     defer write.deinit();
     errdefer std.debug.print("{s}\n", .{write.text});
     try testing.expect(!write.is_error);

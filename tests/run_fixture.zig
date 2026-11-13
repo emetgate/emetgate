@@ -153,7 +153,10 @@ pub fn call(policy: server.Policy, args: anytype) !Reply {
 
     const parsed = try std.json.parseFromSlice(Value, gpa, out.written(), .{ .allocate = .alloc_always });
     errdefer parsed.deinit();
-    const result = parsed.value.object.get("result") orelse return error.NotAToolResult;
+    const result = parsed.value.object.get("result") orelse {
+        const refused = parsed.value.object.get("error") orelse return error.NotAToolResult;
+        return .{ .parsed = parsed, .is_error = true, .text = refused.object.get("message").?.string };
+    };
     const content = result.object.get("content").?.array.items[0];
     return .{ .parsed = parsed, .is_error = result.object.get("isError").?.bool, .text = content.object.get("text").?.string };
 }

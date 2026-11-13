@@ -171,7 +171,6 @@ test "batch create through the tool: the gate test sees an untracked project fil
     defer result.deinit(testing.allocator);
     errdefer diagnostics.printResult(result);
     try testing.expect(result == .committed);
-    try testing.expect(!trace.baseline.skipped);
     try testing.expect(!trace.baseline.failing);
     try testing.expect(!trace.baseline.unverified);
 }

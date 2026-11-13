@@ -19,8 +19,10 @@ const read_cache = @import("read_cache.zig");
 const raw_reply = @import("raw_reply.zig");
 const tool_names = @import("../engine/tool_names.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 const Snapshot = @import("../engine/loader.zig").Snapshot;
+const reply_contract = @import("reply_contract.zig");
 
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
@@ -31,7 +33,6 @@ const getString = tool_result.getString;
 const success = tool_result.success;
 const failure = tool_result.failure;
 
-const max_read_bytes = 16 * 1024;
 const max_read_source_bytes = 64 * 1024 * 1024;
 const max_list_entries = 2000;
 const max_match_text = 200;
@@ -67,10 +68,23 @@ fn hasExtension(file: []const u8, ext: []const u8) bool {
 pub const Source = struct {
     runtime: *Runtime,
     tree_cache: ?*tree_cache_mod.TreeCache,
+    sent_ledger: ?*sent_ledger.Ledger = null,
+};
+
+/// Where a render notes the file bytes it put in a reply: the session's sent
+/// ledger, under the repo-relative path. A null ledger notes nothing.
+pub const Note = struct {
+    ledger: ?*sent_ledger.Ledger = null,
+    rel: []const u8 = "",
+
+    pub fn shown(self: Note, bytes: []const u8, start: usize, end: usize, form: sent_ledger.Form) Allocator.Error!void {
+        const ledger = self.ledger orelse return;
+        try ledger.recordBytes(self.rel, bytes, .{ .start = @intCast(start), .end = @intCast(end) }, form);
+    }
 };
 
 pub const max_many_files = 32;
-pub const max_many_bytes = 64 * 1024;
+pub const max_many_bytes = reply_contract.budget(.read_file_many);
 pub const section_head = "== ";
 pub const not_sent_fix = std.fmt.comptimePrint("these did not fit in the {d} KiB reply of one call; read them in another emetgate_read_file call, a file still over the cap alone or by line_start/line_end", .{max_many_bytes / 1024});
 
@@ -81,6 +95,10 @@ pub const Options = struct {
     heading: ?[]const u8 = null,
     line_start: ?i64 = null,
     line_end: ?i64 = null,
+    /// Where a cut view resumes, copied from the trailer of the reply that cut
+    /// it: a byte offset into line_start's line, into a pointer's value or a
+    /// heading's section, or the first row of a key, heading or outline tree.
+    offset: ?i64 = null,
 
     fn over(base: Options, value: Value) Options {
         const pointer = tool_result.getString(value, "pointer");
@@ -97,6 +115,7 @@ pub const Options = struct {
             .heading = heading orelse base.heading,
             .line_start = line_start orelse if (own_selector) null else base.line_start,
             .line_end = line_end orelse if (own_selector) null else base.line_end,
+            .offset = tool_result.getInt(value, "offset") orelse base.offset,
         };
     }
 };
@@ -104,6 +123,8 @@ pub const Options = struct {
 const Wanted = struct {
     file: []const u8,
     options: Options,
+    /// The entry as given in files, or a string of the top-level file.
+    item: Value,
 };
 
 pub fn callReadFile(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, source: ?Source, raw_code: bool) !ToolResult {
@@ -136,13 +157,13 @@ fn wantedFiles(gpa: Allocator, args: Value, list: Value) ![]Wanted {
     errdefer gpa.free(wanted);
     var n: usize = 0;
     if (single) |f| {
-        wanted[0] = .{ .file = f, .options = base };
+        wanted[0] = .{ .file = f, .options = base, .item = .{ .string = f } };
         n = 1;
     }
     for (items, 0..) |item, i| {
         wanted[n] = switch (item) {
-            .string => |f| .{ .file = f, .options = base },
-            .object => .{ .file = getString(item, "file") orelse return tool_result.missing("files[{d}].file (string)", .{i}), .options = Options.over(base, item) },
+            .string => |f| .{ .file = f, .options = base, .item = item },
+            .object => .{ .file = getString(item, "file") orelse return tool_result.missing("files[{d}].file (string)", .{i}), .options = Options.over(base, item), .item = item },
             else => return tool_result.missing("files[{d}] (path string or {{file,...}} object)", .{i}),
         };
         n += 1;
@@ -165,9 +186,20 @@ fn callReadMany(gpa: Allocator, io: std.Io, args: Value, list: Value, event: *te
     defer out.deinit();
     var not_sent: std.ArrayList([]const u8) = .empty;
     defer not_sent.deinit(gpa);
+    var not_sent_items: std.ArrayList(Value) = .empty;
+    defer not_sent_items.deinit(gpa);
     var sent: usize = 0;
     var full: usize = 0;
+    // The tail that names files left out repeats each name three times (the
+    // not_sent list, the trailer's text and its call), escaped. Before a file
+    // is placed, room is kept for the tail of every file that could still be
+    // left out: those already left out and those after it.
+    var pending_cost: usize = 0;
+    for (wanted) |want| pending_cost += tailCost(want.file);
     for (wanted) |want| {
+        pending_cost -= tailCost(want.file);
+        const tail_room = if (pending_cost == 0) 0 else 700 + not_sent_fix.len + pending_cost;
+        const cap = max_many_bytes -| tail_room;
         var one: telemetry.Event = .{ .tool = event.tool };
         var section: std.Io.Writer.Allocating = .init(gpa);
         defer section.deinit();
@@ -182,9 +214,11 @@ fn callReadMany(gpa: Allocator, io: std.Io, args: Value, list: Value, event: *te
         defer if (converted) |c| gpa.free(c);
         const text = converted orelse section.written();
         const size = section_head.len + want.file.len + 1 + text.len + 1;
-        if (out.written().len + size > max_many_bytes) {
+        if (out.written().len + size > cap) {
             if (mirror) |m| m.rollback(&journal);
             try not_sent.append(gpa, want.file);
+            try not_sent_items.append(gpa, want.item);
+            pending_cost += tailCost(want.file);
             continue;
         }
         if (mirror) |m| {
@@ -207,10 +241,70 @@ fn callReadMany(gpa: Allocator, io: std.Io, args: Value, list: Value, event: *te
         try tool_names.writeJson(&js, not_sent_fix);
         try js.endObject();
         try out.writer.writeByte('\n');
+        try writeManyRest(gpa, &out.writer, args, not_sent.items, not_sent_items.items);
     }
     event.chars_emetgate = sent;
     event.chars_fullfile = full;
     return success(gpa, &out);
+}
+
+/// Reply bytes one left-out file adds to the tail: its name escaped in the
+/// not_sent list and the trailer's call (with any options of its entry), and
+/// plain in the trailer's text.
+fn tailCost(file: []const u8) usize {
+    return 6 * file.len + 96;
+}
+
+/// The trailer of a files call that left files out: the same call with files
+/// narrowed to the entries not sent and no top-level file.
+fn writeManyRest(gpa: Allocator, w: *Writer, args: Value, names: []const []const u8, items: []const Value) !void {
+    var call: std.json.ObjectMap = .empty;
+    defer call.deinit(gpa);
+    if (args == .object) {
+        var it = args.object.iterator();
+        while (it.next()) |field| {
+            if (std.mem.eql(u8, field.key_ptr.*, "file") or std.mem.eql(u8, field.key_ptr.*, "files")) continue;
+            try call.put(gpa, field.key_ptr.*, field.value_ptr.*);
+        }
+    }
+    var list: std.json.Array = .init(gpa);
+    defer list.deinit();
+    try list.appendSlice(items);
+    try call.put(gpa, "files", .{ .array = list });
+    var left: std.Io.Writer.Allocating = .init(gpa);
+    defer left.deinit();
+    for (names, 0..) |name, i| {
+        if (i != 0) try left.writer.writeAll(", ");
+        try left.writer.writeAll(name);
+    }
+    try reply_contract.writeTrailer(w, "{d} file(s) over the {d}-char reply: {s}", .{ names.len, max_many_bytes, left.written() }, "emetgate_read_file", Value{ .object = call });
+}
+
+/// The trailer of a cut line view. The view began at line `start`, byte
+/// `offset` of that line, and was asked to run to line `end`; `line_len` is the
+/// length of line `start` without its newline.
+fn writeLinesRest(w: *Writer, file: []const u8, start: i64, end: i64, offset: usize, line_len: usize, c: reply_contract.Cut, rest_bytes: usize) !void {
+    if (!c.split_line) {
+        const next = start + @as(i64, @intCast(c.lines));
+        return reply_contract.writeTrailer(w, "lines {d}-{d} ({d} bytes)", .{ next, end, rest_bytes }, "emetgate_read_file", .{ .file = file, .line_start = next, .line_end = end });
+    }
+    const resume_at = offset + c.kept.len;
+    if (end > start) {
+        return reply_contract.writeTrailer(w, "bytes {d}-{d} of line {d} (a line longer than the reply), and lines {d}-{d}", .{ resume_at, line_len, start, start + 1, end }, "emetgate_read_file", .{ .file = file, .line_start = start, .line_end = end, .offset = resume_at });
+    }
+    return reply_contract.writeTrailer(w, "bytes {d}-{d} of line {d} (a line longer than the reply)", .{ resume_at, line_len, start }, "emetgate_read_file", .{ .file = file, .line_start = start, .line_end = end, .offset = resume_at });
+}
+
+fn lineLen(bytes: []const u8, from: usize) usize {
+    const nl = std.mem.indexOfScalarPos(u8, bytes, from, '\n') orelse bytes.len;
+    const end = if (nl > from and bytes[nl - 1] == '\r') nl - 1 else nl;
+    return end - from;
+}
+
+fn offsetOf(options: Options) !usize {
+    const o = options.offset orelse return 0;
+    if (o < 0) return error.InvalidOffset;
+    return @intCast(o);
 }
 
 fn seenBefore(gpa: Allocator, mirror: ?*mirror_mod.Mirror, comptime fmt: []const u8, args: anytype, hash: symbol.Hash, file_hash: symbol.Hash, force: bool) !?u32 {
@@ -228,25 +322,30 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     defer gpa.free(bytes);
     if (looksBinary(bytes)) return error.BinaryFile;
     const force = options.force;
+    const note: Note = .{ .ledger = if (source) |s| s.sent_ledger else null, .rel = place.rel };
 
     // One precedence for every file type: a line range wins, then heading
     // (Markdown) or pointer (JSON), then the type's default view.
+    const offset = try offsetOf(options);
     if (options.line_start != null or options.line_end != null) {
-        return renderRange(gpa, file, bytes, options.line_start, options.line_end, force, mirror, w, event);
+        return renderRangeFrom(gpa, file, bytes, options.line_start, options.line_end, offset, force, mirror, note, w, event);
     }
     if (!options.raw and hasExtension(file, ".json")) {
-        return renderJson(gpa, file, bytes, options.pointer, force, mirror, w, event);
+        return renderJson(gpa, file, bytes, options.pointer, offset, force, mirror, note, w, event);
     }
     if (!options.raw and hasExtension(file, ".md")) {
-        return renderMarkdown(gpa, file, bytes, options.heading, force, mirror, w, event);
+        return renderMarkdown(gpa, file, bytes, options.heading, offset, force, mirror, note, w, event);
     }
-    if (profile != null and bytes.len > outline.threshold) {
+    if (!options.raw and profile != null and bytes.len > outline.threshold) {
         if (source) |s| {
-            if (try renderOutline(gpa, io, s, place.abs, file, bytes, force, mirror, w, event)) return;
+            if (try renderOutline(gpa, io, s, place.abs, file, bytes, offset, force, mirror, w, event)) return;
         }
     }
 
-    const shown = utf8Prefix(bytes, max_read_bytes);
+    // The default view: the file from its start, cut at a line end to the
+    // reply budget, the rest named with the line range that returns it.
+    const c = reply_contract.cut(bytes, reply_contract.room(.read_file), .json);
+    const shown = c.kept;
     if (!std.unicode.utf8ValidateSlice(shown)) return error.NotUtf8;
     const file_hash = symbol.fileHash(bytes);
     const hash = symbol.hashOf(shown);
@@ -256,6 +355,7 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
         return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
     }
     if (shown.len == bytes.len) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    try note.shown(bytes, 0, shown.len, .exact);
     event.chars_emetgate = shown.len;
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
@@ -272,31 +372,36 @@ fn renderReadFile(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u
     try js.write(shown);
     try js.endObject();
     try w.writeByte('\n');
+    if (!c.whole) try writeLinesRest(w, file, 1, lastLine(bytes), 0, lineLen(bytes, 0), c, bytes.len - shown.len);
 }
 
-fn renderOutline(gpa: Allocator, io: std.Io, source: Source, abs: []const u8, file: []const u8, bytes: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !bool {
+fn renderOutline(gpa: Allocator, io: std.Io, source: Source, abs: []const u8, file: []const u8, bytes: []const u8, offset: usize, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !bool {
     const snapshot = if (source.tree_cache) |cache| try cache.load(source.runtime, io, abs) else try Snapshot.load(source.runtime, io, .cwd(), abs);
     defer if (source.tree_cache == null) snapshot.destroy();
     const table = snapshot.symbols() catch |err| switch (err) {
         error.OutOfMemory => return err,
         error.SourceHasErrors => return false,
     };
-    const text = try outline.render(gpa, file, snapshot.source, table);
-    defer gpa.free(text);
+    const rendered = try outline.render(gpa, file, snapshot.source, table, .{ .offset = offset, .limit = reply_contract.room(.read_file) });
+    defer gpa.free(rendered.text);
+    const text = rendered.text;
     event.chars_fullfile = bytes.len;
     const file_hash = symbol.fileHash(snapshot.source);
     const hash = symbol.hashOf(text);
-    if (try seenBefore(gpa, mirror, "outline:{s}", .{file}, hash, file_hash, force)) |since| {
+    if (try seenBefore(gpa, mirror, "outline:{s}@{d}", .{ file, offset }, hash, file_hash, force)) |since| {
         event.chars_emetgate = 0;
         try wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
         return true;
     }
     event.chars_emetgate = text.len;
     try w.writeAll(text);
+    if (rendered.next) |next| {
+        try reply_contract.writeTrailer(w, "outline rows {d}-{d} of {d}", .{ next + 1, rendered.total, rendered.total }, "emetgate_read_file", .{ .file = file, .offset = next });
+    }
     return true;
 }
 
-fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]const u8, offset: usize, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const parser = ts.Parser.create();
     defer parser.deinit();
@@ -309,27 +414,11 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
     if (pointer) |p| {
         const entry = try json_pointer.resolve(gpa, tree, p);
         defer gpa.free(entry.pointer);
-        if (try seenBefore(gpa, mirror, "json:{s}#{s}", .{ file, p }, entry.hash, file_hash, force)) |since| {
+        if (try seenBefore(gpa, mirror, "json:{s}#{s}@{d}", .{ file, p, offset }, entry.hash, file_hash, force)) |since| {
             event.chars_emetgate = 0;
             return wire.writeUnchangedSince(w, file, p, entry.hash, file_hash, since);
         }
-        const text = tree.text(entry.node);
-        event.chars_emetgate = text.len;
-        const hex = symbol.formatHash(entry.hash);
-        var js: std.json.Stringify = .{ .writer = w };
-        try js.beginObject();
-        try js.objectField("file");
-        try js.write(file);
-        try wire.writeFileHash(&js, file_hash);
-        try js.objectField("pointer");
-        try js.write(p);
-        try js.objectField("hash");
-        try js.write(hex[0..]);
-        try js.objectField("value");
-        try js.write(text);
-        try js.endObject();
-        try w.writeByte('\n');
-        return;
+        return writeSection(file, bytes, file_hash, "pointer", p, "value", entry.hash, entry.node.startByte(), entry.node.endByte(), offset, note, w, event);
     }
 
     const entries = try json_pointer.topLevel(gpa, tree);
@@ -341,9 +430,16 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
     try js.objectField("file");
     try js.write(file);
     try wire.writeFileHash(&js, file_hash);
+    const first = @min(offset, entries.len);
+    const shown = treeRows(entries.len, first, entries, struct {
+        fn size(entry: anytype) usize {
+            return reply_contract.encodedLen(entry.pointer, .json) + 96;
+        }
+    }.size);
+    try writeTreeCount(&js, entries.len, first, shown);
     try js.objectField("keys");
     try js.beginArray();
-    for (entries) |entry| {
+    for (entries[first..shown]) |entry| {
         const hex = symbol.formatHash(entry.hash);
         try js.beginObject();
         try js.objectField("pointer");
@@ -360,12 +456,76 @@ fn renderJson(gpa: Allocator, file: []const u8, bytes: []const u8, pointer: ?[]c
     }
     try js.endArray();
     try js.endObject();
-    return sendTree(gpa, file, "keys:{s}", out.written(), file_hash, force, mirror, w, event);
+    try sendTree(gpa, file, "keys", first, out.written(), file_hash, force, mirror, w, event);
+    if (shown < entries.len) try reply_contract.writeTrailer(w, "keys {d}-{d} of {d}", .{ shown + 1, entries.len, entries.len }, "emetgate_read_file", .{ .file = file, .offset = shown });
 }
 
-fn sendTree(gpa: Allocator, file: []const u8, comptime fmt: []const u8, text: []const u8, file_hash: symbol.Hash, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+/// How many rows of a tree fit the reply, starting at row `first`: returns the
+/// index of the first row left out (or `total`). At least one row is shown.
+fn treeRows(total: usize, first: usize, entries: anytype, comptime size: anytype) usize {
+    var used: usize = 0;
+    const limit = reply_contract.room(.read_file);
+    var i = first;
+    while (i < total) : (i += 1) {
+        used += size(entries[i]);
+        if (used > limit and i > first) return i;
+    }
+    return total;
+}
+
+fn writeTreeCount(js: *std.json.Stringify, total: usize, first: usize, shown: usize) !void {
+    if (first == 0 and shown == total) return;
+    try js.objectField("total");
+    try js.write(total);
+    try js.objectField("offset");
+    try js.write(first);
+    try js.objectField("status");
+    try js.write("partial");
+}
+
+/// A JSON value or Markdown section, from byte `offset` of its text, cut to
+/// the reply budget; a cut names the offset that resumes it.
+fn writeSection(file: []const u8, bytes: []const u8, file_hash: symbol.Hash, comptime selector: []const u8, key: []const u8, comptime field: []const u8, hash: symbol.Hash, start: usize, end: usize, offset: usize, note: Note, w: *Writer, event: *telemetry.Event) !void {
+    const whole = bytes[start..end];
+    const from = reply_contract.charStart(whole, offset);
+    const c = reply_contract.cut(whole[from..], reply_contract.room(.read_file) -| (2 * key.len), .json);
+    try note.shown(bytes, start + from, start + from + c.kept.len, .exact);
+    event.chars_emetgate = c.kept.len;
+    const hex = symbol.formatHash(hash);
+    var js: std.json.Stringify = .{ .writer = w };
+    try js.beginObject();
+    try js.objectField("file");
+    try js.write(file);
+    try wire.writeFileHash(&js, file_hash);
+    try js.objectField(selector);
+    try js.write(key);
+    try js.objectField("hash");
+    try js.write(hex[0..]);
+    if (from != 0 or !c.whole) {
+        try js.objectField("bytes");
+        try js.write(whole.len);
+        try js.objectField("offset");
+        try js.write(from);
+        try js.objectField("status");
+        try js.write("partial");
+    }
+    try js.objectField(field);
+    try js.write(c.kept);
+    try js.endObject();
+    try w.writeByte('\n');
+    if (c.whole) return;
+    const resume_at = from + c.kept.len;
+    const left = "bytes {d}-{d} of the " ++ field ++ " at " ++ selector ++ " {s}";
+    if (comptime std.mem.eql(u8, selector, "pointer")) {
+        try reply_contract.writeTrailer(w, left, .{ resume_at, whole.len, key }, "emetgate_read_file", .{ .file = file, .pointer = key, .offset = resume_at });
+    } else {
+        try reply_contract.writeTrailer(w, left, .{ resume_at, whole.len, key }, "emetgate_read_file", .{ .file = file, .heading = key, .offset = resume_at });
+    }
+}
+
+fn sendTree(gpa: Allocator, file: []const u8, comptime kind: []const u8, offset: usize, text: []const u8, file_hash: symbol.Hash, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
     const hash = symbol.hashOf(text);
-    if (try seenBefore(gpa, mirror, fmt, .{file}, hash, file_hash, force)) |since| {
+    if (try seenBefore(gpa, mirror, kind ++ ":{s}@{d}", .{ file, offset }, hash, file_hash, force)) |since| {
         event.chars_emetgate = 0;
         return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
     }
@@ -374,7 +534,7 @@ fn sendTree(gpa: Allocator, file: []const u8, comptime fmt: []const u8, text: []
     try w.writeByte('\n');
 }
 
-fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: ?[]const u8, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: ?[]const u8, offset: usize, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const parser = ts.Parser.create();
     defer parser.deinit();
@@ -385,27 +545,11 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
 
     if (heading) |h| {
         const entry = try markdown_heading.resolve(gpa, tree, h);
-        if (try seenBefore(gpa, mirror, "heading:{s}#{s}", .{ file, h }, entry.hash, file_hash, force)) |since| {
+        if (try seenBefore(gpa, mirror, "heading:{s}#{s}@{d}", .{ file, h, offset }, entry.hash, file_hash, force)) |since| {
             event.chars_emetgate = 0;
             return wire.writeUnchangedSince(w, file, h, entry.hash, file_hash, since);
         }
-        const text = tree.text(entry.node);
-        event.chars_emetgate = text.len;
-        const hex = symbol.formatHash(entry.hash);
-        var js: std.json.Stringify = .{ .writer = w };
-        try js.beginObject();
-        try js.objectField("file");
-        try js.write(file);
-        try wire.writeFileHash(&js, file_hash);
-        try js.objectField("heading");
-        try js.write(h);
-        try js.objectField("hash");
-        try js.write(hex[0..]);
-        try js.objectField("section");
-        try js.write(text);
-        try js.endObject();
-        try w.writeByte('\n');
-        return;
+        return writeSection(file, bytes, file_hash, "heading", h, "section", entry.hash, entry.node.startByte(), entry.node.endByte(), offset, note, w, event);
     }
 
     const entries = try markdown_heading.headingTree(gpa, tree);
@@ -417,9 +561,16 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
     try js.objectField("file");
     try js.write(file);
     try wire.writeFileHash(&js, file_hash);
+    const first = @min(offset, entries.len);
+    const shown = treeRows(entries.len, first, entries, struct {
+        fn size(entry: anytype) usize {
+            return reply_contract.encodedLen(entry.heading, .json) + 96;
+        }
+    }.size);
+    try writeTreeCount(&js, entries.len, first, shown);
     try js.objectField("headings");
     try js.beginArray();
-    for (entries) |entry| {
+    for (entries[first..shown]) |entry| {
         const hex = symbol.formatHash(entry.hash);
         try js.beginObject();
         try js.objectField("heading");
@@ -434,10 +585,17 @@ fn renderMarkdown(gpa: Allocator, file: []const u8, bytes: []const u8, heading: 
     }
     try js.endArray();
     try js.endObject();
-    return sendTree(gpa, file, "headings:{s}", out.written(), file_hash, force, mirror, w, event);
+    try sendTree(gpa, file, "headings", first, out.written(), file_hash, force, mirror, w, event);
+    if (shown < entries.len) try reply_contract.writeTrailer(w, "headings {d}-{d} of {d}", .{ shown + 1, entries.len, entries.len }, "emetgate_read_file", .{ .file = file, .offset = shown });
 }
 
-pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, w: *Writer, event: *telemetry.Event) !void {
+pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
+    return renderRangeFrom(gpa, file, bytes, line_start, line_end, 0, force, mirror, note, w, event);
+}
+
+/// Lines line_start..line_end from byte `offset` of the first line, cut at a
+/// line end to the reply budget; the trailer names the call for the rest.
+pub fn renderRangeFrom(gpa: Allocator, file: []const u8, bytes: []const u8, line_start: ?i64, line_end: ?i64, offset: usize, force: bool, mirror: ?*mirror_mod.Mirror, note: Note, w: *Writer, event: *telemetry.Event) !void {
     if (!std.unicode.utf8ValidateSlice(bytes)) return error.NotUtf8;
     const start = line_start orelse return error.MissingArgument;
     const end = line_end orelse return error.MissingArgument;
@@ -447,7 +605,10 @@ pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_sta
     if (start > last) return error.LineOutOfRange;
     const shown_end = @min(end, last);
     const span = try line_range.byteRangeForLines(bytes, @intCast(start), @intCast(shown_end));
-    const text = bytes[span.start..span.end];
+    const first_len = lineLen(bytes, span.start);
+    const from = span.start + reply_contract.charStart(bytes[span.start..span.end], @min(offset, first_len));
+    const c = reply_contract.cut(bytes[from..span.end], reply_contract.room(.read_file) -| (2 * file.len), .json);
+    const text = c.kept;
     const hash = symbol.hashOf(text);
     const file_hash = symbol.fileHash(bytes);
     event.chars_fullfile = bytes.len;
@@ -455,12 +616,14 @@ pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_sta
         event.chars_emetgate = 0;
         return read_cache.writeCoveredSince(w, file, null, file_hash, since);
     }
-    if (try seenBefore(gpa, mirror, "range:{s}:{d}-{d}", .{ file, start, end }, hash, file_hash, force)) |since| {
+    if (try seenBefore(gpa, mirror, "range:{s}:{d}-{d}@{d}", .{ file, start, end, from - span.start }, hash, file_hash, force)) |since| {
         event.chars_emetgate = 0;
         return wire.writeUnchangedSince(w, file, null, hash, file_hash, since);
     }
+    try note.shown(bytes, from, from + text.len, .exact);
     event.chars_emetgate = text.len;
     const hex = symbol.formatHash(hash);
+    const last_shown: i64 = if (c.whole) shown_end else if (c.split_line) start else start + @as(i64, @intCast(c.lines)) - 1;
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
     try js.objectField("file");
@@ -469,8 +632,17 @@ pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_sta
     try js.objectField("start_line");
     try js.write(start);
     try js.objectField("end_line");
-    try js.write(shown_end);
-    if (shown_end < end) {
+    try js.write(last_shown);
+    if (from != span.start) {
+        try js.objectField("offset");
+        try js.write(from - span.start);
+    }
+    if (!c.whole) {
+        try js.objectField("status");
+        try js.write("partial");
+        try js.objectField("requested_end_line");
+        try js.write(end);
+    } else if (shown_end < end) {
         try js.objectField("status");
         try js.write("partial");
         try js.objectField("requested_end_line");
@@ -485,6 +657,7 @@ pub fn renderRange(gpa: Allocator, file: []const u8, bytes: []const u8, line_sta
     try js.write(text);
     try js.endObject();
     try w.writeByte('\n');
+    if (!c.whole) try writeLinesRest(w, file, start, shown_end, from - span.start, first_len, c, span.end - from - text.len);
 }
 
 fn lastLine(bytes: []const u8) i64 {
@@ -495,18 +668,25 @@ fn lastLine(bytes: []const u8) i64 {
 
 pub fn callList(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
     const dir = if (args) |a| getString(a, "dir") orelse "." else ".";
+    const offset = if (args) |a| tool_result.getInt(a, "offset") orelse 0 else 0;
     event.label = "list";
     event.file = dir;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderList(gpa, io, root, dir, &buffer.writer) catch |err| {
+    renderList(gpa, io, root, dir, offset, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn writeFolders(gpa: Allocator, io: std.Io, dir_abs: []const u8, js: *std.json.Stringify) !void {
+fn isFile(io: std.Io, abs: []const u8) bool {
+    const stat = std.Io.Dir.cwd().statFile(io, abs, .{}) catch return false;
+    return stat.kind == .file;
+}
+
+/// The file system folders directly under dir, as names, kept while they fit `limit`.
+fn writeFolders(gpa: Allocator, io: std.Io, dir_abs: []const u8, limit: usize, js: *std.json.Stringify) !void {
     var dir = std.Io.Dir.openDirAbsolute(io, dir_abs, .{ .iterate = true }) catch return;
     defer dir.close(io);
     var names: std.ArrayList([]u8) = .empty;
@@ -527,16 +707,72 @@ fn writeFolders(gpa: Allocator, io: std.Io, dir_abs: []const u8, js: *std.json.S
             return std.mem.order(u8, a, b) == .lt;
         }
     }.lessThan);
+    var used: usize = 0;
+    var kept: usize = 0;
+    for (names.items) |name| {
+        used += reply_contract.encodedLen(name, .json) + 3;
+        if (used > limit) break;
+        kept += 1;
+    }
     try js.objectField("folders");
-    try js.write(names.items);
+    try js.write(names.items[0..kept]);
 }
 
-fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w: *Writer) !void {
+fn writeShownPath(gpa: Allocator, js: *std.json.Stringify, path: []const u8) !void {
+    if (display_path.prefix.len == 0) return js.write(path);
+    const shown = try std.fmt.allocPrint(gpa, "{s}{s}", .{ display_path.prefix, path });
+    defer gpa.free(shown);
+    try js.write(shown);
+}
+
+fn pathCost(path: []const u8) usize {
+    return reply_contract.encodedLen(path, .json) + display_path.prefix.len + 3;
+}
+
+const Folder = struct { name: []const u8, files: usize };
+
+/// Lists the files under dir. When every path fits the reply they come back
+/// flat, as paths from the repository root. Otherwise the reply is a tree one
+/// level deep: each subfolder with the number of files below it, then the
+/// files directly in dir, paged by `offset` over that list; a cut ends with
+/// the trailer naming the offset that continues it, and a subfolder's files
+/// are listed by calling again with that folder as dir.
+fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, offset_arg: i64, w: *Writer) !void {
+    if (offset_arg < 0) return error.InvalidOffset;
+    const offset: usize = @intCast(offset_arg);
     const place = try repo.jail(gpa, io, root, dir);
     defer place.deinit(gpa);
-    const files = try shadow.workingFiles(gpa, io, place.root);
+    if (isFile(io, place.abs)) {
+        const parent = std.fs.path.dirname(dir) orelse ".";
+        wire.setFix("{s} is a file: read it with emetgate_read_file file:\"{s}\", or list its folder with emetgate_list dir:\"{s}\"", .{ dir, dir, if (parent.len == 0) "." else parent });
+        return error.DirIsFile;
+    }
+    var outside: std.ArrayList([]u8) = .empty;
+    defer {
+        for (outside.items) |p| gpa.free(p);
+        outside.deinit(gpa);
+    }
+    const files = try shadow.workingListing(gpa, io, place.root, &outside);
     defer gpa.free(files);
     defer shadow.freeFileList(gpa, files);
+    var skipped: std.ArrayList([]const u8) = .empty;
+    defer skipped.deinit(gpa);
+    var skipped_cost: usize = 0;
+    for (outside.items) |p| {
+        if (!inDirectory(std.mem.trimEnd(u8, p, "/"), place.rel)) continue;
+        try skipped.append(gpa, p);
+        skipped_cost += pathCost(p);
+    }
+
+    var matched: std.ArrayList([]const u8) = .empty;
+    defer matched.deinit(gpa);
+    var flat_cost: usize = 0;
+    for (files) |f| {
+        if (!inDirectory(f, place.rel)) continue;
+        try matched.append(gpa, f);
+        flat_cost += pathCost(f);
+    }
+    const room = reply_contract.room(.list) -| (2 * dir.len) -| skipped_cost;
 
     var js: std.json.Stringify = .{ .writer = w };
     try js.beginObject();
@@ -548,31 +784,82 @@ fn renderList(gpa: Allocator, io: std.Io, root: ?[]const u8, dir: []const u8, w:
     } else {
         try js.write(dir);
     }
-    try js.objectField("files");
-    try js.beginArray();
-    var count: usize = 0;
-    var truncated = false;
-    for (files) |f| {
-        if (!inDirectory(f, place.rel)) continue;
-        if (count == max_list_entries) {
-            truncated = true;
-            break;
-        }
-        if (display_path.prefix.len == 0) {
-            try js.write(f);
+    try js.objectField("total");
+    try js.write(matched.items.len);
+    if (skipped.items.len != 0) {
+        try js.objectField("skipped_outside");
+        try js.beginArray();
+        for (skipped.items) |p| try writeShownPath(gpa, &js, p);
+        try js.endArray();
+    }
+    if (offset == 0 and flat_cost <= room) {
+        try js.objectField("files");
+        try js.beginArray();
+        for (matched.items) |f| try writeShownPath(gpa, &js, f);
+        try js.endArray();
+        try writeFolders(gpa, io, place.abs, room - flat_cost, &js);
+        try js.endObject();
+        try w.writeByte('\n');
+        return;
+    }
+
+    // The tree one level deep: subfolders with their counts, then direct files.
+    var folders: std.StringArrayHashMapUnmanaged(usize) = .empty;
+    defer folders.deinit(gpa);
+    var direct: std.ArrayList([]const u8) = .empty;
+    defer direct.deinit(gpa);
+    const skip = if (place.rel.len == 0) 0 else place.rel.len + 1;
+    for (matched.items) |f| {
+        const rest = f[skip..];
+        if (std.mem.indexOfAny(u8, rest, "/\\")) |sep| {
+            const slot = try folders.getOrPut(gpa, f[0 .. skip + sep]);
+            slot.value_ptr.* = if (slot.found_existing) slot.value_ptr.* + 1 else 1;
         } else {
-            const shown = try std.fmt.allocPrint(gpa, "{s}{s}", .{ display_path.prefix, f });
-            defer gpa.free(shown);
-            try js.write(shown);
+            try direct.append(gpa, f);
         }
-        count += 1;
+    }
+    folders.sort(struct {
+        keys: []const []const u8,
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            return std.mem.order(u8, ctx.keys[a], ctx.keys[b]) == .lt;
+        }
+    }{ .keys = folders.keys() });
+    const entries = folders.count() + direct.items.len;
+    const first = @min(offset, entries);
+    var used: usize = 0;
+    var next = first;
+    while (next < entries) : (next += 1) {
+        const path = if (next < folders.count()) folders.keys()[next] else direct.items[next - folders.count()];
+        used += pathCost(path) + 24;
+        if (used > room and next > first) break;
+    }
+    try js.objectField("offset");
+    try js.write(first);
+    try js.objectField("subfolders");
+    try js.beginArray();
+    var i = first;
+    while (i < @min(next, folders.count())) : (i += 1) {
+        try js.beginObject();
+        try js.objectField("dir");
+        try writeShownPath(gpa, &js, folders.keys()[i]);
+        try js.objectField("files");
+        try js.write(folders.values()[i]);
+        try js.endObject();
     }
     try js.endArray();
-    try writeFolders(gpa, io, place.abs, &js);
-    if (truncated) {
-        try js.objectField("truncated");
-        try js.write(true);
+    try js.objectField("files");
+    try js.beginArray();
+    while (i < next) : (i += 1) try writeShownPath(gpa, &js, direct.items[i - folders.count()]);
+    try js.endArray();
+    try js.objectField("hint");
+    try js.write("files below a subfolder are counted, not listed: emetgate_list with that folder as dir lists them");
+    if (next < entries) {
+        try js.objectField("status");
+        try js.write("partial");
     }
     try js.endObject();
     try w.writeByte('\n');
+    if (next < entries) {
+        try reply_contract.writeTrailer(w, "entries {d}-{d} of {d} (subfolders, then files directly in the folder)", .{ next + 1, entries, entries }, "emetgate_list", .{ .dir = dir, .offset = next });
+    }
 }

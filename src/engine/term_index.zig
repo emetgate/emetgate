@@ -125,8 +125,16 @@ pub const Index = struct {
     }
 
     pub fn rank(self: *const Index, arena: Allocator, query: []const u8, limit: usize) ![]const Hit {
+        return (try self.rankCounted(arena, query, limit)).hits;
+    }
+
+    pub const Ranked = struct { hits: []const Hit, matched: usize };
+
+    /// The best `limit` documents for `query`, and how many documents scored above
+    /// zero in all, so a caller can say how many matches it did not consider.
+    pub fn rankCounted(self: *const Index, arena: Allocator, query: []const u8, limit: usize) !Ranked {
         const n = self.lengths.items.len;
-        if (n == 0) return &.{};
+        if (n == 0) return .{ .hits = &.{}, .matched = 0 };
         var wanted: Wanted = .{ .arena = arena, .index = self };
         try eachTerm(query, &wanted);
         const scores = try arena.alloc(f64, n);
@@ -148,7 +156,7 @@ pub const Index = struct {
             if (s > 0) try hits.append(arena, .{ .doc = @intCast(doc), .score = s });
         }
         std.mem.sort(Hit, hits.items, {}, Hit.greater);
-        return hits.items[0..@min(hits.items.len, limit)];
+        return .{ .hits = hits.items[0..@min(hits.items.len, limit)], .matched = hits.items.len };
     }
 };
 

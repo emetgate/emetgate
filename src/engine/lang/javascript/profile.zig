@@ -20,6 +20,7 @@ const field_shape: ecma.FieldShape = .{ .node = "field_definition", .name_field 
 
 pub const profile: Profile = .{
     .name = "javascript",
+    .grammar_verifies = true,
     .extensions = &.{ ".js", ".mjs", ".cjs", ".jsx" },
     .grammar = grammar,
     .functions = &ecma.function_nodes,

@@ -15,6 +15,7 @@ const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
+const baseline = @import("../platform/baseline.zig");
 const repo = @import("../platform/repo.zig");
 const shadow = @import("../platform/shadow.zig");
 const cache_gc = @import("../platform/cache_gc.zig");
@@ -24,6 +25,7 @@ const mirror_mod = @import("mirror.zig");
 const ledger_mod = @import("../agent/ledger.zig");
 const compact_mod = @import("../agent/compact.zig");
 const known_files_mod = @import("known_files.zig");
+const sent_ledger_mod = @import("../engine/sent_ledger.zig");
 const context_epoch = @import("context_epoch.zig");
 const tree_cache_mod = @import("../engine/tree_cache.zig");
 const batch_stage_mod = @import("batch_stage.zig");
@@ -31,6 +33,7 @@ const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const map_tools = @import("map_tools.zig");
 const find_tools = @import("find_tools.zig");
+const arg_check = @import("arg_check.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -103,7 +106,11 @@ pub const tool_defs = [_]Tool{
         .name = "emetgate_symbols",
         .read_only = true,
         .description = "Lists a source file's symbols.",
-        .props = &.{.{ .name = "file", .desc = "" }},
+        .props = &.{
+            .{ .name = "file", .desc = "" },
+            .{ .name = "within", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
+        },
     },
     .{
         .name = "emetgate_skeleton",
@@ -112,6 +119,7 @@ pub const tool_defs = [_]Tool{
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
@@ -126,7 +134,7 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
             .{ .name = "nodes", .desc = "", .optional = true, .ty = "boolean" },
-            .{ .name = "detail", .desc = "\"full\" or \"budgeted\"", .optional = true },
+            .{ .name = "detail", .desc = "", .optional = true },
         },
     },
     .{
@@ -191,7 +199,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_read_file",
         .read_only = true,
-        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files 16 KiB.",
+        .description = "Reads up to 32 files: line_start/line_end gives those lines of any file; else .json key tree or pointer value, .md headings or heading section, other files from the top.",
         .props = &.{
             .{ .name = "file", .desc = "", .optional = true },
             .{ .name = "files", .desc = "", .optional = true, .ty = "array" },
@@ -201,13 +209,17 @@ pub const tool_defs = [_]Tool{
             .{ .name = "line_start", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
             .{ .name = "force", .desc = "", .optional = true, .ty = "boolean" },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
         .name = "emetgate_list",
         .read_only = true,
-        .description = "Lists up to 2000 tracked files under dir.",
-        .props = &.{.{ .name = "dir", .desc = "", .optional = true }},
+        .description = "Lists files under dir.",
+        .props = &.{
+            .{ .name = "dir", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
+        },
     },
     .{
         .name = "emetgate_search",
@@ -231,10 +243,11 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_scan",
         .read_only = true,
-        .description = "Lists up to 100 violations of one check.",
+        .description = "Lists up to 100 violations of one check; offset pages by next_offset.",
         .props = &.{
             .{ .name = "check", .desc = "e.g. forbid:networkidle" },
             .{ .name = "where", .desc = "file, dir/ or file#symbol", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
     .{
@@ -245,7 +258,7 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_git",
         .read_only = true,
-        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; blame takes commit and a line range.",
+        .description = "Read-only git, symbol-anchored, within " ++ budget_text ++ " chars; detail:\"full\" is raw. log pages by next_cursor; diff, show, blame and args page by next_line as line_start.",
         .props = &.{
             .{ .name = "sub", .desc = "status, diff, log, show, blame, or with args any read-only git e.g. grep" },
             .{ .name = "dir", .desc = nested_dir_desc, .optional = true, .nested = true },
@@ -291,6 +304,7 @@ pub const tool_defs = [_]Tool{
         .props = &.{
             .{ .name = "file", .desc = "" },
             .{ .name = "content", .desc = "" },
+            .{ .name = "hash", .desc = "", .optional = true },
         },
     },
     .{
@@ -309,10 +323,11 @@ pub const tool_defs = [_]Tool{
     .{
         .name = "emetgate_expand",
         .read_only = true,
-        .description = "Returns the full body of a result collapsed to a #handle. Pass the handle from the collapsed line; the body is verified byte-identical, or flagged stale when its source files changed. With file, returns only that file's section of the result (e.g. one file from a search match-map).",
+        .description = "Returns the full body behind a collapsed #handle (only with --compact), flagged stale if its files changed. file narrows it to one file's section.",
         .props = &.{
             .{ .name = "handle", .desc = "the handle from a collapsed result line" },
-            .{ .name = "file", .desc = "optional: return only this file's section", .optional = true },
+            .{ .name = "file", .desc = "", .optional = true },
+            .{ .name = "offset", .desc = "", .optional = true, .ty = "integer" },
         },
     },
 };
@@ -336,6 +351,7 @@ pub const Served = struct {
     mirror: mirror_mod.Mirror,
     stash: ledger_mod.Ledger,
     known_files: known_files_mod.KnownFiles,
+    sent_ledger: sent_ledger_mod.Ledger,
     context: context_epoch.Watch,
     tree_cache: tree_cache_mod.TreeCache,
     search: search_session_mod.Session,
@@ -365,6 +381,7 @@ pub const Served = struct {
             .mirror = .init(gpa, policy.mirror_enabled),
             .stash = .init(gpa),
             .known_files = .init(gpa),
+            .sent_ledger = .init(gpa),
             .context = .init(gpa, options.environ),
             .tree_cache = .init(gpa),
             .search = search_session_mod.Session.init(gpa, io, root, .{}),
@@ -379,6 +396,7 @@ pub const Served = struct {
         self.policy.mirror = &self.mirror;
         self.policy.stash = &self.stash;
         self.policy.known_files = &self.known_files;
+        self.policy.sent_ledger = &self.sent_ledger;
         self.policy.context = if (policy.mirror_trusted or options.environ == null) null else &self.context;
         self.policy.tree_cache = &self.tree_cache;
         self.policy.search_session = &self.search;
@@ -389,6 +407,8 @@ pub const Served = struct {
         self.search.start();
         if (self.map_session) |ms| {
             ms.store_override = options.fact_store;
+            ms.explore_mode = policy.explore_mode;
+            ms.ledger = &self.sent_ledger;
             ms.start();
         }
         if (self.find_session) |fs| fs.start();
@@ -415,6 +435,7 @@ pub const Served = struct {
         self.mirror.deinit();
         self.stash.deinit();
         self.known_files.deinit();
+        self.sent_ledger.deinit();
         self.context.deinit();
         if (self.workspace) |ws| self.gpa.free(ws);
         if (self.root) |r| self.gpa.free(r);
@@ -428,6 +449,7 @@ pub const Served = struct {
 
 pub fn serve(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, policy: Policy, environ: *const std.process.Environ.Map) !void {
     try tool_names.setPrefix(policy.tool_prefix);
+    baseline.allow_unverified = policy.allow_unverified;
     var served: Served = undefined;
     served.open(gpa, io, runtime, policy, .{ .environ = environ });
     defer served.close();
@@ -509,6 +531,20 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
     const params = getField(msg, "params") orelse return writeRpcError(out, id, -32602, "Missing params");
     const name = getString(params, "name") orelse return writeRpcError(out, id, -32602, "Missing tool name");
     const arguments = getField(params, "arguments");
+    tool_result.clearMissing();
+    const refusal = arg_check.check(gpa, name, arguments, policy) catch |err| switch (err) {
+        error.MissingArgument => return writeMissingArgument(out, id),
+        else => |e| return e,
+    };
+    if (refusal) |refused| {
+        defer gpa.free(refused);
+        if (observer) |obs| {
+            var refused_event: telemetry.Event = .{ .tool = name };
+            refused_event.fail("InvalidArguments");
+            obs.record(gpa, io, refused_event);
+        }
+        return writeToolResult(out, id, refused, true);
+    }
 
     var event: telemetry.Event = .{ .tool = name };
     tool_result.clearMissing();
@@ -521,7 +557,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         return switch (err) {
             error.UnknownTool => writeRpcError(out, id, -32602, "Unknown tool"),
             error.MissingArgument => writeMissingArgument(out, id),
-            else => writeRpcError(out, id, -32603, "Internal error"),
+            else => writeToolFailure(gpa, out, id, err),
         };
     };
     defer gpa.free(result.text);
@@ -555,8 +591,9 @@ pub fn callAny(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8, 
             (if (stash.find(h)) |entry| fileRoot(gpa, io, policy.root, entry.targets) else std.mem.zeroes(ledger_mod.Hash))
         else
             std.mem.zeroes(ledger_mod.Hash);
-        const exp = try compact_mod.expand(gpa, stash, handle, current, file);
-        if (exp.stale and file == null) {
+        const offset = tool_result.getInt(args, "offset") orelse 0;
+        const exp = try compact_mod.expandPage(gpa, stash, handle, current, file, @intCast(@max(offset, 0)));
+        if (exp.stale and file == null and offset == 0) {
             if (compact_mod.parseHandle(handle)) |h| {
                 if (stash.find(h)) |entry| {
                     if (entry.tool.len != 0) {
@@ -885,6 +922,16 @@ pub fn writeToolResult(out: *Writer, id: Value, text: []const u8, is_error: bool
     try js.endObject();
 }
 
+/// An error that escaped a tool handler still answers as a tool error with its
+/// name and a fix, not as a bare JSON-RPC "Internal error" the model cannot act on.
+pub fn writeToolFailure(gpa: Allocator, out: *Writer, id: Value, err: anyerror) !void {
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err)) catch return writeRpcError(out, id, -32603, "Internal error");
+    const text = std.mem.trimEnd(u8, buffer.written(), "\n");
+    return writeToolResult(out, id, text, true);
+}
+
 pub const missing_argument_message = "Missing or invalid argument";
 
 fn writeMissingArgument(out: *Writer, id: Value) !void {
@@ -913,4 +960,21 @@ fn envelope(js: *std.json.Stringify, id: Value) !void {
     try js.write("2.0");
     try js.objectField("id");
     try js.write(id);
+}
+
+test "an error that escapes a tool answers as a tool error with its name and fix, not a bare -32603" {
+    const testing = std.testing;
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeToolFailure(testing.allocator, &out.writer, .{ .integer = 7 }, error.InvalidOp);
+    const parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    try testing.expect(parsed.value.object.get("error") == null);
+    const result = parsed.value.object.get("result").?.object;
+    try testing.expect(result.get("isError").?.bool);
+    const text = result.get("content").?.array.items[0].object.get("text").?.string;
+    const reply = try std.json.parseFromSlice(Value, testing.allocator, text, .{});
+    defer reply.deinit();
+    try testing.expectEqualStrings("InvalidOp", reply.value.object.get("error").?.string);
+    try testing.expect(std.mem.indexOf(u8, reply.value.object.get("fix").?.string, "\"delete\"") != null);
 }

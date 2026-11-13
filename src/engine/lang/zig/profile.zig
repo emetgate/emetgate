@@ -34,6 +34,7 @@ const never_matching_literal_values: LiteralValues = .{
 
 pub const profile: Profile = .{
     .name = "zig",
+    .grammar_verifies = true,
     .extensions = &.{".zig"},
     .grammar = grammar,
     .functions = &function_nodes,

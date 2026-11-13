@@ -11,10 +11,10 @@ pub const Call = struct {
     args: ?Value,
 };
 
-const Alias = struct { []const u8, []const []const u8 };
+pub const Alias = struct { []const u8, []const []const u8 };
 
-const file_aliases = [_][]const u8{ "path", "file_path", "filepath", "filename" };
-const item_aliases = [_]Alias{
+pub const file_aliases = [_][]const u8{ "path", "file_path", "filepath", "filename" };
+pub const item_aliases = [_]Alias{
     .{ "file", &file_aliases },
     .{ "old_string", &.{ "old_str", "old_text", "old" } },
     .{ "new_string", &.{ "new_str", "new_text", "new" } },
@@ -24,25 +24,25 @@ const item_aliases = [_]Alias{
     .{ "body", &.{ "content", "new_body", "code" } },
     .{ "content", &.{ "body", "new_content", "text" } },
 };
-const write_aliases = [_]Alias{
+pub const write_aliases = [_]Alias{
     .{ "file", &file_aliases },
     .{ "content", &.{ "body", "text", "code", "new_content" } },
 };
-const edit_aliases = [_]Alias{
+pub const edit_aliases = [_]Alias{
     .{ "file", &file_aliases },
     .{ "old_string", &.{ "old_str", "old_text", "old" } },
     .{ "new_string", &.{ "new_str", "new_text", "new" } },
 };
-const rename_aliases = [_]Alias{
+pub const rename_aliases = [_]Alias{
     .{ "file", &file_aliases },
     .{ "symbol", &.{ "old_name", "name" } },
     .{ "new_name", &.{ "to", "new", "newName", "rename_to" } },
 };
-const move_aliases = [_]Alias{
+pub const move_aliases = [_]Alias{
     .{ "file", &file_aliases },
     .{ "target_file", &.{ "target", "to", "destination", "dest" } },
 };
-const move_file_aliases = [_]Alias{
+pub const move_file_aliases = [_]Alias{
     .{ "from", &.{ "file", "source", "src", "path", "from_path" } },
     .{ "to", &.{ "target", "destination", "dest", "to_path", "new_path" } },
     .{ "from_hash", &.{ "hash", "file_hash" } },

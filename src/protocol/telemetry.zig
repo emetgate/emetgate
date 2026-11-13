@@ -29,6 +29,9 @@ pub const Event = struct {
     chars_fullfile: ?usize = null,
     chars_sr: ?usize = null,
     footer: ?bool = null,
+    /// What a refused call left on disk, when it is not "disk untouched" (a later step of
+    /// emetgate_change refused after its edits were written).
+    disk: ?[]const u8 = null,
 
     pub fn fail(self: *Event, name: []const u8) void {
         self.outcome = .failed;
@@ -172,6 +175,8 @@ pub fn renderFooter(w: *Writer, event: Event, session: Session) !void {
     if (event.mutating) {
         if (event.outcome == .failed and event.trace.commit_attempted) {
             try w.writeAll(" · failed in commit phase, run emetgate recover");
+        } else if (event.disk) |what| {
+            try w.print(" · {s}", .{what});
         } else if (event.outcome != .committed) {
             try w.writeAll(" · disk untouched");
         }
@@ -255,6 +260,12 @@ test "rejected footer names the reason, says disk untouched and shows no saving"
     const text = try footer(.{ .tool = "emetgate_try", .outcome = .rejected, .reason = "tests_failed", .mutating = true, .chars_emetgate = 10, .chars_fullfile = 100, .trace = .{ .gate = .full, .confidence = .bounded } }, .{ .edits = 2 });
     defer testing.allocator.free(text);
     try testing.expectEqualStrings("emetgate ✗ rejected · tests_failed · gate full · disk untouched · session 2 edits", text);
+}
+
+test "a refusal after written edits names what is on disk instead of disk untouched" {
+    const text = try footer(.{ .tool = "emetgate_change", .label = "change", .mutating = true, .outcome = .rejected, .reason = "rule_violation", .disk = "edits written, commit refused" }, .{});
+    defer testing.allocator.free(text);
+    try testing.expectEqualStrings("emetgate ✗ rejected · rule_violation · edits written, commit refused · session 0 edits", text);
 }
 
 test "a failure after the commit began never claims disk untouched" {

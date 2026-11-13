@@ -208,6 +208,7 @@ test "open run: a missing command, a non-boolean raw and a timeout out of range 
     var raw = try fixture.call(policy, .{ .command = "git status", .raw = "yes" });
     defer raw.deinit();
     try testing.expect(raw.is_error);
+    try testing.expect(std.mem.indexOf(u8, raw.text, "raw (boolean)") != null);
     var zero = try fixture.call(policy, .{ .command = "git status", .timeout_s = 0 });
     defer zero.deinit();
     try testing.expect(zero.is_error);

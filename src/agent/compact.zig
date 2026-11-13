@@ -1,6 +1,7 @@
 const std = @import("std");
 const ledger_mod = @import("ledger.zig");
 const wrap = @import("wrap.zig");
+const reply_contract = @import("../protocol/reply_contract.zig");
 
 const Allocator = std.mem.Allocator;
 const Ledger = ledger_mod.Ledger;
@@ -171,6 +172,12 @@ pub fn parseHandle(handle_text: []const u8) ?Handle {
 }
 
 pub fn expand(gpa: Allocator, ledger: *Ledger, handle_text: []const u8, current_root: Hash, file: ?[]const u8) Allocator.Error!Expansion {
+    return expandPage(gpa, ledger, handle_text, current_root, file, 0);
+}
+
+/// The stashed body from byte `offset`, cut at a line end to the expand reply
+/// budget; a cut ends with the trailer naming the offset that continues it.
+pub fn expandPage(gpa: Allocator, ledger: *Ledger, handle_text: []const u8, current_root: Hash, file: ?[]const u8, offset: usize) Allocator.Error!Expansion {
     const handle = parseHandle(handle_text) orelse {
         return .{ .text = try gpa.dupe(u8, "expand: malformed handle; copy the exact handle from the collapsed line"), .found = false, .stale = false };
     };
@@ -180,13 +187,23 @@ pub fn expand(gpa: Allocator, ledger: *Ledger, handle_text: []const u8, current_
     const body = if (file) |f| sliceFile(got.body, f) else got.body;
     const missing = file != null and body.len == got.body.len and !fileHeaderPresent(got.body, file.?);
     const stale = got.state == .stale;
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    errdefer out.deinit();
+    const w = &out.writer;
     if (stale) {
-        return .{ .text = try std.fmt.allocPrint(gpa, "(stale: the source changed since this was captured; re-run the tool for the current version)\n{s}", .{body}), .found = true, .stale = true };
+        w.writeAll("(stale: the source changed since this was captured; re-run the tool for the current version)\n") catch return error.OutOfMemory;
+    } else if (missing) {
+        w.print("(no section for \"{s}\" in this result; returning the whole body)\n", .{file.?}) catch return error.OutOfMemory;
     }
-    if (missing) {
-        return .{ .text = try std.fmt.allocPrint(gpa, "(no section for \"{s}\" in this result; returning the whole body)\n{s}", .{ file.?, body }), .found = true, .stale = false };
+    const from = reply_contract.charStart(body, offset);
+    const cut = reply_contract.cut(body[from..], reply_contract.room(.expand), .plain);
+    w.writeAll(cut.kept) catch return error.OutOfMemory;
+    if (!cut.whole) {
+        if (cut.kept.len != 0 and cut.kept[cut.kept.len - 1] != '\n') w.writeByte('\n') catch return error.OutOfMemory;
+        const next = from + cut.kept.len;
+        reply_contract.writeTrailer(w, "bytes {d}-{d} of {s}", .{ next, body.len, handle_text }, "emetgate_expand", .{ .handle = handle_text, .file = file, .offset = next }) catch return error.OutOfMemory;
     }
-    return .{ .text = try gpa.dupe(u8, body), .found = true, .stale = false };
+    return .{ .text = try out.toOwnedSlice(), .found = true, .stale = stale };
 }
 
 fn isHeaderLine(line: []const u8) bool {

@@ -225,6 +225,26 @@ pub fn summarize(report: sandbox.Report) Summary {
     return summary;
 }
 
+/// Whether a run's summary shows that at least one test ran: a run with no summary line
+/// (a silent `exit 0`, or no runner output at all), one that collected no tests, or one whose
+/// every count is zero ran none.
+pub fn ranSome(summary: Summary) bool {
+    const text = summary.text();
+    if (text.len == 0 or std.mem.startsWith(u8, text, no_tests_note)) return false;
+    var counted = false;
+    var parts = std.mem.splitSequence(u8, text, separator);
+    while (parts.next()) |line| {
+        const tokens = tokenize(line);
+        for (tokens.slice()) |token| {
+            if (token.kind != .count) continue;
+            var halves = std.mem.splitScalar(u8, token.text, '/');
+            while (halves.next()) |half| if (!isZero(half)) return true;
+            counted = true;
+        }
+    }
+    return !counted;
+}
+
 pub const no_tests_note = "no tests collected; treated as passing";
 
 const pytest_no_tests: u32 = 5;

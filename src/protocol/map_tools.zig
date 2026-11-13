@@ -14,6 +14,7 @@ const evidence = @import("../engine/evidence.zig");
 const facts_query = @import("../engine/facts_query.zig");
 const facts_store = @import("../engine/facts_store.zig");
 const test_reach = @import("../engine/test_reach.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const tool_result = @import("tool_result.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -26,7 +27,33 @@ pub const reply_budget: usize = 63_000;
 pub const closure_budget: usize = 2_500;
 pub const closure_max_defs: usize = 2;
 pub const closure_signature: usize = 140;
-pub const closure_footer = "This is everything the index matched. Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.";
+/// Room kept in a dense reply for the closure's fixed lines around its rows.
+pub const closure_reserve: usize = 360;
+pub const closure_footer = "This is everything the index matched. " ++ closure_answer;
+/// The closure's last line when the reply did not show every matching function: the
+/// counts line above it says how many matched and how many were shown.
+pub const closure_partial_footer = "Not everything the index matched is above. For more, ask a narrower question, or put the names you need in names (a named definition is sent whole); search lists every textual use. " ++ closure_answer;
+/// Evidence returns named definitions, not a ranked match set, so it claims no completeness.
+pub const evidence_footer = "Answer from it now; for a named item that is not above, write that it is not in the evidence.";
+/// Opens the line that names code files left out of the fact store because their lines are
+/// minified or generated: explore and evidence know no function of them.
+pub const minified_note = "Not indexed, minified or generated (long lines), so no function of them is above:";
+pub const closure_answer = "Answer from it now. Call evidence once, with the names you need, only if a body listed here by signature or address decides the answer; otherwise write that it is not in the evidence.";
+
+/// What an explore reply covered of the functions the index matched.
+pub const Coverage = struct {
+    /// Distinct matching definitions: named, named in the question, and ranked, including
+    /// the ranked ones past max_ranked that were never considered.
+    matched: usize,
+    /// Of those, shown whole above (or inside a block shown whole, or already shown).
+    whole: usize,
+    /// Of those, listed by path and line.
+    addressed: usize,
+
+    pub fn complete(self: Coverage) bool {
+        return self.whole + self.addressed >= self.matched;
+    }
+};
 pub const pointer_budget: usize = 6_000;
 pub const evidence_budget: usize = 16_000;
 pub const header_chars: usize = 16;
@@ -61,6 +88,45 @@ pub const mention_count = [_]u32{ 2, 4 };
 pub const mention_chance = [_]f64{ 0.013, 0.029, 0.044 };
 pub const useful_ratio = [_]f64{ 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20, 0.30 };
 pub const useful_chance = [_]f64{ 0.009, 0.012, 0.031, 0.045, 0.094, 0.110, 0.199, 0.482, 0.589 };
+
+/// How explore and evidence fill their replies: `full` sends whole, verbatim code within one
+/// large budget; `dense` uses the smaller budgets below and compresses the code it was not asked for.
+pub const ExploreMode = enum { full, dense };
+pub const explore_mode_flag = "--explore-mode";
+pub const dense_first_budget: usize = 20_000;
+pub const dense_later_budget: usize = 8_000;
+pub const dense_evidence_budget: usize = 20_000;
+pub const dense_closure_budget: usize = 1_200;
+pub const dense_pointer_budget: usize = 1_200;
+pub const dense_marker = " [dense]";
+pub const dense_note = "Code marked [dense] has its blank lines and body comments removed and one space per indent level; read the exact text by its path and line before editing it.\n";
+pub const already_shown = "(already shown, unchanged)";
+
+/// Says whether the model already holds this definition's body unchanged: path relative to the
+/// root with '/', first and last line of the body, and the definition's content hash. When it
+/// answers true the reply names the definition in one line instead of sending the body again.
+pub const SeenFn = *const fn (path: []const u8, start: u32, end: u32, hash: facts.Hash) bool;
+
+pub const ServeArgs = struct { mode: ExploreMode, rest: []const []const u8 };
+
+/// Takes `--explore-mode (full | dense)` out of the server arguments and returns the others in
+/// order. Null when the value is missing or unknown or the flag is given twice.
+pub fn splitExploreMode(arena: Allocator, args: anytype) !?ServeArgs {
+    var rest: std.ArrayList([]const u8) = .empty;
+    var mode: ?ExploreMode = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg: []const u8 = args[i];
+        if (!std.mem.eql(u8, arg, explore_mode_flag)) {
+            try rest.append(arena, arg);
+            continue;
+        }
+        if (mode != null or i + 1 >= args.len) return null;
+        i += 1;
+        mode = std.meta.stringToEnum(ExploreMode, args[i]) orelse return null;
+    }
+    return .{ .mode = mode orelse .full, .rest = rest.items };
+}
 
 pub const explore_description = "Answers a code question: named symbols' definitions, callers, callees and impact, then best-matching code.";
 pub const evidence_description = "Full code of up to 6 functions by qualified name.";
@@ -99,6 +165,11 @@ pub const Session = struct {
     waited: bool = false,
     tables_stale: bool = false,
     names_builds: u32 = 0,
+    explore_mode: ExploreMode = .full,
+    explore_calls: u32 = 0,
+    seen: ?SeenFn = null,
+    /// What this session has shown the model; explore skips a body it already sent unchanged.
+    ledger: ?*sent_ledger.Ledger = null,
 
     pub fn create(gpa: Allocator, io: std.Io, runtime: *Runtime, root: []const u8) !*Session {
         const self = try gpa.create(Session);
@@ -341,6 +412,30 @@ pub const Session = struct {
         return out.items;
     }
 
+    /// Names the code files left out of the fact store as minified whose identifiers include
+    /// a word of `text`: their functions cannot be in the reply, so the reply says so
+    /// instead of implying the repository has no such code.
+    fn minifiedNote(self: *Session, arena: Allocator, w: *Writer, text: []const u8) !void {
+        var words: std.StringHashMapUnmanaged(void) = .empty;
+        var it = std.mem.tokenizeAny(u8, text, " \t\r\n.,;:!?()[]{}'\"`/\\");
+        while (it.next()) |word| {
+            if (word.len >= 3) try words.put(arena, word, {});
+        }
+        if (words.count() == 0) return;
+        var listed: usize = 0;
+        for (self.repo.?.store.files.items) |*state| {
+            if (state.status != .unindexed or !std.mem.eql(u8, state.note, fact_store.minified_note)) continue;
+            const hit = for (state.tokens) |t| {
+                if (words.contains(t)) break true;
+            } else false;
+            if (!hit) continue;
+            if (listed == 0) try w.writeAll(minified_note);
+            try w.print("{s} {s}{s}", .{ if (listed == 0) "" else ",", display_path.prefix, state.path });
+            listed += 1;
+        }
+        if (listed != 0) try w.writeByte('\n');
+    }
+
     fn unknown(self: *Session, arena: Allocator, w: *Writer, name: []const u8) !void {
         try w.print("No symbol named {s}.", .{name});
         const near = try self.symbolScores(arena, name);
@@ -358,11 +453,48 @@ pub const Session = struct {
         if (!self.ready()) return plain(gpa, "explore is unavailable: the repository could not be read", true);
         self.sync();
         const names = try namesOf(arena, args);
-        return plain(gpa, try self.dense(arena, question, names, reply_budget), false);
+        return plain(gpa, try self.answer(arena, question, names), false);
     }
 
     pub fn answer(self: *Session, arena: Allocator, question: []const u8, names: []const []const u8) ![]const u8 {
-        return self.dense(arena, question, names, reply_budget);
+        const budget = self.replyBudget();
+        self.explore_calls +|= 1;
+        return self.dense(arena, question, names, budget);
+    }
+
+    /// The reply budget of the next explore call: one budget in full mode; in dense mode a larger
+    /// first reply of the session and smaller later ones.
+    pub fn replyBudget(self: *const Session) usize {
+        return switch (self.explore_mode) {
+            .full => reply_budget,
+            .dense => if (self.explore_calls == 0) dense_first_budget else dense_later_budget,
+        };
+    }
+
+    fn closureBudget(self: *const Session) usize {
+        return if (self.explore_mode == .dense) dense_closure_budget else closure_budget;
+    }
+
+    fn pointerBudget(self: *const Session) usize {
+        return if (self.explore_mode == .dense) dense_pointer_budget else pointer_budget;
+    }
+
+    fn evidenceBudget(self: *const Session) usize {
+        return if (self.explore_mode == .dense) dense_evidence_budget else evidence_budget;
+    }
+
+    fn seenBefore(self: *const Session, path: []const u8, first: u32, last: u32, hash: facts.Hash) bool {
+        if (self.seen) |check| return check(path, first, last, hash);
+        const ledger = self.ledger orelse return false;
+        return ledger.seenUnchanged(path, hash);
+    }
+
+    /// Records a body explore sent, keyed by the definition's own hash, so a later explore
+    /// names it instead of sending it again while it is unchanged. Dense bodies are kept as
+    /// dense: they never count as seen, because an edit needs the exact text.
+    fn noteShown(self: *const Session, path: []const u8, span: facts.Span, hash: facts.Hash, densified: bool) void {
+        const ledger = self.ledger orelse return;
+        ledger.record(path, .{ .start = span.start, .end = span.end }, hash, if (densified) .dense else .exact) catch {};
     }
 
     /// Changed callables that no test reaches through the static reference graph.
@@ -398,7 +530,10 @@ pub const Session = struct {
         if (names.len == 0) return plain(gpa, "no names were given", false);
         const wanted = names[0..@min(names.len, max_evidence_names)];
         var out: Writer.Allocating = .init(arena);
-        try out.writer.writeAll(try self.evidenceText(arena, wanted, evidence_budget));
+        var asked: Writer.Allocating = .init(arena);
+        for (wanted) |n| try asked.writer.print("{s} ", .{n});
+        try self.minifiedNote(arena, &out.writer, asked.written());
+        try out.writer.writeAll(try self.evidenceText(arena, wanted, self.evidenceBudget()));
         if (names.len > wanted.len) {
             try out.writer.print("Not read, the limit is {d} names per call: ", .{max_evidence_names});
             for (names[wanted.len..], 0..) |n, i| try out.writer.print("{s}{s}", .{ if (i == 0) "" else ", ", n });
@@ -415,7 +550,7 @@ pub const Session = struct {
             }
         }
         const none: std.AutoHashMapUnmanaged(u64, void) = .empty;
-        try self.closure(arena, &out.writer, &texts, shown.items, &none);
+        try self.closure(arena, &out.writer, &texts, shown.items, &none, null);
         return plain(gpa, out.written(), false);
     }
 
@@ -426,6 +561,7 @@ pub const Session = struct {
         const store = &self.repo.?.store;
 
         var notes: Writer.Allocating = .init(arena);
+        try self.minifiedNote(arena, &notes.writer, joined.written());
         var containers: Writer.Allocating = .init(arena);
         var picks: std.ArrayList(Picked) = .empty;
         var at: std.AutoHashMapUnmanaged(u64, void) = .empty;
@@ -453,7 +589,8 @@ pub const Session = struct {
             }
         }
         try self.freshTerms();
-        const hits = try self.terms.?.rank(arena, joined.written(), max_ranked);
+        const ranked = try self.terms.?.rankCounted(arena, joined.written(), max_ranked);
+        const hits = ranked.hits;
         const top: f64 = @max(try self.terms.?.ceiling(arena, joined.written()), 1e-9);
         for (hits) |hit| {
             const f = self.term_docs.items[hit.doc];
@@ -484,8 +621,12 @@ pub const Session = struct {
         var addressed: std.AutoHashMapUnmanaged(u64, void) = .empty;
         var cut: Writer.Allocating = .init(arena);
         var pointers: Writer.Allocating = .init(arena);
-        const limit = budget -| pointer_budget;
+        const compact = self.explore_mode == .dense;
+        const pointer_room = self.pointerBudget();
+        const limit = if (compact) budget -| (pointer_room + self.closureBudget() + closure_reserve + dense_note.len) else budget -| pointer_room;
         var used: usize = out.written().len;
+        var densified = false;
+        var picks_whole: usize = 0;
         for (picks.items) |pk| {
             const state = store.file(pk.f.file);
             if (state.status != .indexed or pk.f.def >= state.facts.defs.len) continue;
@@ -493,16 +634,36 @@ pub const Session = struct {
             const ft = (try self.fileText(arena, &texts, pk.f.path)) orelse continue;
             const first = @max(d.line, 1);
             const last = @max(ft.lineOf(d.span.end), first);
-            if (inside(shown.items, pk.f.file, first, last)) continue;
+            if (inside(shown.items, pk.f.file, first, last)) {
+                picks_whole += 1;
+                continue;
+            }
             const base = indentOf(ft.line(first));
-            const size = blockChars(ft, first, last, base) + pk.f.path.len + pk.f.qname.len + header_chars;
+            // A definition the model named is sent verbatim: it is the code it is likely to edit.
+            const block: ?[]const u8 = if (compact and !pk.whole and used < limit) try denseBlock(arena, ft, state.facts.defs, pk.f.path, first, last) else null;
+            const size = if (block) |b| b.len + pk.f.path.len + pk.f.qname.len + header_chars + dense_marker.len else blockChars(ft, first, last, base) + pk.f.path.len + pk.f.qname.len + header_chars;
             const chance: f64 = if (pk.whole) 1 else usefulAt(pk.score);
             const worth = pk.whole or worthSending(size, chance, fetch_chars);
+            if (worth and self.seenBefore(pk.f.path, first, last, d.hash)) {
+                const line = try std.fmt.allocPrint(arena, "{s}{s}:{d} {s} {s}\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname, already_shown });
+                try out.writer.writeAll(line);
+                used += line.len;
+                picks_whole += 1;
+                try shown.append(arena, .{ .file = pk.f.file, .first = first, .last = last });
+                continue;
+            }
             if (worth and used + size <= limit) {
-                try out.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname });
-                var k = first;
-                while (k <= last) : (k += 1) try writeLine(&out.writer, ft, k, base);
+                picks_whole += 1;
+                if (block) |b| {
+                    try out.writer.print("{s}{s}:{d} {s}{s}\n{s}", .{ display_path.prefix, pk.f.path, first, pk.f.qname, dense_marker, b });
+                    densified = true;
+                } else {
+                    try out.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, pk.f.path, first, pk.f.qname });
+                    var k = first;
+                    while (k <= last) : (k += 1) try writeLine(&out.writer, ft, k, base);
+                }
                 used += size;
+                self.noteShown(pk.f.path, d.span, d.hash, block != null);
                 try shown.append(arena, .{ .file = pk.f.file, .first = first, .last = last });
                 continue;
             }
@@ -510,7 +671,7 @@ pub const Session = struct {
             if (pk.whole) {
                 try cut.writer.writeAll(line);
                 try addressed.put(arena, keyOf(pk.f), {});
-            } else if (usefulAt(pk.score) >= pointer_chance and pointers.written().len + line.len <= pointer_budget) {
+            } else if (usefulAt(pk.score) >= pointer_chance and pointers.written().len + line.len + (if (compact) cut.written().len else 0) <= pointer_room) {
                 try pointers.writer.writeAll(line);
                 try addressed.put(arena, keyOf(pk.f), {});
             }
@@ -541,18 +702,33 @@ pub const Session = struct {
         for (mentions.values()) |m| {
             const f = m.f;
             if (self.container(f)) continue;
-            const d = store.file(f.file).facts.defs[f.def];
+            const state = store.file(f.file);
+            const d = state.facts.defs[f.def];
             const ft = (try self.fileText(arena, &texts, f.path)) orelse continue;
             const first = @max(d.line, 1);
             const last = @max(ft.lineOf(d.span.end), first);
             if (inside(shown.items, f.file, first, last)) continue;
             const base = indentOf(ft.line(first));
-            const size = blockChars(ft, first, last, base) + f.path.len + f.qname.len + header_chars;
+            const block: ?[]const u8 = if (compact and used < limit) try denseBlock(arena, ft, state.facts.defs, f.path, first, last) else null;
+            const size = if (block) |b| b.len + f.path.len + f.qname.len + header_chars + dense_marker.len else blockChars(ft, first, last, base) + f.path.len + f.qname.len + header_chars;
             if (!worthSending(size, mentionChance(m.count), call_chars) or used + size > limit) continue;
-            try bound.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, f.path, first, f.qname });
-            var k = first;
-            while (k <= last) : (k += 1) try writeLine(&bound.writer, ft, k, base);
+            if (self.seenBefore(f.path, first, last, d.hash)) {
+                const line = try std.fmt.allocPrint(arena, "{s}{s}:{d} {s} {s}\n", .{ display_path.prefix, f.path, first, f.qname, already_shown });
+                try bound.writer.writeAll(line);
+                used += line.len;
+                try shown.append(arena, .{ .file = f.file, .first = first, .last = last });
+                continue;
+            }
+            if (block) |b| {
+                try bound.writer.print("{s}{s}:{d} {s}{s}\n{s}", .{ display_path.prefix, f.path, first, f.qname, dense_marker, b });
+                densified = true;
+            } else {
+                try bound.writer.print("{s}{s}:{d} {s}\n", .{ display_path.prefix, f.path, first, f.qname });
+                var k = first;
+                while (k <= last) : (k += 1) try writeLine(&bound.writer, ft, k, base);
+            }
             used += size;
+            self.noteShown(f.path, d.span, d.hash, block != null);
             try shown.append(arena, .{ .file = f.file, .first = first, .last = last });
         }
         if (bound.written().len != 0) {
@@ -567,11 +743,14 @@ pub const Session = struct {
             try out.writer.writeAll("Matching functions not shown:\n");
             try out.writer.writeAll(pointers.written());
         }
-        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);
+        const coverage: Coverage = .{ .matched = picks.items.len + (ranked.matched -| hits.len), .whole = picks_whole, .addressed = addressed.count() };
+        try self.closure(arena, &out.writer, &texts, shown.items, &addressed, coverage);
+        if (densified) return std.mem.concat(arena, u8, &.{ dense_note, out.written() });
         return out.written();
     }
 
-    fn closure(self: *Session, arena: Allocator, w: *Writer, texts: *std.StringHashMapUnmanaged(FileText), shown: []const Shown, addressed: *const std.AutoHashMapUnmanaged(u64, void)) !void {
+    /// `coverage` is null for evidence, which returns named definitions rather than a match set.
+    fn closure(self: *Session, arena: Allocator, w: *Writer, texts: *std.StringHashMapUnmanaged(FileText), shown: []const Shown, addressed: *const std.AutoHashMapUnmanaged(u64, void), coverage: ?Coverage) !void {
         if (shown.len == 0) return;
         const store = &self.repo.?.store;
         var names: std.StringArrayHashMapUnmanaged(void) = .empty;
@@ -599,7 +778,7 @@ pub const Session = struct {
                 if (inside(shown, f.file, first, @max(ft.lineOf(d.span.end), first))) continue;
                 try listed.put(arena, key, {});
                 const row = try std.fmt.allocPrint(arena, "  {s}  {s}{s}:{d}  {s}\n", .{ f.qname, display_path.prefix, f.path, first, signatureOf(d) });
-                if (rows.written().len + row.len > closure_budget) {
+                if (rows.written().len + row.len > self.closureBudget()) {
                     more += 1;
                     continue;
                 }
@@ -612,7 +791,10 @@ pub const Session = struct {
             try w.writeAll(rows.written());
         }
         if (more != 0) try w.print("  +{d} more named definitions, not listed\n", .{more});
-        try w.print("{s}\n", .{closure_footer});
+        const c = coverage orelse return w.print("{s}\n", .{evidence_footer});
+        if (c.complete()) return w.print("{s}\n", .{closure_footer});
+        try w.print("The index matched {d} functions: {d} shown whole above, {d} by address, {d} not shown.\n", .{ c.matched, c.whole, c.addressed, c.matched - c.whole - c.addressed });
+        try w.print("{s}\n", .{closure_partial_footer});
     }
 
     pub fn graph(self: *Session, arena: Allocator, w: *Writer, f: Fn) !void {
@@ -949,6 +1131,107 @@ fn writeLine(w: *Writer, ft: FileText, n: u32, base: usize) !void {
     const text = lineBody(ft, n, base);
     if (text.len == 0) return;
     try w.print("{d} {s}\n", .{ n, text });
+}
+
+const CommentStyle = enum { slash, hash };
+
+const hash_comment_extensions = [_][]const u8{ ".py", ".pyi", ".rb", ".sh", ".bash", ".ps1", ".r", ".pl", ".yaml", ".yml", ".toml" };
+
+fn commentStyle(path: []const u8) CommentStyle {
+    const ext = std.fs.path.extension(path);
+    for (hash_comment_extensions) |e| {
+        if (std.ascii.eqlIgnoreCase(ext, e)) return .hash;
+    }
+    return .slash;
+}
+
+const LineKind = enum { code, blank, comment, kept_comment };
+
+/// A comment a tool or type checker reads: JSDoc tags, `@ts-` directives, lint switches,
+/// Python type comments.
+fn annotates(text: []const u8, style: CommentStyle) bool {
+    if (std.mem.indexOfScalar(u8, text, '@') != null) return true;
+    if (std.mem.indexOf(u8, text, "eslint") != null or std.mem.indexOf(u8, text, "noqa") != null or std.mem.indexOf(u8, text, "pragma") != null) return true;
+    return style == .hash and std.mem.indexOf(u8, text, "type:") != null;
+}
+
+fn lineKind(text: []const u8, style: CommentStyle) LineKind {
+    if (text.len == 0) return .blank;
+    switch (style) {
+        .slash => {
+            if (std.mem.startsWith(u8, text, "///") or std.mem.startsWith(u8, text, "//!") or std.mem.startsWith(u8, text, "/**")) return .kept_comment;
+            if (std.mem.startsWith(u8, text, "//") or std.mem.startsWith(u8, text, "/*")) return if (annotates(text, style)) .kept_comment else .comment;
+        },
+        .hash => {
+            if (std.mem.startsWith(u8, text, "#!")) return .kept_comment;
+            if (text[0] == '#') return if (annotates(text, style)) .kept_comment else .comment;
+        },
+    }
+    return .code;
+}
+
+fn startsDefinition(defs: []const facts.Def, line: u32) bool {
+    for (defs) |d| {
+        if (d.kind != .module and d.line == line) return true;
+    }
+    return false;
+}
+
+/// Lines first..last of a definition, numbered, with blank lines and body comments dropped and
+/// one space per indent level. A comment directly above a definition inside the range, doc
+/// comments, JSDoc and annotation comments are kept with their text unchanged.
+fn denseBlock(arena: Allocator, ft: FileText, defs: []const facts.Def, path: []const u8, first: u32, last: u32) ![]const u8 {
+    const style = commentStyle(path);
+    const count: usize = last - first + 1;
+    const kinds = try arena.alloc(LineKind, count);
+    var open_block: ?LineKind = null;
+    for (kinds, 0..) |*kind, i| {
+        const k: u32 = first + @as(u32, @intCast(i));
+        const text = std.mem.trim(u8, ft.line(k), " \t\r");
+        if (open_block) |held| {
+            kind.* = held;
+            if (std.mem.indexOf(u8, text, "*/") != null) open_block = null;
+            continue;
+        }
+        kind.* = if (k == first) .code else lineKind(text, style);
+        if (kind.* != .code and kind.* != .blank and style == .slash and std.mem.startsWith(u8, text, "/*") and std.mem.indexOf(u8, text[2..], "*/") == null) open_block = kind.*;
+    }
+    var above = false;
+    var back = count;
+    while (back > 0) {
+        back -= 1;
+        switch (kinds[back]) {
+            .code => above = startsDefinition(defs, first + @as(u32, @intCast(back))),
+            .blank => above = false,
+            .comment => if (above) {
+                kinds[back] = .kept_comment;
+            },
+            .kept_comment => {},
+        }
+    }
+    const base = indentOf(ft.line(first));
+    var unit: usize = 0;
+    for (kinds, 0..) |kind, i| {
+        if (kind != .code) continue;
+        const raw = ft.line(first + @as(u32, @intCast(i)));
+        const rel = indentOf(raw) -| base;
+        if (rel != 0 and (unit == 0 or rel < unit)) unit = rel;
+    }
+    if (unit == 0) unit = 1;
+    var out: Writer.Allocating = .init(arena);
+    for (kinds, 0..) |kind, i| {
+        if (kind == .blank or kind == .comment) continue;
+        const k: u32 = first + @as(u32, @intCast(i));
+        const raw = std.mem.trimEnd(u8, ft.line(k), " \t\r");
+        const text = std.mem.trimStart(u8, raw, " \t");
+        if (text.len == 0) continue;
+        const levels = (indentOf(raw) -| base) / unit;
+        try out.writer.print("{d} ", .{k});
+        try out.writer.splatByteAll(' ', levels);
+        if (kind == .kept_comment and text[0] == '*') try out.writer.writeByte(' ');
+        try out.writer.print("{s}\n", .{text[0..cutUtf8(text, max_code_chars)]});
+    }
+    return out.written();
 }
 
 const TermFile = struct {

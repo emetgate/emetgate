@@ -11,7 +11,15 @@ pub fn timeoutMs(ms: u64) std.Io.Timeout {
 }
 
 pub fn run(gpa: Allocator, io: std.Io, options: std.process.RunOptions) !std.process.RunResult {
-    return runWith(gpa, io, options, null);
+    return runWith(gpa, io, options, null, null);
+}
+
+/// Like `run`, but stdout past `options.stdout_limit` stops the child and
+/// returns what was read so far with `cut.*` set, instead of failing with
+/// error.StreamTooLong. The term of a cut run is `.unknown`.
+pub fn runHead(gpa: Allocator, io: std.Io, options: std.process.RunOptions, cut: *bool) !std.process.RunResult {
+    cut.* = false;
+    return runWith(gpa, io, options, null, cut);
 }
 
 extern "kernel32" fn GetConsoleCP() callconv(.winapi) u32;
@@ -22,12 +30,12 @@ pub fn hidesWindow(wanted: bool) bool {
 }
 
 pub fn runFed(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: []const u8) !std.process.RunResult {
-    return runWith(gpa, io, options, input);
+    return runWith(gpa, io, options, input, null);
 }
 
-fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?[]const u8) !std.process.RunResult {
+fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?[]const u8, cut: ?*bool) !std.process.RunResult {
     const timeout: std.Io.Timeout = if (options.timeout == .none) timeoutMs(default_timeout_ms) else options.timeout;
-    if (builtin.os.tag != .windows and input == null) {
+    if (builtin.os.tag != .windows and input == null and cut == null) {
         var bounded = options;
         bounded.timeout = timeout;
         return std.process.run(gpa, io, bounded);
@@ -71,13 +79,23 @@ fn runWith(gpa: Allocator, io: std.Io, options: std.process.RunOptions, input: ?
 
     const deadline = timeout.toDeadline(io);
     while (reader.fill(options.reserve_amount, deadline)) |_| {
-        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;
+        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) {
+            const flag = cut orelse return error.StreamTooLong;
+            flag.* = true;
+            break;
+        };
         if (options.stderr_limit.toInt()) |limit| if (reader.reader(1).buffered().len > limit) return error.StreamTooLong;
         if (deadline.toDurationFromNow(io)) |left| if (left.raw.nanoseconds <= 0) return error.Timeout;
     } else |err| switch (err) {
         error.EndOfStream => {},
         else => |e| return e,
     }
+    if (cut) |flag| if (flag.*) {
+        const stdout = try reader.toOwnedSlice(0);
+        errdefer gpa.free(stdout);
+        const stderr = try reader.toOwnedSlice(1);
+        return .{ .term = .{ .unknown = 0 }, .stdout = stdout, .stderr = stderr };
+    };
     try reader.checkAnyError();
     const term = try child.wait(io);
     const stdout = try reader.toOwnedSlice(0);

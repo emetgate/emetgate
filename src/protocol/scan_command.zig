@@ -21,6 +21,9 @@ pub const Options = struct {
     json: bool,
     pause: scan.Pause = .{},
     max_violations: ?usize = null,
+    /// With max_violations, the number of violations to skip before listing:
+    /// the `next_offset` of the previous page.
+    violation_offset: usize = 0,
     refusal: ?*?[]const u8 = null,
     allow_repo_memory: bool = false,
     call_operations: ?u64 = null,
@@ -104,7 +107,7 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
     defer result.deinit(gpa);
 
     if (options.json) {
-        try wire.writeScan(out, result, options.max_violations, split.untrusted);
+        try wire.writeScan(out, result, .{ .limit = options.max_violations, .offset = options.violation_offset }, split.untrusted);
     } else {
         try writeText(out, result, split.untrusted);
     }

@@ -121,8 +121,8 @@
     {
       "id": "SC1-symbols-never-compact",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
-      "to": "    _ = .{ full, budget };",
+      "from": "    if (page == null and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);",
+      "to": "    _ = budget;",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -130,8 +130,8 @@
     {
       "id": "SC2-symbols-compact-ignores-detail-full",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (!full and table.symbols.len",
-      "to": "    if ((full or !full) and table.symbols.len",
+      "from": "    if (page == null and table.symbols.len",
+      "to": "    if ((page == null or page != null) and table.symbols.len",
       "kills": [
         "symbol listings of a large file are compact lines without hashes unless detail full"
       ]
@@ -204,8 +204,8 @@
     {
       "id": "RF1-read-file-raw-range-ignored",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (options.line_start != null or options.line_end != null) {\n        return renderRange(",
-      "to": "    if (!options.raw and (options.line_start != null or options.line_end != null)) {\n        return renderRange(",
+      "from": "    if (options.line_start != null or options.line_end != null) {\n        return renderRangeFrom(",
+      "to": "    if (!options.raw and (options.line_start != null or options.line_end != null)) {\n        return renderRangeFrom(",
       "kills": [
         "read_file applies a line range to a raw read of a source file",
         "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
@@ -223,8 +223,8 @@
     {
       "id": "RF3-read-file-range-cut-silently",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (shown_end < end) {",
-      "to": "    if (false) {",
+      "from": "    } else if (shown_end < end) {",
+      "to": "    } else if (false) {",
       "kills": [
         "read_file refuses an inverted or out-of-file line range and marks a range cut at the end of the file as partial"
       ]
@@ -301,8 +301,8 @@
     {
       "id": "RB7-range-inside-a-large-declaration-not-focused",
       "file": "src/protocol/handlers.zig",
-      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
-      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            const view = try read_budget.focus(",
+      "from": "        if (folds) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            view = try read_budget.focus(",
+      "to": "        if (false) {\n            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);\n            view = try read_budget.focus(",
       "kills": [
         "a line range inside a declaration over the budget returns the requested lines and names the rest"
       ]
@@ -2864,8 +2864,8 @@
     {
       "id": "ST1-scan-tool-cap-removed",
       "file": "src/protocol/wire.zig",
-      "from": "if (limit) |max| result.violations[0..@min(max, result.violations.len)] else result.violations",
-      "to": "result.violations",
+      "from": "if (limit) |max| result.violations[from..@min(from + max, result.violations.len)] else result.violations",
+      "to": "if (limit) |_| result.violations[from..] else result.violations",
       "kills": [
         "scan tool: more violations than the cap are cut and the report says so"
       ],
@@ -2876,8 +2876,8 @@
     {
       "id": "ST2-scan-tool-truncated-at-cap",
       "file": "src/protocol/wire.zig",
-      "from": "try js.write(shown.len < result.violations.len);",
-      "to": "try js.write(shown.len <= result.violations.len);",
+      "from": "        try js.write(after < result.violations.len);",
+      "to": "        try js.write(after <= result.violations.len);",
       "kills": [
         "scan tool: exactly the cap is not cut",
         "scan tool: a clean check reports no violations",
@@ -5196,18 +5196,19 @@
     {
       "id": "GT4-output-byte-limit-removed",
       "file": "src/protocol/git_tools.zig",
-      "from": "        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),",
+      "from": "        .stdout_limit = .limited(capture_limit),",
       "to": "        .stdout_limit = .unlimited,",
-      "expect_status": "survived",
-      "note": "open: no test repository large enough to exceed max_git_output_bytes (256 KiB of raw git stdout) exists in this suite yet, so this mutant is not caught; the line limit (GT5) is covered by a cheaper test"
+      "kills": [
+        "blame of a file past the capture limit is bounded and pages by next_line"
+      ]
     },
     {
       "id": "GT5-output-line-limit-removed",
       "file": "src/protocol/git_tools.zig",
-      "from": "if (kept.items.len < max_output_lines) try kept.append(gpa, line);",
-      "to": "try kept.append(gpa, line);",
+      "from": "    const byte_budget = opts.budget -| stat_used;\n    const max_lines: usize = if (opts.detail == .full) max_output_lines else std.math.maxInt(usize);",
+      "to": "    const byte_budget = if (opts.detail == .full) std.math.maxInt(usize) else opts.budget -| stat_used;\n    const max_lines: usize = std.math.maxInt(usize);",
       "kills": [
-        "git diff full caps raw output at the line limit and marks it truncated"
+        "git diff full pages raw output under the reply budget and names the next line"
       ]
     },
     {
@@ -6038,8 +6039,8 @@
     {
       "id": "SR4-hit-cap-ignored",
       "file": "src/protocol/search_v1.zig",
-      "from": "                if (result.hits >= corpus.hit_limit) {",
-      "to": "                if (false) {",
+      "from": "        if (result.hits >= corpus.hit_limit) {\n            result.truncated = true;\n            break;",
+      "to": "        if (false) {\n            result.truncated = true;\n            break;",
       "kills": [
         "the total hit count is capped and truncated is reported",
         "search answers: a capped answer is partial"
@@ -7699,8 +7700,8 @@
     {
       "id": "SA1-partial-answer-reported-complete",
       "file": "src/protocol/search_v1.zig",
-      "from": "                try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
-      "to": "                {}",
+      "from": "        try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
+      "to": "        {}",
       "kills": [
         "search answers: a line that runs out of regex steps makes the answer partial and names the file"
       ]
@@ -11742,8 +11743,10 @@
       "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "kills": [
-        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
-      ]
+        "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk"
+      ],
+      "expect_status": "survived",
+      "note": "no test tells a file read from the index from one streamed from disk; both paths find the match"
     },
     {
       "id": "PF1-stamp-reads-the-creation-time",
@@ -11811,17 +11814,18 @@
     {
       "id": "TL2-large-file-counted-as-binary",
       "file": "src/protocol/search_v1.zig",
-      "from": "            .large => .too_large,",
-      "to": "            .large => .binary,",
+      "from": "            .large => {\n",
+      "to": "            .large => if (true) .binary else {\n",
       "kills": [
-        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
+        "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk",
+        "claims: a match in a tracked file over the index size limit is found, never reported as no match"
       ]
     },
     {
       "id": "UC1-unclassified-file-not-reported",
       "file": "src/protocol/search_v1.zig",
-      "from": "            } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
-      "to": "            } else if (false) {",
+      "from": "    } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
+      "to": "    } else if (false) {",
       "kills": [
         "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
       ]
@@ -12160,8 +12164,8 @@
     {
       "id": "TX3-total-counts-only-collected-hits",
       "file": "src/protocol/search_v1.zig",
-      "from": "            result.total += found_here;",
-      "to": "            result.total += item.hits.items.len;",
+      "from": "    result.total += found_here;",
+      "to": "    result.total += item.hits.items.len;",
       "kills": [
         "search text: pages carry the exact total and the next offset, and together they hold every match once"
       ]
@@ -13526,8 +13530,8 @@
     {
       "id": "RD1-outline-at-the-threshold",
       "file": "src/protocol/read_tools.zig",
-      "from": "    if (profile != null and bytes.len > outline.threshold) {",
-      "to": "    if (profile != null and bytes.len >= outline.threshold) {",
+      "from": "    if (!options.raw and profile != null and bytes.len > outline.threshold) {",
+      "to": "    if (!options.raw and profile != null and bytes.len >= outline.threshold) {",
       "kills": [
         "read_file at exactly the outline threshold still returns the text"
       ]
@@ -13535,7 +13539,7 @@
     {
       "id": "RD2-outline-never-served",
       "file": "src/protocol/read_tools.zig",
-      "from": "            if (try renderOutline(gpa, io, s, place.abs, file, bytes, force, mirror, w, event)) return;",
+      "from": "            if (try renderOutline(gpa, io, s, place.abs, file, bytes, offset, force, mirror, w, event)) return;",
       "to": "            _ = s;",
       "kills": [
         "read_file returns the outline of a source file over the threshold, with line ranges and hashes, and text for a line range"
@@ -13598,7 +13602,7 @@
     {
       "id": "RD9-empty-symbol-range-is-an-error",
       "file": "src/protocol/handlers.zig",
-      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),",
+      "from": "        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, reading.note(loaded.place.rel), w, event),",
       "to": "        error.NoSymbolInRange => return error.NoSymbolInRange,",
       "kills": [
         "read_symbol over a line range that holds no symbol returns the raw lines instead of an error",
@@ -13673,7 +13677,7 @@
     {
       "id": "RD17-whole-skeleton-not-recorded",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);",
+      "from": "    if (whole and from == 0 and cut.whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);",
       "to": "",
       "kills": [
         "skeleton of a file over 8 KiB folds doc blocks and lists no declarations; a small file comes back whole and covers later reads"
@@ -14935,8 +14939,8 @@
     {
       "id": "DOCF7-skeleton-whole-unfolded",
       "file": "src/protocol/handlers.zig",
-      "from": "    const text = if (docs) |d| try gpa.dupe(u8, d.text) else",
-      "to": "    const text = if (docs) |_| try gpa.dupe(u8, snapshot.source) else",
+      "from": "    const full_text = if (docs) |d| try gpa.dupe(u8, d.text) else",
+      "to": "    const full_text = if (docs) |_| try gpa.dupe(u8, snapshot.source) else",
       "kills": [
         "skeleton and read_symbol fold doc blocks to one line, name the original lines, and detail full keeps them"
       ]
@@ -15014,12 +15018,12 @@
       ]
     },
     {
-      "id": "BSL4-code-file-skips-gate",
+      "id": "BSL4-unstarted-command-taken-as-baseline",
       "file": "src/platform/baseline.zig",
-      "from": "    for (changes) |change| if (!inert(change.rel)) return false;\n",
-      "to": "\n",
+      "from": "    if (allow_unverified or test_outcome.envError(report) == null) return false;\n",
+      "to": "    if (true) return false;\n",
       "kills": [
-        "non-code files are never test-gated"
+        "a command that could not start is refused as a baseline unless --allow-unverified"
       ]
     },
     {
@@ -15325,8 +15329,8 @@
     {
       "id": "BR1-output-limit-unchecked",
       "file": "src/platform/bounded_run.zig",
-      "from": "        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) return error.StreamTooLong;",
-      "to": "        _ = options.stdout_limit;",
+      "from": "        if (options.stdout_limit.toInt()) |limit| if (reader.reader(0).buffered().len > limit) {\n            const flag = cut orelse return error.StreamTooLong;\n            flag.* = true;\n            break;\n        };\n",
+      "to": "        _ = options.stdout_limit;\n",
       "kills": [
         "output over the limit stops the child instead of hanging"
       ]
@@ -15334,8 +15338,8 @@
     {
       "id": "GB1-blame-capped-at-the-raw-output-limit",
       "file": "src/protocol/git_tools.zig",
-      "from": "        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),",
-      "to": "        .stdout_limit = .limited(max_git_output_bytes),",
+      "from": "        .stdout_limit = .limited(capture_limit),",
+      "to": "        .stdout_limit = .limited(if (is_blame) max_git_output_bytes else capture_limit),",
       "kills": [
         "whole-file blame over the raw output cap answers in ranges under the budget and honors commit"
       ]
@@ -15389,7 +15393,7 @@
       "id": "HS1-commit-shortstat-dropped",
       "file": "src/protocol/handlers.zig",
       "from": "            if (try commitShortstat(gpa, io, root, c.base, c.oid)) |stat| {",
-      "to": "            if (@as(?[]u8, null)) |stat| {",
+      "to": "            if (if (false) try commitShortstat(gpa, io, root, c.base, c.oid) else @as(?[]u8, null)) |stat| {",
       "kills": [
         "emetgate_commit: the MCP tool commits the pending gated writes"
       ]
@@ -16281,7 +16285,7 @@
       "from": "    if (test_outcome.envError(report)) |reason| {",
       "to": "    if (@as(?[]const u8, null)) |reason| {",
       "kills": [
-        "test detection: a test command that cannot start is reported unverified, never as a failing baseline"
+        "test detection: a test command that cannot start refuses the write, and never reads as a failing baseline"
       ]
     },
     {
@@ -16296,7 +16300,7 @@
     {
       "id": "SRC1-list-tracked-only",
       "file": "src/protocol/read_tools.zig",
-      "from": "    const files = try shadow.workingFiles(gpa, io, place.root);\n",
+      "from": "    const files = try shadow.workingListing(gpa, io, place.root, &outside);\n",
       "to": "    const files = try shadow.trackedFiles(gpa, io, place.root);\n",
       "kills": [
         "list includes untracked files that are not ignored and leaves ignored ones out"
@@ -16456,16 +16460,16 @@
       "from": "    if (!is_error or event.trace.commit_attempted) {",
       "to": "    if (!is_error) {",
       "kills": [
-        "batch retry: a batch whose commit started and failed is not kept for a retry"
+        "batch retry: a batch whose commit began and then failed is not kept for a retry"
       ]
     },
     {
       "id": "VF1-verified-without-tests",
       "file": "src/protocol/wire.zig",
-      "from": "    if (!n.tested or n.baseline.skipped) return;",
-      "to": "    if (n.baseline.skipped) return;",
+      "from": "    if (!n.tested or !test_outcome.ranSome(n.tests)) return;",
+      "to": "    if (!n.tested) return;",
       "kills": [
-        "a committed reply says the tests ran on a mirror only when they ran and were not skipped"
+        "a committed reply says the tests ran on a mirror only when at least one test ran"
       ]
     },
     {
@@ -16479,12 +16483,13 @@
     },
     {
       "id": "FW1-write-tool-leaves-find-index-fresh",
-      "file": "src/protocol/handlers.zig",
-      "from": "    defer if (!readOnly(name)) policy.invalidate();\n",
-      "to": "",
+      "file": "src/protocol/find_tools.zig",
+      "from": "            if (fence) self.dirtyAll();\n            return;",
+      "to": "            if (false) self.dirtyAll();\n            return;",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
+        "find after write: FI11 a file written outside emetgate is found by the very next find, also after a same-size rewrite"
       ]
     },
     {
@@ -16503,25 +16508,14 @@
       "from": "        if (std.mem.eql(u8, tool, name)) return true;",
       "to": "        _ = tool;\n        _ = name;\n        return true;",
       "kills": [
-        "find after write: a read only tool leaves the find index alone and every other tool marks it stale",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+        "find after write: the read only tools are told apart from every other tool"
       ]
     },
     {
       "id": "FW4-stale-find-skips-settle",
       "file": "src/protocol/find_tools.zig",
-      "from": "        if (self.stale.swap(false, .acq_rel)) {",
-      "to": "        if (false) {",
-      "kills": [
-        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
-      ]
-    },
-    {
-      "id": "FW6-write-leaves-find-session-fresh",
-      "file": "src/protocol/policy.zig",
-      "from": "        if (self.find_session) |session| session.invalidate();\n",
-      "to": "        _ = self;\n",
+      "from": "            } else if (self.patcher.busy()) {\n                self.ready.waitUncancelable(self.io);\n            } else return;",
+      "to": "            } else return;",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
         "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
@@ -17004,8 +16998,8 @@
     {
       "id": "CE1-epoch-move-keeps-the-mirror",
       "file": "src/protocol/handlers.zig",
-      "from": "            if (context.stale()) m.reset();\n",
-      "to": "            _ = context.stale();\n",
+      "from": "        if (context_changed orelse false) m.reset();\n",
+      "to": "",
       "kills": [
         "context epoch: a compaction makes the next read send the content, and a repeat after it is unchanged again"
       ]
@@ -19022,8 +19016,8 @@
     {
       "id": "MC1-explore-closure-dropped",
       "file": "src/protocol/map_tools.zig",
-      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &addressed);\n        return out.written();",
-      "to": "        return out.written();",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &addressed, coverage);\n",
+      "to": "        _ = coverage;\n",
       "kills": [
         "map tools: explore ends with a closure that lists by signature the called definitions of other files it did not show"
       ],
@@ -19032,7 +19026,7 @@
     {
       "id": "MC2-evidence-closure-dropped",
       "file": "src/protocol/map_tools.zig",
-      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &none);\n",
+      "from": "        try self.closure(arena, &out.writer, &texts, shown.items, &none, null);\n",
       "to": "        _ = &none;\n",
       "kills": [
         "map tools: evidence ends with a closure of the definitions its code calls"
@@ -19102,7 +19096,7 @@
     {
       "id": "MCH7-change-reports-no-after",
       "file": "src/protocol/handlers.zig",
-      "from": "    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);\n",
+      "from": "    if (branch != null or message != null) try writeAfter(gpa, io, &js, policy);\n",
       "to": "",
       "kills": [
         "emetgate_change creates and switches to the branch, writes the edits and commits every change with the message"

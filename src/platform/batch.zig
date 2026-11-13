@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const shadow_root = @import("shadow_root.zig");
@@ -21,6 +22,8 @@ const Allocator = std.mem.Allocator;
 const Trace = runner.Trace;
 const gitToplevel = repo.gitToplevel;
 const relativeUnder = repo.relativeUnder;
+
+pub var fail_after_landing: bool = false;
 
 pub const Edit = batch_plan.Edit;
 pub const EditOp = batch_plan.Op;
@@ -224,7 +227,6 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     var batch = disk.Batch.init(gpa, io, journal_dir);
     if (options.commit == null) batch.root = root;
     batch.created_dirs = options.created_dirs;
-    if (options.trace) |t| t.commit_attempted = true;
     for (prepared, 0..) |p, i| {
         const file_abs = edits[i].file_abs;
         pendings[i] = switch (p.action) {
@@ -242,8 +244,36 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         count = prepared.len + i + 1;
     }
     commit_entered = true;
+    // Staging each file above writes nothing the user sees, and a failure there
+    // (a read-only or locked file) is discarded by the errdefer; only landing
+    // can leave work for emetgate recover.
+    if (options.trace) |t| t.commit_attempted = true;
     try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);
+    if (builtin.is_test and fail_after_landing) return error.AccessDenied;
     return .{ .committed = committed };
+}
+
+pub const Restore = struct { abs: []const u8, now: ?[]const u8, before: ?[]const u8 };
+
+pub fn restore(gpa: Allocator, arena: Allocator, io: std.Io, root: []const u8, files: []const Restore) !void {
+    if (files.len == 0) return;
+    var pendings: std.ArrayList(disk.Pending) = .empty;
+    defer pendings.deinit(gpa);
+    var staged = false;
+    errdefer if (!staged) for (pendings.items) |*p| p.abandon();
+    for (files) |f| {
+        const pending = if (f.before) |bytes|
+            (if (f.now) |current| try disk.prepare(gpa, io, f.abs, bytes, symbol.fileHash(current)) else try disk.stageCreate(gpa, io, f.abs, bytes))
+        else
+            try disk.stageDelete(gpa, io, f.abs, symbol.fileHash(f.now.?));
+        try pendings.append(gpa, pending);
+    }
+    const journal_dir = try std.fmt.allocPrint(arena, "{s}\\{s}\\journal", .{ root, shadow.workspace_dir });
+    var journal = disk.Batch.init(gpa, io, journal_dir);
+    journal.root = root;
+    staged = true;
+    var session: commit_plan.Session = .{};
+    try session.land(gpa, io, root, &.{}, pendings.items, &journal, null);
 }
 
 fn scopeOf(gpa: Allocator, prepared: []const Prepared, doc_count: usize) ?gate_mod.Scope {

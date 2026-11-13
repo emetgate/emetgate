@@ -153,6 +153,43 @@ jobs:
           mkdir -p parts
           python3 tools/check_parts.py --count 8 parts
 
+  catalog:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    name: scenario catalog (ReleaseSafe)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Restore the build cache main last saved
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            .zig-cache
+            ~\AppData\Local\zig
+          key: zig-cache-${{ env.ZIG_VERSION }}-ReleaseSafe-${{ github.sha }}
+          restore-keys: zig-cache-${{ env.ZIG_VERSION }}-ReleaseSafe-
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build ReleaseSafe
+        shell: pwsh
+        run: |
+          zig build -Doptimize=ReleaseSafe --summary all
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Every scenario of the catalog against the built server
+        shell: pwsh
+        run: |
+          python -I tests/catalog/run.py --emetgate zig-out/bin/emetgate.exe --json "$env:RUNNER_TEMP/catalog.json"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+      - name: Upload the catalog results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: catalog-results
+          path: ${{ runner.temp }}/catalog.json
+          if-no-files-found: ignore
+          retention-days: 7
+
   nightly-slow:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest

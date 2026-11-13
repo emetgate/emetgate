@@ -6,6 +6,7 @@ const handlers = @import("emetgate").handlers;
 const find_tools = @import("emetgate").find_tools;
 const map_tools = @import("emetgate").map_tools;
 const fact_file = @import("emetgate").fact_file;
+const symbol = @import("emetgate").symbol;
 const Runtime = @import("emetgate").runtime.Runtime;
 
 const testing = std.testing;
@@ -35,6 +36,17 @@ const Repo = struct {
     session: *find_tools.Session,
     store_path: []u8,
     map: *map_tools.Session,
+    hash_hex: [symbol.hash_hex_len]u8 = undefined,
+
+    /// The current file_hash of rel, which an emetgate_write overwrite needs.
+    fn hashOf(self: *Repo, rel: []const u8) ![]const u8 {
+        const sub = try std.fmt.allocPrint(gpa, "repo/{s}", .{rel});
+        defer gpa.free(sub);
+        const bytes = try self.tmp.dir.readFileAlloc(testing.io, sub, gpa, .unlimited);
+        defer gpa.free(bytes);
+        self.hash_hex = symbol.formatHash(symbol.fileHash(bytes));
+        return &self.hash_hex;
+    }
 
     fn init(watch: bool) !Repo {
         if (builtin.os.tag != .windows) return error.SkipZigTest;
@@ -133,7 +145,7 @@ test "find after write: an index with no watcher sees a file written through eme
     defer repo.deinit();
     try repo.expectFind("total", "2 hits in 2 files");
     try repo.expectFind("grand_sum", "0 hits in 0 files");
-    try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = "export function grand_sum(a, b) {\n  return a + b;\n}\n" });
+    try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = "export function grand_sum(a, b) {\n  return a + b;\n}\n", .hash = try repo.hashOf("src/app.js") });
     try repo.expectFind("grand_sum", "1 hits in 1 files");
     try repo.expectFind("total", "1 hits in 1 files");
 }
@@ -157,7 +169,7 @@ test "find after write: a watched index returns fresh hits right after each writ
     var token: [32]u8 = undefined;
     for (0..30) |i| {
         const tok = try std.fmt.bufPrint(&token, "fresh_token_{d}_", .{i});
-        try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = try std.fmt.bufPrint(&content, "export function {s}(a, b) {{\n  return a + b;\n}}\n", .{tok}) });
+        try repo.expectCommitted("emetgate_write", .{ .file = "src/app.js", .content = try std.fmt.bufPrint(&content, "export function {s}(a, b) {{\n  return a + b;\n}}\n", .{tok}), .hash = try repo.hashOf("src/app.js") });
         errdefer std.debug.print("iteration {d}\n", .{i});
         try repo.expectFind(tok, "1 hits in 1 files");
         try repo.expectFind("fresh_token_", "1 hits in 1 files");
@@ -188,7 +200,28 @@ test "find after write: evidence and explore know a function renamed by an edito
     try repo.expectEvidence("emetgate_explore", .{ .question = "what does outside_count return", .names = .{"outside_count"} }, "function outside_count(", "No symbol named outside_count");
 }
 
-test "find after write: a read only tool leaves the find index alone and every other tool marks it stale" {
+test "find after write: the read only tools are told apart from every other tool" {
     for ([_][]const u8{ "emetgate_find", "emetgate_search", "emetgate_read_file", "emetgate_git", "emetgate_mutate" }) |name| try testing.expect(handlers.readOnly(name));
     for ([_][]const u8{ "emetgate_rename", "emetgate_try_batch", "emetgate_commit", "emetgate_write", "emetgate_edit", "emetgate_run", "emetgate_git_write", "emetgate_move_file", "emetgate_unknown" }) |name| try testing.expect(!handlers.readOnly(name));
+}
+
+test "find after write: FI11 a file written outside emetgate is found by the very next find, also after a same-size rewrite" {
+    for ([_]bool{ true, false }) |watch| {
+        var repo = try Repo.init(watch);
+        defer repo.deinit();
+        try repo.expectFind("total", "2 hits in 2 files");
+        var content: [64]u8 = undefined;
+        var token: [32]u8 = undefined;
+        var last: [32]u8 = undefined;
+        var last_len: usize = 0;
+        for (0..12) |i| {
+            errdefer std.debug.print("watch {} round {d}\n", .{ watch, i });
+            const tok = try std.fmt.bufPrint(&token, "draft{d:0>2}word", .{i});
+            try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.md", .data = try std.fmt.bufPrint(&content, "# Notes\n\n## Part\n\n{s}\n", .{tok}) });
+            try repo.expectFind(tok, "1 hits in 1 files");
+            if (last_len != 0) try repo.expectFind(last[0..last_len], "0 hits in 0 files");
+            @memcpy(last[0..tok.len], tok);
+            last_len = tok.len;
+        }
+    }
 }

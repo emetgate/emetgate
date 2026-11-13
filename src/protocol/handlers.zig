@@ -1,6 +1,7 @@
 const std = @import("std");
 const commit_plan = @import("../platform/commit_plan.zig");
 const commit_group = @import("../platform/commit_group.zig");
+const change_undo = @import("../platform/change_undo.zig");
 const commit_refusal = @import("../platform/commit_refusal.zig");
 const symbol = @import("../engine/symbol.zig");
 const cas = @import("../engine/cas.zig");
@@ -14,8 +15,10 @@ const telemetry = @import("telemetry.zig");
 const policy_mod = @import("policy.zig");
 const map_tools = @import("map_tools.zig");
 const read_tools = @import("read_tools.zig");
+const sent_ledger = @import("../engine/sent_ledger.zig");
 const read_budget = @import("read_budget.zig");
 const read_cache = @import("read_cache.zig");
+const reply_contract = @import("reply_contract.zig");
 const raw_reply = @import("raw_reply.zig");
 const outline = @import("outline.zig");
 const search_v1 = @import("search_v1.zig");
@@ -46,8 +49,10 @@ const repo = @import("../platform/repo.zig");
 const git_commit = @import("../platform/git_commit.zig");
 const known_files = @import("known_files.zig");
 const file_edit = @import("../platform/file_edit.zig");
+const fuzzy_match = @import("../platform/fuzzy_match.zig");
 const rules = @import("../platform/rules.zig");
 const lang_registry = @import("../engine/lang/registry.zig");
+const Profile = @import("../engine/lang/profile.zig").Profile;
 const forgive = @import("forgive.zig");
 const batch_plan = @import("../platform/batch_plan.zig");
 const batch_merge = @import("batch_merge.zig");
@@ -80,13 +85,14 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     _ = test_command_mod.takeUnverified();
     _ = test_command_mod.takeLate();
     test_debt.drop();
+    const context_changed: ?bool = if (policy.context) |context| context.stale() else null;
     if (policy.mirror) |m| {
-        if (policy.context) |context| {
-            if (context.stale()) m.reset();
-        }
+        if (context_changed orelse false) m.reset();
         m.tick();
     }
-    defer if (!readOnly(name)) policy.invalidate();
+    // The model may have lost what it was shown: after a compaction, or when the session has no
+    // context watch at all, the ledger forgets, so nothing is ever skipped as "already shown".
+    if (context_changed orelse true) policy.ledgerReset();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
         if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note, args)) |text| {
@@ -136,7 +142,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     const args = call.args;
     if (std.mem.eql(u8, name, "emetgate_symbols")) return callSymbols(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_skeleton")) return rawCode(gpa, policy, try callSkeleton(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache));
-    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget));
+    if (std.mem.eql(u8, name, "emetgate_read_symbol")) return rawCode(gpa, policy, try callReadSymbol(gpa, io, runtime, args, event, policy.root, policy.mirror, policy.tree_cache, policy.read_budget, policy.sent_ledger));
     if (std.mem.eql(u8, name, "emetgate_mutate")) return callMutate(gpa, io, runtime, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_try")) return callTry(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_commit")) return callCommit(gpa, io, runtime, args, event, policy);
@@ -148,7 +154,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_edit")) return edit_tool.callEdit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write")) return edit_tool.callWrite(gpa, io, runtime, args, event, policy);
-    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache }, policy.raw_code));
+    if (std.mem.eql(u8, name, "emetgate_read_file")) return rawCode(gpa, policy, try read_tools.callReadFile(gpa, io, args, event, policy.root, policy.mirror, .{ .runtime = runtime, .tree_cache = policy.tree_cache, .sent_ledger = policy.sent_ledger }, policy.raw_code));
     if (std.mem.eql(u8, name, "emetgate_list")) return read_tools.callList(gpa, io, args, event, policy.root);
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
@@ -183,12 +189,17 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
         .string => |text| text,
         else => return tool_result.missing("where (string)", .{}),
     } else null;
+    const offset: usize = if (getField(args.?, "offset")) |field| switch (field) {
+        .integer => |n| if (n >= 0) @intCast(n) else return tool_result.missing("offset (integer of at least 0)", .{}),
+        .null => 0,
+        else => return tool_result.missing("offset (integer of at least 0)", .{}),
+    } else 0;
     event.label = "scan";
     event.file = where;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     var refusal: ?[]const u8 = null;
-    renderScan(gpa, io, runtime, root, check, where, tree_cache, &buffer.writer, &refusal) catch |err| {
+    renderScan(gpa, io, runtime, root, check, where, offset, tree_cache, &buffer.writer, &refusal) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -199,7 +210,7 @@ fn callScan(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: 
     return success(gpa, &buffer);
 }
 
-fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, refusal: *?[]const u8) !void {
+fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, check: []const u8, where: ?[]const u8, offset: usize, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, refusal: *?[]const u8) !void {
     const root_abs = try repo.servedRoot(gpa, io, root);
     defer gpa.free(root_abs);
     var discard: std.Io.Writer.Discarding = .init(&.{});
@@ -207,6 +218,7 @@ fn renderScan(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
         .source = .{ .check = .{ .spec = check, .where = where } },
         .json = true,
         .max_violations = max_scan_violations,
+        .violation_offset = offset,
         .call_operations = max_scan_operations,
         .refusal = refusal,
         .tree_cache = tree_cache,
@@ -220,7 +232,10 @@ fn callSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, even
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
     const within = if (args) |a| getString(a, "within") else null;
-    renderSymbols(gpa, io, runtime, root, file, tree_cache, tool_result.wantsFull(args), within, budget, &buffer.writer) catch |err| {
+    const offset = if (args) |a| getInt(a, "offset") else null;
+    if (offset) |n| if (n < 0) return tool_result.missing("offset (integer, 0 or more)", .{});
+    const page: ?usize = if (offset) |n| @intCast(n) else if (tool_result.wantsFull(args)) 0 else null;
+    renderSymbols(gpa, io, runtime, root, file, tree_cache, page, within, budget, &buffer.writer) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
@@ -245,7 +260,7 @@ fn loadJailed(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, 
     return .{ .place = place, .snapshot = try Snapshot.load(runtime, io, .cwd(), place.abs), .owned = true };
 }
 
-fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, full: bool, within: ?[]const u8, budget: usize, w: *Writer) !void {
+fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, tree_cache: ?*tree_cache_mod.TreeCache, page: ?usize, within: ?[]const u8, budget: usize, w: *Writer) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -254,8 +269,47 @@ fn renderSymbols(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u
     defer loaded.deinit(gpa);
     const table = try wire.symbolsWithin(arena, (try loaded.snapshot.symbols()).*, prefix);
     if (table.symbols.len + table.declarations.len + table.statements.len == 0 and prefix.len != 0) return error.NoSymbolsWithin;
-    if (!full and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);
-    try wire.writeSymbols(gpa, w, file, table);
+    if (page == null and table.symbols.len + table.declarations.len > wire.compact_symbols_over) return wire.writeSymbolsCompact(gpa, w, file, table, prefix, budget);
+    try writeSymbolsPage(gpa, w, file, table, within, page orelse 0);
+}
+
+const symbols_entry_cost: usize = 128;
+
+fn symbolsRefAt(table: symbol.Table, index: usize) symbol.Ref {
+    if (index < table.symbols.len) return table.symbols[index].ref;
+    const after = index - table.symbols.len;
+    if (after < table.declarations.len) return table.declarations[after].ref;
+    return table.statements[after - table.declarations.len].ref;
+}
+
+fn pageOf(comptime T: type, items: []T, base: usize, from: usize, end: usize) []T {
+    const lo = std.math.clamp(from, base, base + items.len) - base;
+    const hi = std.math.clamp(end, base, base + items.len) - base;
+    return items[lo..hi];
+}
+
+fn writeSymbolsPage(gpa: Allocator, w: *Writer, file: []const u8, table: symbol.Table, within: ?[]const u8, offset: usize) !void {
+    const total = table.symbols.len + table.declarations.len + table.statements.len;
+    const from = @min(offset, total);
+    const limit = reply_contract.room(.symbols) -| (2 * file.len + 64);
+    var used: usize = 0;
+    var end = from;
+    while (end < total) : (end += 1) {
+        const cost = symbols_entry_cost + std.fmt.count("{f}", .{symbolsRefAt(table, end)});
+        if (end != from and used + cost > limit) break;
+        used += cost;
+    }
+    const declared_base = table.symbols.len;
+    const statement_base = declared_base + table.declarations.len;
+    const shown: symbol.Table = .{
+        .arena = table.arena,
+        .symbols = pageOf(symbol.Symbol, table.symbols, 0, from, end),
+        .declarations = pageOf(symbol.Declaration, table.declarations, declared_base, from, end),
+        .statements = pageOf(symbol.Statement, table.statements, statement_base, from, end),
+        .short_refs = table.short_refs,
+    };
+    try wire.writeSymbols(gpa, w, file, shown);
+    if (end < total) try reply_contract.writeTrailer(w, "symbols {d}-{d} of {d}", .{ end + 1, total, total }, "emetgate_symbols", .{ .file = file, .within = within, .offset = end });
 }
 
 fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache) !ToolResult {
@@ -265,14 +319,16 @@ fn callSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, eve
     event.file = file;
     var buffer: std.Io.Writer.Allocating = .init(gpa);
     defer buffer.deinit();
-    renderSkeleton(gpa, io, runtime, root, file, force, mirror, tree_cache, &buffer.writer, event) catch |err| {
+    const offset = if (args) |a| tool_result.getInt(a, "offset") orelse 0 else 0;
+    renderSkeleton(gpa, io, runtime, root, file, force, offset, mirror, tree_cache, &buffer.writer, event) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failure(gpa, &buffer, err, event);
     };
     return success(gpa, &buffer);
 }
 
-fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, force: bool, offset_arg: i64, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
+    if (offset_arg < 0) return error.InvalidOffset;
     const loaded = try loadJailed(gpa, io, runtime, root, file, tree_cache);
     defer loaded.deinit(gpa);
     const place = loaded.place;
@@ -286,11 +342,15 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     };
     const docs: ?doc_fold.Folded = if (whole) try doc_fold.fold(gpa, snapshot.profile, snapshot.tree, 0, @intCast(snapshot.source.len)) else null;
     defer if (docs) |d| d.deinit(gpa);
-    const text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
-    defer gpa.free(text);
+    const full_text = if (docs) |d| try gpa.dupe(u8, d.text) else try skeleton.compact(gpa, runtime.parser, snapshot.profile, snapshot.tree);
+    defer gpa.free(full_text);
+    // The skeleton from byte `offset`, cut at a line end to the reply budget.
+    const from = reply_contract.charStart(full_text, @intCast(offset_arg));
+    const cut = reply_contract.cut(full_text[from..], reply_contract.room(.skeleton), .json);
+    const text = cut.kept;
     const hash = symbol.hashOf(text);
     if (mirror) |m| {
-        const key = try std.fmt.allocPrint(gpa, "skeleton:{s}", .{file});
+        const key = try std.fmt.allocPrint(gpa, "skeleton:{s}@{d}", .{ file, from });
         defer gpa.free(key);
         if (try m.seen(key, hash, file_hash, force)) |since| {
             event.chars_emetgate = 0;
@@ -303,10 +363,14 @@ fn renderSkeleton(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const 
     event.chars_emetgate = text.len;
     event.chars_fullfile = snapshot.source.len;
     try wire.writeSkeleton(w, file, file_hash, if (whole) .content else .skeleton, text, adopted.items, if (docs) |d| d.spans else &.{});
-    if (whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    if (whole and from == 0 and cut.whole) try read_cache.recordWhole(gpa, mirror, file, file_hash);
+    if (!cut.whole) {
+        const next = from + text.len;
+        try reply_contract.writeTrailer(w, "skeleton bytes {d}-{d}", .{ next, full_text.len }, "emetgate_skeleton", .{ .file = file, .offset = next });
+    }
 }
 
-fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize) !ToolResult {
+fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, budget: usize, ledger: ?*sent_ledger.Ledger) !ToolResult {
     const file = try requireString(args, "file");
     const force = if (args) |a| tool_result.getBool(a, "force") orelse false else false;
     const nodes = if (args) |a| tool_result.getBool(a, "nodes") orelse false else false;
@@ -316,7 +380,7 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
     defer buffer.deinit();
     const arguments = args.?;
     const detail = read_budget.parseDetail(tool_result.getString(arguments, "detail")) catch |err| return failure(gpa, &buffer, err, event);
-    const reading: Reading = .{ .budget = budget, .detail = detail };
+    const reading: Reading = .{ .budget = budget, .detail = detail, .ledger = ledger };
     const line_start = getInt(arguments, "line_start");
     const line_end = getInt(arguments, "line_end");
     const symbols = getStringArray(arguments, "symbols");
@@ -351,6 +415,11 @@ fn callReadSymbol(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, e
 const Reading = struct {
     budget: usize,
     detail: read_budget.Detail,
+    ledger: ?*sent_ledger.Ledger = null,
+
+    fn note(self: Reading, rel: []const u8) read_tools.Note {
+        return .{ .ledger = self.ledger, .rel = rel };
+    }
 
     fn folds(self: Reading, chars: usize) bool {
         return self.detail == .budgeted and chars > self.budget;
@@ -391,11 +460,13 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     defer loaded.deinit(gpa);
     const snapshot = loaded.snapshot;
     const table = try snapshot.symbols();
+    try requireSymbols(gpa, table.*, file, &.{sym});
     const ref = try symbol.Ref.parse(gpa, sym);
     defer ref.deinit(gpa);
     const found = try table.item(ref);
     event.hash = found.hash;
     const shown = shownSpan(found);
+    const note = reading.note(loaded.place.rel);
     const docs = if (nodes) null else try reading.foldDocs(gpa, snapshot, shown.start, shown.end);
     defer if (docs) |d| d.deinit(gpa);
     const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
@@ -418,19 +489,97 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     if (nodes) {
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
         defer gpa.free(annotated);
-        event.chars_emetgate = annotated.len;
-        return wire.writeSymbolNodes(w, file, sym, found.hash, annotated);
+        const cut = LinesCut.of(snapshot.source, annotated, found.span.start, found.span.end, 0);
+        try note.shown(snapshot.source, found.span.start, found.span.end, .dense);
+        event.chars_emetgate = cut.c.kept.len;
+        try wire.writeSymbolNodes(w, file, sym, found.hash, cut.c.kept);
+        return cut.trailer(w, file, .nodes, "");
     }
     if (folds) {
         const lines = try read_budget.Lines.init(gpa, snapshot.source);
         defer lines.deinit(gpa);
         const view = try read_budget.fold(gpa, snapshot.source, lines, found.body orelse found.node, reading.budget);
         defer view.deinit(gpa);
+        try note.shown(snapshot.source, shown.start, shown.end, .dense);
         event.chars_emetgate = view.text.len;
         return wire.writeSymbolBodyFolded(w, file, sym, found.hash, .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget });
     }
-    event.chars_emetgate = body.len;
-    try wire.writeSymbolBody(w, file, sym, found.hash, body, if (docs) |d| d.spans else &.{});
+    // detail:"full" sends the body unfolded, still within the reply budget.
+    const cut = LinesCut.of(snapshot.source, body, shown.start, shown.end, 0);
+    try note.shown(snapshot.source, shown.start, shown.end, if (docs == null) .exact else .dense);
+    event.chars_emetgate = cut.c.kept.len;
+    try wire.writeSymbolBody(w, file, sym, found.hash, cut.c.kept, if (docs) |d| d.spans else &.{});
+    return cut.trailer(w, file, if (docs == null) .source else .folded, "");
+}
+
+/// A symbol's text (source, docs-folded or node-annotated) that starts at byte
+/// `start` of the source, cut to the read_symbol budget; `trailer` then names
+/// the call returning the lines left out.
+const LinesCut = struct {
+    c: reply_contract.Cut,
+    first: i64,
+    last: i64,
+    column: usize,
+
+    const Form = enum { source, folded, nodes };
+
+    fn of(source: []const u8, text: []const u8, start: usize, end: usize, used: usize) LinesCut {
+        const line_start = if (std.mem.lastIndexOfScalar(u8, source[0..start], '\n')) |nl| nl + 1 else 0;
+        return .{
+            .c = reply_contract.cut(text, reply_contract.room(.read_symbol) -| used, .json),
+            .first = @intCast(std.mem.count(u8, source[0..start], "\n") + 1),
+            .last = @intCast(std.mem.count(u8, source[0..@max(start, end -| 1)], "\n") + 1),
+            .column = start - line_start,
+        };
+    }
+
+    fn trailer(self: LinesCut, w: *Writer, file: []const u8, form: Form, also: []const u8) !void {
+        if (self.c.whole) return;
+        if (form == .folded) {
+            // Folded text has fewer lines than the source: resume at its start.
+            return reply_contract.writeTrailer(w, "the rest of lines {d}-{d}{s}", .{ self.first, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last });
+        }
+        if (self.c.split_line) {
+            if (form == .nodes) return reply_contract.writeTrailer(w, "the rest of lines {d}-{d} (line {d} is longer than the reply){s}", .{ self.first, self.last, self.first, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last });
+            const resume_at = self.column + self.c.kept.len;
+            return reply_contract.writeTrailer(w, "bytes {d}- of line {d} and lines {d}-{d}{s}", .{ resume_at, self.first, self.first + 1, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = self.first, .line_end = self.last, .offset = resume_at });
+        }
+        const next = self.first + @as(i64, @intCast(self.c.lines));
+        if (form == .nodes) return reply_contract.writeTrailer(w, "lines {d}-{d}{s}", .{ next, self.last, also }, "emetgate_read_symbol", .{ .file = file, .line_start = next, .line_end = self.last, .nodes = true });
+        return reply_contract.writeTrailer(w, "lines {d}-{d}{s}", .{ next, self.last, also }, "emetgate_read_file", .{ .file = file, .line_start = next, .line_end = self.last });
+    }
+};
+
+fn requireSymbols(gpa: Allocator, table: symbol.Table, file: []const u8, refs: []const []const u8) !void {
+    var names_buf: [400]u8 = undefined;
+    var names: std.Io.Writer = .fixed(&names_buf);
+    var missing: usize = 0;
+    for (refs) |sym| {
+        const ref = symbol.Ref.parse(gpa, sym) catch |err| switch (err) {
+            error.OutOfMemory => return err,
+            else => continue,
+        };
+        defer ref.deinit(gpa);
+        _ = table.item(ref) catch |err| switch (err) {
+            error.SymbolNotFound => {
+                names.print("{s}{s}", .{ if (missing == 0) "" else ", ", utf8Head(sym, 120) }) catch {};
+                missing += 1;
+            },
+            else => {},
+        };
+    }
+    if (missing == 0) return;
+    wire.setFix("{s} has no symbol {s}; call {s}emetgate_symbols with this file for the exact symbol refs", .{ utf8Head(file, 200), names.buffered(), tool_names.prefix() });
+    return error.SymbolNotFound;
+}
+
+/// Approximate reply size of one entry of a symbols or range reply.
+fn entryCost(ref: []const u8, text: ?[]const u8) usize {
+    return 200 + 2 * ref.len + if (text) |t| reply_contract.encodedLen(t, .json) else 0;
+}
+
+fn utf8Head(text: []const u8, limit: usize) []const u8 {
+    return read_tools.utf8Prefix(text, limit);
 }
 
 fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, symbols: []const Value, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
@@ -441,8 +590,18 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
     const table = try snapshot.symbols();
     const entries = try gpa.alloc(wire.SymbolEntry, symbols.len);
     defer gpa.free(entries);
-    var annotated: usize = 0;
-    defer for (entries[0..annotated]) |entry| gpa.free(entry.body.?);
+    const refs = try gpa.alloc([]const u8, symbols.len);
+    defer gpa.free(refs);
+    for (symbols, 0..) |item, i| refs[i] = switch (item) {
+        .string => |s| s,
+        else => return tool_result.missing("symbols[{d}] (string)", .{i}),
+    };
+    try requireSymbols(gpa, table.*, file, refs);
+    var owned: std.ArrayList([]u8) = .empty;
+    defer {
+        for (owned.items) |t| gpa.free(t);
+        owned.deinit(gpa);
+    }
     var views: usize = 0;
     defer for (entries[0..views]) |entry| if (entry.folded) |folded| folded.view.deinit(gpa);
     var lines: ?read_budget.Lines = null;
@@ -452,22 +611,40 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         for (folded_docs.items) |d| d.deinit(gpa);
         folded_docs.deinit(gpa);
     }
+    const room = reply_contract.room(.read_symbol);
+    var used: usize = 0;
     var chars: usize = 0;
+    var shown_count: usize = symbols.len;
+    var first_cut: ?LinesCut = null;
+    var cut_form: LinesCut.Form = .source;
     const covered = try read_cache.coversWhole(gpa, mirror, file, symbol.fileHash(snapshot.source), force);
-    for (symbols, 0..) |item, i| {
-        const sym = switch (item) {
-            .string => |s| s,
-            else => return tool_result.missing("symbols[{d}] (string)", .{i}),
-        };
+    for (refs, 0..) |sym, i| {
         const ref = try symbol.Ref.parse(gpa, sym);
         defer ref.deinit(gpa);
         const found = try table.item(ref);
         const shown = shownSpan(found);
         if (nodes) {
             const text = try node_cas_mod.annotateSnapshot(gpa, snapshot, found.span);
-            entries[i] = .{ .ref = sym, .hash = found.hash, .body = text, .nodes = true };
-            annotated = i + 1;
-            chars += text.len;
+            try owned.append(gpa, text);
+            const cost = entryCost(sym, text);
+            if (used + cost > room and i != 0) {
+                shown_count = i;
+                break;
+            }
+            var body: []const u8 = text;
+            if (used + cost > room) {
+                const cut = LinesCut.of(snapshot.source, text, found.span.start, found.span.end, entryCost(sym, null));
+                first_cut = cut;
+                cut_form = .nodes;
+                body = cut.c.kept;
+                shown_count = 1;
+            }
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = body, .nodes = true };
+            views = i + 1;
+            try reading.note(loaded.place.rel).shown(snapshot.source, found.span.start, found.span.end, .dense);
+            used += entryCost(sym, body);
+            chars += body.len;
+            if (first_cut != null) break;
             continue;
         }
         try folded_docs.ensureUnusedCapacity(gpa, 1);
@@ -475,6 +652,23 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
         const body = if (docs) |d| d.text else snapshot.source[shown.start..shown.end];
         const folds = reading.folds(body.len);
+        // Decide whether the entry fits before the mirror records it as sent.
+        const cost = if (folds) entryCost(sym, null) + reading.budget + reading.budget / 4 else entryCost(sym, body);
+        if (used + cost > room and i != 0) {
+            shown_count = i;
+            break;
+        }
+        if (used + cost > room and !folds) {
+            const cut = LinesCut.of(snapshot.source, body, shown.start, shown.end, entryCost(sym, null));
+            first_cut = cut;
+            cut_form = if (docs == null) .source else .folded;
+            entries[i] = .{ .ref = sym, .hash = found.hash, .body = cut.c.kept, .docs = if (docs) |d| d.spans else &.{} };
+            views = i + 1;
+            try reading.note(loaded.place.rel).shown(snapshot.source, shown.start, shown.end, .dense);
+            chars += cut.c.kept.len;
+            shown_count = 1;
+            break;
+        }
         var unchanged = covered;
         if (!covered) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, sym, folds or docs != null);
@@ -483,19 +677,41 @@ fn renderSymbolBodies(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]co
         };
         entries[i] = .{ .ref = sym, .hash = found.hash, .body = if (unchanged) null else body, .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
-        if (unchanged) continue;
+        if (unchanged) {
+            used += entryCost(sym, null);
+            continue;
+        }
+        try reading.note(loaded.place.rel).shown(snapshot.source, shown.start, shown.end, if (folds or docs != null) .dense else .exact);
         if (folds) {
             if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
             const view = try read_budget.fold(gpa, snapshot.source, lines.?, found.body orelse found.node, reading.budget);
             entries[i].folded = .{ .view = view, .signature = signatureOf(snapshot, found), .budget = reading.budget };
             chars += view.text.len;
+            used += entryCost(sym, view.text);
             continue;
         }
         chars += body.len;
+        used += cost;
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSymbolBodies(w, file, entries);
+    try wire.writeSymbolBodies(w, file, entries[0..shown_count]);
+    const rest = refs[shown_count..];
+    var rest_buf: [256]u8 = undefined;
+    const rest_text = if (rest.len == 0) "" else std.fmt.bufPrint(&rest_buf, "{d} symbol(s) from {s}", .{ rest.len, utf8Head(rest[0], 120) }) catch "";
+    if (first_cut) |cut| {
+        var also_buf: [512]u8 = undefined;
+        const also = if (rest.len == 0) "" else std.fmt.bufPrint(&also_buf, " of {s}; then {s}", .{ utf8Head(refs[0], 120), rest_text }) catch "";
+        return cut.trailer(w, file, cut_form, also);
+    }
+    if (rest.len != 0) {
+        try reply_contract.writeTrailer(w, "{s}", .{rest_text}, "emetgate_read_symbol", .{
+            .file = file,
+            .symbols = rest,
+            .nodes = if (nodes) true else null,
+            .detail = if (reading.detail == .full) @as(?[]const u8, "full") else null,
+        });
+    }
 }
 
 fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, file: []const u8, line_start: ?i64, line_end: ?i64, force: bool, nodes: bool, reading: Reading, mirror: ?*mirror_mod.Mirror, tree_cache: ?*tree_cache_mod.TreeCache, w: *Writer, event: *telemetry.Event) !void {
@@ -510,14 +726,17 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         const region = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
         const annotated = try node_cas_mod.annotateSnapshot(gpa, snapshot, region);
         defer gpa.free(annotated);
-        event.chars_emetgate = annotated.len;
+        const cut = LinesCut.of(snapshot.source, annotated, region.start, region.end, 0);
+        try reading.note(loaded.place.rel).shown(snapshot.source, region.start, region.end, .dense);
+        event.chars_emetgate = cut.c.kept.len;
         event.chars_fullfile = snapshot.source.len;
-        return wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), annotated);
+        try wire.writeRangeNodes(w, file, @intCast(start), @intCast(end), cut.c.kept);
+        return cut.trailer(w, file, .nodes, "");
     }
     const table = try snapshot.symbols();
     const requested = try line_range.byteRangeForLines(snapshot.source, @intCast(start), @intCast(end));
     const matched = line_range.symbolsOverlapping(gpa, table.*, requested) catch |err| switch (err) {
-        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, w, event),
+        error.NoSymbolInRange => return read_tools.renderRange(gpa, file, snapshot.source, start, end, force, mirror, reading.note(loaded.place.rel), w, event),
         else => |e| return e,
     };
     defer gpa.free(matched);
@@ -539,38 +758,93 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
         for (folded_docs.items) |d| d.deinit(gpa);
         folded_docs.deinit(gpa);
     }
+    const room = reply_contract.room(.read_symbol);
+    var used: usize = 0;
     var chars: usize = 0;
+    var shown_count: usize = matched.len;
+    var first_cut: ?LinesCut = null;
+    var cut_form: LinesCut.Form = .source;
+    var stop_line: i64 = 0;
     for (matched, 0..) |found, i| {
         ref_text[i] = try std.fmt.allocPrint(gpa, "{f}", .{found.ref});
         named = i + 1;
+        const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
+        const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
         try folded_docs.ensureUnusedCapacity(gpa, 1);
         const docs = try reading.foldDocs(gpa, snapshot, found.declaration.start, found.declaration.end);
         if (docs) |d| folded_docs.appendAssumeCapacity(d);
         const text = if (docs) |d| d.text else snapshot.source[found.declaration.start..found.declaration.end];
         const folds = reading.folds(text.len);
+        var view: ?read_budget.View = null;
+        if (folds) {
+            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
+            view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
+        }
+        const cost = entryCost(ref_text[i], if (view) |v| v.text else text);
+        if (used + cost > room) {
+            if (view) |v| v.deinit(gpa);
+            if (i != 0) {
+                shown_count = i;
+                stop_line = @intCast(start_line);
+                break;
+            }
+            const span: symbol.Span = if (folds) .{ .start = @max(found.declaration.start, requested.start), .end = @min(found.declaration.end, requested.end) } else found.declaration;
+            const cut = LinesCut.of(snapshot.source, if (folds) snapshot.source[span.start..span.end] else text, span.start, span.end, entryCost(ref_text[i], null));
+            first_cut = cut;
+            cut_form = if (folds or docs == null) .source else .folded;
+            entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = cut.c.kept, .start_line = @intCast(cut.first), .end_line = @intCast(end_line), .docs = if (docs != null and !folds) docs.?.spans else &.{} };
+            views = i + 1;
+            try reading.note(loaded.place.rel).shown(snapshot.source, span.start, span.end, .dense);
+            chars += cut.c.kept.len;
+            shown_count = 1;
+            break;
+        }
         var unchanged = whole_read;
         if (!whole_read) if (mirror) |m| {
             const key = try mirrorKey(gpa, file, ref_text[i], folds or docs != null);
             defer gpa.free(key);
             unchanged = try m.check(key, found.hash, force) == .unchanged;
         };
-        const start_line = std.mem.count(u8, snapshot.source[0..found.declaration.start], "\n") + 1;
-        const end_line = std.mem.count(u8, snapshot.source[0..found.declaration.end], "\n") + 1;
         entries[i] = .{ .ref = ref_text[i], .hash = found.hash, .text = if (unchanged) null else text, .start_line = @intCast(start_line), .end_line = @intCast(end_line), .docs = if (docs) |d| d.spans else &.{} };
         views = i + 1;
-        if (unchanged) continue;
-        if (folds) {
-            if (lines == null) lines = try read_budget.Lines.init(gpa, snapshot.source);
-            const view = try read_budget.focus(gpa, snapshot.source, lines.?, found.declaration.start, found.declaration.end, @intCast(start), @intCast(end));
-            entries[i].folded = .{ .view = view, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
-            chars += view.text.len;
+        if (unchanged) {
+            if (view) |v| v.deinit(gpa);
+            used += entryCost(ref_text[i], null);
+            continue;
+        }
+        try reading.note(loaded.place.rel).shown(snapshot.source, found.declaration.start, found.declaration.end, if (folds or docs != null) .dense else .exact);
+        if (view) |v| {
+            entries[i].folded = .{ .view = v, .signature = firstLineOf(snapshot.source[found.declaration.start..found.declaration.end]), .budget = reading.budget };
+            chars += v.text.len;
+            used += cost;
             continue;
         }
         chars += text.len;
+        used += cost;
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries);
+    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries[0..shown_count]);
+    if (first_cut) |cut| {
+        if (shown_count < matched.len or cut.last < end) {
+            var also_buf: [96]u8 = undefined;
+            const also = std.fmt.bufPrint(&also_buf, "; the range runs on to line {d}", .{end}) catch "";
+            return cut.trailer(w, file, cut_form, also);
+        }
+        return cut.trailer(w, file, cut_form, "");
+    }
+    if (shown_count < matched.len) {
+        var rest_buf: [256]u8 = undefined;
+        const rest = std.fmt.bufPrint(&rest_buf, "{d} of {d}, from line {d}", .{ matched.len - shown_count, matched.len, stop_line }) catch "";
+        // A later symbol that starts after the requested start continues the
+        // same symbol view; otherwise the raw lines make progress.
+        const from = @max(stop_line, start);
+        if (from > start) {
+            try reply_contract.writeTrailer(w, "the symbols {s}", .{rest}, "emetgate_read_symbol", .{ .file = file, .line_start = from, .line_end = end, .detail = if (reading.detail == .full) @as(?[]const u8, "full") else null });
+        } else {
+            try reply_contract.writeTrailer(w, "the symbols {s}", .{rest}, "emetgate_read_file", .{ .file = file, .line_start = from, .line_end = end });
+        }
+    }
 }
 
 fn callMutate(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, root: ?[]const u8) !ToolResult {
@@ -787,6 +1061,33 @@ fn commitInto(gpa: Allocator, io: std.Io, runtime: *Runtime, message: []const u8
         .allow_repo_memory = policy.allow_repo_memory,
     });
     defer result.deinit(gpa);
+    return writeCommitResult(gpa, io, root, result, w, event);
+}
+
+fn commitAdmission(gpa: Allocator, io: std.Io, message: []const u8, policy: Policy, event: *telemetry.Event) !?ToolResult {
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    const refused = admissionInto(gpa, io, message, policy, &buffer.writer, event) catch |err| blk: {
+        if (err == error.OutOfMemory) return err;
+        event.fail(@errorName(err));
+        buffer.clearRetainingCapacity();
+        try wire.writeFailure(&buffer.writer, err, &event.trace.blocked);
+        break :blk true;
+    };
+    if (!refused) return null;
+    return .{ .text = try dupTrim(gpa, buffer.written()), .is_error = true };
+}
+
+fn admissionInto(gpa: Allocator, io: std.Io, message: []const u8, policy: Policy, w: *Writer, event: *telemetry.Event) !bool {
+    try commit_message.check(message);
+    const root = try repo.servedRoot(gpa, io, policy.root);
+    defer gpa.free(root);
+    const result = (try commit_group.admit(gpa, io, root, message)) orelse return false;
+    defer result.deinit(gpa);
+    return writeCommitResult(gpa, io, root, result, w, event);
+}
+
+fn writeCommitResult(gpa: Allocator, io: std.Io, root: []const u8, result: commit_group.Result, w: *Writer, event: *telemetry.Event) !bool {
     var js: std.json.Stringify = .{ .writer = w };
     switch (result) {
         .committed => |c| {
@@ -1071,14 +1372,35 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     var js: std.json.Stringify = .{ .writer = &out.writer };
     try js.beginObject();
     var failed: ?[]const u8 = null;
-    if (branch) |name| {
+    var made_branch = false;
+    var before: ?HeadBefore = null;
+    const committed_with_edits = policy.commit and edits != null;
+    const separate: ?[]const u8 = if (committed_with_edits) null else message;
+    if (separate) |text| if (try commitAdmission(gpa, io, text, policy, event)) |refused| {
+        defer gpa.free(refused.text);
+        try changeStep(arena, &js, "commit", refused.text);
+        failed = "commit";
+        if (edits != null) {
+            try js.objectField("on_disk");
+            try js.write(edits_not_written);
+        }
+    };
+    if (failed == null) if (branch) |name| {
+        before = try headBefore(arena, io, policy.root);
         const reply = try git_write.callGitWrite(gpa, io, try gitArgs(arena, &.{ "switch", "-c", name }), event, policy.root, policy.open_run);
         defer gpa.free(reply.text);
         try changeStep(arena, &js, "branch", reply.text);
-        if (reply.is_error) failed = "branch";
-    }
+        if (reply.is_error) failed = "branch" else made_branch = true;
+        if (reply.is_error) {
+            try js.objectField("fix");
+            try js.write(try std.fmt.allocPrint(arena, "the branch was not created (see branch); if {s} already exists, switch to it with emetgate_git_write args [\"switch\", \"{s}\"] and resend without branch, or pick another name", .{ name, name }));
+        }
+    };
+    var edits_written = false;
+    var undo: ?change_undo.Snapshot = null;
     if (failed == null) if (edits) |list| {
         const root = policy.root orelse ".";
+        if (separate != null) undo = try change_undo.take(arena, io, try repo.servedRoot(arena, io, policy.root), try editedFiles(arena, list));
         var batch: std.json.ObjectMap = .empty;
         try batch.put(arena, "edits", if (policy.known_files) |known| try withKnownHashes(arena, io, root, list, known) else list);
         if (policy.commit) if (getString(arguments, "message") orelse message) |text| try batch.put(arena, "message", .{ .string = text });
@@ -1087,17 +1409,34 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
         defer gpa.free(reply.text);
         try changeStep(arena, &js, "edits", reply.text);
         if (reply.is_error) failed = "edits";
+        edits_written = !reply.is_error;
+        if (!reply.is_error) try writeParseCheck(arena, io, runtime, root, &js, list);
         if (!reply.is_error) if (policy.known_files) |known| try noteWritten(arena, io, root, list, known);
         if (!reply.is_error) if (policy.map_session) |session| try writeUnreached(arena, io, &js, session, root, list);
+        if (reply.is_error and made_branch) try undoBranch(arena, io, &js, policy.root, branch.?, before);
     };
-    const committed_with_edits = policy.commit and edits != null;
-    if (failed == null and !committed_with_edits) if (message) |text| {
+    if (failed == null) if (separate) |text| {
         const made = try commitReply(gpa, io, runtime, text, policy, event, true);
         defer gpa.free(made.text);
         try changeStep(arena, &js, "commit", made.text);
         if (made.is_error) failed = "commit";
+        if (made.is_error and edits_written) {
+            try js.objectField("on_disk");
+            if (undo) |snapshot| {
+                if (change_undo.restore(gpa, arena, io, snapshot)) |_| {
+                    try js.write(edits_undone);
+                } else |err| {
+                    try js.write(try std.fmt.allocPrint(arena, "the edits are written to the work tree; the commit was refused and undoing the edits failed ({s}), so they are on disk but not committed", .{@errorName(err)}));
+                    event.disk = "edits written, commit refused";
+                }
+            } else {
+                try js.write("the edits are written to the work tree; the commit was refused, so they are not committed");
+                event.disk = "edits written, commit refused";
+            }
+        }
+        if (made.is_error and made_branch and event.disk == null) try undoBranch(arena, io, &js, policy.root, branch.?, before);
     };
-    if (failed == null and (branch != null or message != null)) try writeAfter(gpa, io, &js, policy);
+    if (branch != null or message != null) try writeAfter(gpa, io, &js, policy);
     try js.objectField("status");
     try js.write(if (failed == null) "applied" else "stopped");
     if (failed) |step| {
@@ -1106,6 +1445,94 @@ fn callChange(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event
     }
     try js.endObject();
     return .{ .text = try dupTrim(gpa, out.written()), .is_error = failed != null };
+}
+
+const edits_not_written = "the commit was refused before any edit was written, so the edits were not kept: the work tree is as it was before the call";
+const edits_undone = "the commit was refused, so the edits were not kept: every file this call wrote is back as it was before the call";
+
+fn editedFiles(arena: Allocator, list: Value) ![]const []const u8 {
+    var files: std.ArrayList([]const u8) = .empty;
+    for (list.array.items) |item| {
+        try files.append(arena, getString(item, "file") orelse continue);
+    }
+    return files.items;
+}
+
+const HeadBefore = struct {
+    /// The branch checked out before the call, or null when HEAD was detached.
+    branch: ?[]const u8,
+    oid: []const u8,
+};
+
+fn headBefore(arena: Allocator, io: std.Io, served: ?[]const u8) !?HeadBefore {
+    const root = try repo.servedRoot(arena, io, served);
+    const git = git_commit.Git.init(arena, io, root) catch return null;
+    const oid = (git.run(&.{ "rev-parse", "--verify", "-q", "HEAD" }) catch return null) orelse return null;
+    const ref = git.run(&.{ "symbolic-ref", "-q", "--short", "HEAD" }) catch null;
+    return .{ .branch = ref, .oid = oid };
+}
+
+/// The edits of a call that created its branch were refused: switch back to where HEAD was
+/// and delete the branch, but only while it still points at that commit (no commits of its
+/// own), so the same call can be sent again.
+fn undoBranch(arena: Allocator, io: std.Io, js: *std.json.Stringify, served: ?[]const u8, name: []const u8, before: ?HeadBefore) !void {
+    try js.objectField("branch_undone");
+    const was = before orelse return js.write("no: HEAD had no commit before the call, so the branch is left checked out");
+    const root = try repo.servedRoot(arena, io, served);
+    const git = git_commit.Git.init(arena, io, root) catch return js.write("no: git could not be started; the branch is left checked out");
+    const full = try std.fmt.allocPrint(arena, "refs/heads/{s}", .{name});
+    const tip = (git.run(&.{ "rev-parse", "--verify", "-q", full }) catch null) orelse return js.write("no: the branch is not found; nothing to undo");
+    if (!std.mem.eql(u8, tip, was.oid)) return js.write("no: the branch has commits of its own, so it is kept");
+    const back = if (was.branch) |b| try arena.dupe([]const u8, &.{ "switch", "-q", b }) else try arena.dupe([]const u8, &.{ "switch", "-q", "--detach", was.oid });
+    if ((git.run(back) catch null) == null) return js.write("no: switching back failed; the branch is left checked out");
+    const where = was.branch orelse was.oid;
+    if ((git.run(&.{ "branch", "-q", "-d", name }) catch null) == null) {
+        return js.write(try std.fmt.allocPrint(arena, "partly: back on {s}, but deleting {s} failed, so it still exists", .{ where, name }));
+    }
+    try js.write(try std.fmt.allocPrint(arena, "yes: back on {s}, and {s} is deleted; the same call can be sent again", .{ where, name }));
+}
+
+/// Says which written source files the language's own check verified after the reparse.
+/// A language without a check is named, never reported as verified.
+fn writeParseCheck(arena: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, js: *std.json.Stringify, list: Value) !void {
+    var verified: std.ArrayList(u8) = .empty;
+    var broken: std.ArrayList(u8) = .empty;
+    var unverified: std.ArrayList(u8) = .empty;
+    for (list.array.items) |item| {
+        const file = getString(item, "file") orelse continue;
+        const profile = lang_registry.forPath(file) orelse continue;
+        const into = if (profile.source_check != null)
+            &verified
+        else if (profile.grammar_verifies)
+            (if (try parsesClean(arena, io, runtime, root, file, profile) orelse continue) &verified else &broken)
+        else
+            &unverified;
+        if (into.items.len != 0) try into.appendSlice(arena, ", ");
+        try into.appendSlice(arena, file);
+        if (into != &verified) try into.print(arena, " ({s})", .{profile.name});
+    }
+    if (verified.items.len == 0 and broken.items.len == 0 and unverified.items.len == 0) return;
+    try js.objectField("parse");
+    if (broken.items.len == 0 and unverified.items.len == 0) return js.write("verified: the language check passed after the reparse");
+    var text: std.ArrayList(u8) = .empty;
+    if (verified.items.len != 0) try text.print(arena, "verified for {s}", .{verified.items});
+    if (broken.items.len != 0) {
+        if (text.items.len != 0) try text.appendSlice(arena, "; ");
+        try text.print(arena, "not verified for {s}: the tree-sitter parse has ERROR or MISSING nodes", .{broken.items});
+    }
+    if (unverified.items.len != 0) {
+        if (text.items.len != 0) try text.appendSlice(arena, "; ");
+        try text.print(arena, "not verified for {s}: tree-sitter only, no language check", .{unverified.items});
+    }
+    try js.write(text.items);
+}
+
+fn parsesClean(arena: Allocator, io: std.Io, runtime: *Runtime, root: []const u8, file: []const u8, profile: *const Profile) !?bool {
+    const abs = try std.fs.path.resolve(arena, &.{ root, file });
+    const bytes = std.Io.Dir.cwd().readFileAlloc(io, abs, arena, .limited(max_known_bytes)) catch return null;
+    const tree = runtime.parser.parseIn(profile.grammar(), bytes) catch return false;
+    defer tree.deinit();
+    return !tree.root().hasError();
 }
 
 pub const unreached_shown: usize = 8;
@@ -1292,6 +1719,14 @@ fn changeStep(arena: Allocator, js: *std.json.Stringify, field: []const u8, text
 }
 
 fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+    fuzzy_match.reset();
+    const reply = try tryBatchReply(gpa, io, runtime, args, event, policy);
+    if (!fuzzy_match.wasUsed()) return reply;
+    defer gpa.free(reply.text);
+    return .{ .text = try fuzzy_match.annotate(gpa, reply.text), .is_error = reply.is_error };
+}
+
+fn tryBatchReply(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     const arguments = args orelse return tool_result.missing(edits_missing, .{});
     const retry = getString(arguments, "retry");
     const given: []const Value = if (getField(arguments, "edits")) |edits_val| switch (edits_val) {

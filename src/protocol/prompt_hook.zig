@@ -4,6 +4,7 @@ const rule_catalog = @import("rule_catalog.zig");
 const prompt_words = @import("prompt_words.zig");
 const lockdown_slash = @import("../platform/lockdown_slash.zig");
 const json_input = @import("json_input.zig");
+const rule_offer = @import("rule_offer.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -19,6 +20,10 @@ const whitespace = " \t\r\n";
 const byte_order_mark = "\xef\xbb\xbf";
 
 pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputEmpty, HookInputInvalid, OutOfMemory }!?[]const u8 {
+    return argumentsOf(try promptOf(arena, input));
+}
+
+pub fn promptOf(arena: Allocator, input: []const u8) error{ HookInputEmpty, HookInputInvalid, OutOfMemory }![]const u8 {
     if (std.mem.trim(u8, input, whitespace ++ byte_order_mark).len == 0) return error.HookInputEmpty;
     const parsed = json_input.parseLeaky(std.json.Value, arena, input, .{}) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -27,7 +32,12 @@ pub fn ruleText(arena: Allocator, input: []const u8) error{ HookInputEmpty, Hook
     if (parsed != .object) return error.HookInputInvalid;
     const prompt = parsed.object.get(prompt_field) orelse return error.HookInputInvalid;
     if (prompt != .string) return error.HookInputInvalid;
-    return argumentsOf(prompt.string);
+    return prompt.string;
+}
+
+pub fn offer(prompt: []const u8, out: *Writer) Writer.Error!bool {
+    if (argumentsOf(prompt) != null) return false;
+    return rule_offer.respond(prompt, out);
 }
 
 pub fn argumentsOf(prompt: []const u8) ?[]const u8 {

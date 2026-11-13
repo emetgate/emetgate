@@ -10,6 +10,7 @@ const git_write = @import("git_write.zig");
 const diff_digest = @import("diff_digest.zig");
 const read_budget = @import("read_budget.zig");
 const wire = @import("wire.zig");
+const reply_contract = @import("reply_contract.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -24,7 +25,11 @@ const failure = tool_result.failure;
 
 const max_git_output_bytes = 256 * 1024;
 const max_output_lines = 800;
-const max_blame_bytes = 32 * 1024 * 1024;
+
+/// How much of one git command's stdout a call reads. Past it git is stopped
+/// and the reply covers what was read, saying so; it is a variable only so a
+/// test can reach the cut without writing a 32 MiB file.
+pub var capture_limit: usize = 32 * 1024 * 1024;
 
 threadlocal var git_reason_buf: [320]u8 = undefined;
 threadlocal var git_reason_len: usize = 0;
@@ -125,8 +130,13 @@ const Options = struct {
     line_end: ?i64,
     cursor: ?[]const u8,
     clamped: usize = 0,
+    requested: i64 = 0,
     rev: ?[]const u8 = null,
     unborn: bool = false,
+    /// git printed more than `capture_limit` and was stopped there.
+    cut: bool = false,
+    staged: bool = false,
+    show: ?[]const u8 = null,
 };
 
 fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub: []const u8, args: ?Value, w: *Writer, budget: usize) !void {
@@ -134,7 +144,8 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     var opts: Options = .{
         .detail = detail,
         .symbols_only = getBool(args, "symbols_only"),
-        .budget = budget,
+        .budget = @min(budget, reply_contract.room(.git)),
+        .staged = getBool(args, "staged"),
         .line_start = getInt(args, "line_start"),
         .line_end = getInt(args, "line_end"),
         .cursor = if (args) |a| getString(a, "cursor") else null,
@@ -183,6 +194,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         const requested = getInt(args, "n") orelse default_log_count;
         const clamped: usize = @intCast(std.math.clamp(requested, 1, max_log_count));
         opts.clamped = clamped;
+        opts.requested = requested;
         argv[n] = "log";
         n += 1;
         argv[n] = "--no-color";
@@ -203,6 +215,7 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         const commit = (if (args) |a| getString(a, "commit") else null) orelse return error.MissingCommit;
         if (!isValidCommit(commit)) return error.InvalidCommit;
         show_commit = commit;
+        opts.show = commit;
         argv[n] = "show";
         n += 1;
         argv[n] = "--no-color";
@@ -222,10 +235,15 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
         argv[n] = "--porcelain";
         n += 1;
         if (opts.line_start) |ls| {
-            const le = opts.line_end orelse ls;
+            if (ls < 1) return error.InvalidCount;
             argv[n] = "-L";
             n += 1;
-            argv[n] = std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount;
+            // Without line_end, one line past a page is asked for, so the
+            // reply knows whether a next_line follows.
+            argv[n] = if (opts.line_end) |le|
+                std.fmt.bufPrint(&count_buf, "{d},{d}", .{ ls, le }) catch return error.InvalidCount
+            else
+                std.fmt.bufPrint(&count_buf, "{d},+{d}", .{ ls, max_output_lines + 1 }) catch return error.InvalidCount;
             n += 1;
         }
         if (args) |a| if (getString(a, "commit")) |rev| {
@@ -246,16 +264,18 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     }
 
     const is_blame = std.mem.eql(u8, sub, "blame");
-    const result = bounded_run.run(gpa, io, .{
+    var cut = false;
+    const result = bounded_run.runHead(gpa, io, .{
         .argv = argv[0..n],
         .cwd = .{ .path = place.root },
-        .stdout_limit = .limited(if (is_blame) max_blame_bytes else max_git_output_bytes),
+        .stdout_limit = .limited(capture_limit),
         .stderr_limit = .limited(max_git_output_bytes),
-    }) catch |err| return if (err == error.StreamTooLong) error.GitOutputTooLarge else error.GitCommandFailed;
+    }, &cut) catch |err| return if (err == error.StreamTooLong) error.GitOutputTooLarge else error.GitCommandFailed;
     defer gpa.free(result.stdout);
     defer gpa.free(result.stderr);
+    opts.cut = cut;
 
-    const ok = switch (result.term) {
+    const ok = cut or switch (result.term) {
         .exited => |code| code == 0,
         else => false,
     };
@@ -289,24 +309,42 @@ fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]const u8, sub:
     var blame: ?git_symbols.BlameReport = null;
     defer if (blame) |*b| b.deinit();
 
-    if (std.mem.eql(u8, sub, "diff")) {
+    // A cut capture ends at the last whole line (for blame, the last whole
+    // record); the symbol maps need the whole output, so they are skipped.
+    const stdout = if (cut) wholeLines(result.stdout, is_blame) else result.stdout;
+    const analyzable = !cut and stdout.len <= max_git_output_bytes;
+
+    if (std.mem.eql(u8, sub, "diff") and analyzable) {
         // An empty rev means the index: `git show :<path>`. For the working
         // tree the new side is read from disk (null rev).
         const sides: git_symbols.Sides = if (getBool(args, "staged"))
             .{ .old_rev = "HEAD", .new_rev = "" }
         else
             .{ .old_rev = "", .new_rev = null };
-        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, result.stdout) catch null;
-    } else if (std.mem.eql(u8, sub, "show")) {
+        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, stdout) catch null;
+    } else if (std.mem.eql(u8, sub, "show") and analyzable) {
         const parent = try std.fmt.allocPrint(gpa, "{s}^", .{show_commit.?});
         defer gpa.free(parent);
         const sides: git_symbols.Sides = .{ .old_rev = parent, .new_rev = show_commit.? };
-        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, result.stdout) catch null;
+        summary = git_symbols.analyzeDiff(gpa, io, runtime, git, place.root, sides, stdout) catch null;
     }
 
-    if (is_blame) blame = git_symbols.analyzeBlame(gpa, io, runtime, git, place.root, place.rel, opts.rev, result.stdout) catch null;
+    if (is_blame and !cut) blame = git_symbols.analyzeBlame(gpa, io, runtime, git, place.root, place.rel, opts.rev, stdout) catch null;
 
-    try writeResult(gpa, w, sub, path, result.stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null, opts);
+    try writeResult(gpa, w, sub, path, stdout, annotated, if (summary) |*s| s else null, if (blame) |*b| b else null, opts);
+}
+
+/// The longest prefix of a cut capture that ends on a whole line; for blame
+/// porcelain, on the last whole record (its tab-led text line).
+fn wholeLines(text: []const u8, porcelain: bool) []const u8 {
+    var end = text.len;
+    while (end > 0) {
+        const nl = std.mem.lastIndexOfScalar(u8, text[0..end], '\n') orelse return text[0..0];
+        const start = if (std.mem.lastIndexOfScalar(u8, text[0..nl], '\n')) |p| p + 1 else 0;
+        if (!porcelain or (nl > start and text[start] == '\t')) return text[0 .. nl + 1];
+        end = nl;
+    }
+    return text[0..0];
 }
 
 fn unbornHead(gpa: Allocator, io: std.Io, git: []const u8, root: []const u8) !bool {
@@ -450,7 +488,18 @@ fn writeResult(gpa: Allocator, w: *Writer, sub: []const u8, path: ?[]const u8, s
     } else if (std.mem.eql(u8, sub, "status")) {
         try writeStatus(gpa, &js, path, stdout, opts);
     } else if (std.mem.eql(u8, sub, "diff") or std.mem.eql(u8, sub, "show")) {
-        try writeDiffShow(gpa, &js, sub, path, stdout, summary, opts);
+        const rest = try writeDiffShow(gpa, &js, sub, path, stdout, summary, opts);
+        try w.writeByte('\n');
+        const left = rest orelse return;
+        return reply_contract.writeTrailer(w, "{s} lines {d}-{d}", .{ sub, left.next, left.total }, "emetgate_git", .{
+            .sub = sub,
+            .path = path,
+            .staged = if (opts.staged) @as(?bool, true) else null,
+            .commit = opts.show,
+            .detail = if (opts.detail == .full) @as(?[]const u8, "full") else null,
+            .line_start = left.next,
+            .line_end = opts.line_end,
+        });
     } else if (std.mem.eql(u8, sub, "blame")) {
         try writeBlame(gpa, &js, path, stdout, blame, opts);
     } else {
@@ -518,6 +567,10 @@ fn writeLog(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdout: 
     try js.write(shown);
     try js.objectField("verification_note");
     try js.write("receipt means a receipt note is attached, not that it holds; emetgate verify <commit> checks it");
+    if (opts.clamped != 0 and opts.requested != @as(i64, @intCast(opts.clamped))) {
+        try js.objectField("n_used");
+        try js.write(opts.clamped);
+    }
     if (opts.unborn) {
         try js.objectField("note");
         try js.write("no commits yet");
@@ -659,6 +712,188 @@ fn writeStatus(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, stdou
     try js.endObject();
 }
 
+// --- bounded replies -------------------------------------------------------
+//
+// Every cut reply names where the rest starts, in a parameter the same tool
+// takes: `next_line` for `line_start`, `next_cursor` for `cursor`. The two
+// helpers below are the whole contract for line-numbered text: `pageLines`
+// picks one window under a byte budget, and `writePageFields` writes the
+// fields that let the next call continue from it.
+
+/// One window of a line-numbered text: lines `first`..`last` (1-based,
+/// inclusive; `last` is first - 1 when nothing was shown), `next` is the first
+/// line the window left out, or null when it reached the end of what was asked.
+const Page = struct {
+    first: usize,
+    last: usize,
+    next: ?usize,
+    total: usize,
+    text: []u8,
+    /// One line longer than the whole budget was shortened to fit.
+    line_shortened: bool,
+
+    fn deinit(self: Page, gpa: Allocator) void {
+        gpa.free(self.text);
+    }
+};
+
+/// Picks lines `first`..`last_wanted` of `lines` that fit `byte_budget` and
+/// `max_lines`. When the budget, not the end, stops it, the window is cut back
+/// to the last line `boundary` accepts, so a hunk or file is not split when it
+/// fits. At least one line is always shown, shortened if it alone is over the
+/// budget, so a continuation always moves forward.
+fn pageLines(gpa: Allocator, lines: []const []const u8, first: usize, last_wanted: usize, byte_budget: usize, max_lines: usize, boundary: *const fn ([]const u8) bool) !Page {
+    const total = lines.len;
+    const start = @max(first, 1);
+    if (start > total) return .{ .first = start, .last = start - 1, .next = null, .total = total, .text = try gpa.dupe(u8, ""), .line_shortened = false };
+    const stop = @min(total, @max(last_wanted, start));
+    var end = start - 1;
+    var size: usize = 0;
+    while (end < stop and end - (start - 1) < max_lines and size + reply_contract.encodedLen(lines[end], .json) + 2 <= byte_budget) : (end += 1) {
+        size += reply_contract.encodedLen(lines[end], .json) + 2;
+    }
+    if (end < stop) {
+        // Back to a boundary only when that keeps at least half the page:
+        // one hunk bigger than the budget is cut at a line instead.
+        var b = end;
+        while (b > start and !boundary(lines[b])) b -= 1;
+        if (b > start and (b - (start - 1)) * 2 >= end - (start - 1)) end = b;
+    }
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    var shortened = false;
+    if (end < start) {
+        try out.writer.writeAll(reply_contract.cut(lines[start - 1], byte_budget, .json).kept);
+        try out.writer.writeAll(ellipsis);
+        shortened = true;
+        end = start;
+    } else {
+        for (lines[start - 1 .. end], 0..) |line, i| {
+            if (i != 0) try out.writer.writeByte('\n');
+            try out.writer.writeAll(line);
+        }
+    }
+    const next: ?usize = if (end < stop) end + 1 else null;
+    return .{ .first = start, .last = end, .next = next, .total = total, .text = try gpa.dupe(u8, out.written()), .line_shortened = shortened };
+}
+
+/// The fields of a page reply: the text, which lines it holds, and the line to
+/// pass as `line_start` for the rest. `captured_cut` says git printed more than
+/// `capture_limit`, so lines past `lines_total` exist but no call reaches them.
+fn writePageFields(js: *std.json.Stringify, page: Page, captured_cut: bool) !void {
+    try js.objectField("output");
+    try js.write(page.text);
+    try js.objectField("line_start");
+    try js.write(page.first);
+    try js.objectField("line_end");
+    try js.write(page.last);
+    try js.objectField("lines_total");
+    try js.write(page.total);
+    if (page.line_shortened) {
+        try js.objectField("line_shortened");
+        try js.write(true);
+    }
+    if (page.next) |next| {
+        try js.objectField("next_line");
+        try js.write(next);
+    }
+    if (captured_cut) {
+        try js.objectField("capture_cut");
+        try js.write(true);
+    }
+}
+
+fn splitLines(gpa: Allocator, text: []const u8) ![]const []const u8 {
+    var list: std.ArrayList([]const u8) = .empty;
+    errdefer list.deinit(gpa);
+    const body = if (std.mem.endsWith(u8, text, "\n")) text[0 .. text.len - 1] else text;
+    if (body.len == 0) return list.toOwnedSlice(gpa);
+    var it = std.mem.splitScalar(u8, body, '\n');
+    while (it.next()) |l| try list.append(gpa, l);
+    return list.toOwnedSlice(gpa);
+}
+
+fn isDiffBoundary(line: []const u8) bool {
+    return std.mem.startsWith(u8, line, "@@") or std.mem.startsWith(u8, line, "diff --git ");
+}
+
+/// One file of a raw diff: its path, the raw line its `diff --git` header is
+/// on, and its added and removed line counts.
+const FileStat = struct { path: []const u8, line: usize, added: usize, removed: usize };
+
+fn diffPath(header: []const u8) []const u8 {
+    const at = std.mem.lastIndexOf(u8, header, " b/") orelse std.mem.lastIndexOf(u8, header, " \"b/") orelse return header["diff --git ".len..];
+    const rest = header[at + 1 ..];
+    const unquoted = if (rest.len >= 2 and rest[0] == '"' and rest[rest.len - 1] == '"') rest[1 .. rest.len - 1] else rest;
+    return if (std.mem.startsWith(u8, unquoted, "b/")) unquoted[2..] else unquoted;
+}
+
+fn diffFiles(gpa: Allocator, lines: []const []const u8) ![]FileStat {
+    var files: std.ArrayList(FileStat) = .empty;
+    errdefer files.deinit(gpa);
+    var in_hunk = false;
+    for (lines, 0..) |line, i| {
+        if (std.mem.startsWith(u8, line, "diff --git ")) {
+            try files.append(gpa, .{ .path = diffPath(std.mem.trimEnd(u8, line, "\r")), .line = i + 1, .added = 0, .removed = 0 });
+            in_hunk = false;
+            continue;
+        }
+        if (files.items.len == 0) continue;
+        if (std.mem.startsWith(u8, line, "@@")) {
+            in_hunk = true;
+            continue;
+        }
+        if (!in_hunk or line.len == 0) continue;
+        const f = &files.items[files.items.len - 1];
+        if (line[0] == '+') f.added += 1 else if (line[0] == '-') f.removed += 1;
+    }
+    return files.toOwnedSlice(gpa);
+}
+
+/// Writes the stat of every file of the diff, as many as fit `budget` bytes,
+/// and returns the bytes used. Each file names the raw `line` its diff starts
+/// on, a `line_start` for it; `files_more` counts those left out.
+fn writeFileStats(js: *std.json.Stringify, files: []const FileStat, budget: usize) !usize {
+    var added: usize = 0;
+    var removed: usize = 0;
+    for (files) |f| {
+        added += f.added;
+        removed += f.removed;
+    }
+    try js.objectField("files_total");
+    try js.write(files.len);
+    try js.objectField("added");
+    try js.write(added);
+    try js.objectField("removed");
+    try js.write(removed);
+    try js.objectField("files");
+    try js.beginArray();
+    var used: usize = 0;
+    var shown: usize = 0;
+    for (files) |f| {
+        const cost = f.path.len + 64;
+        if (shown != 0 and used + cost > budget) break;
+        used += cost;
+        shown += 1;
+        try js.beginObject();
+        try js.objectField("path");
+        try js.write(f.path);
+        try js.objectField("added");
+        try js.write(f.added);
+        try js.objectField("removed");
+        try js.write(f.removed);
+        try js.objectField("line");
+        try js.write(f.line);
+        try js.endObject();
+    }
+    try js.endArray();
+    if (shown < files.len) {
+        try js.objectField("files_more");
+        try js.write(files.len - shown);
+    }
+    return used + 80;
+}
+
 const Folded = struct {
     text: []u8,
     elided: bool,
@@ -667,6 +902,8 @@ const Folded = struct {
     lines_shown: usize,
     lines_total: usize,
     hunks_elided: usize,
+    /// The raw diff line where what the fold left out begins.
+    next_line: usize,
 
     fn deinit(self: Folded, gpa: Allocator) void {
         gpa.free(self.text);
@@ -677,7 +914,57 @@ fn isHunkBoundary(line: []const u8) bool {
     return std.mem.startsWith(u8, line, "@");
 }
 
-fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
+fn hunkNewStart(line: []const u8) ?usize {
+    const plus = std.mem.indexOfScalar(u8, line, '+') orelse return null;
+    var end = plus + 1;
+    while (end < line.len and std.ascii.isDigit(line[end])) end += 1;
+    return std.fmt.parseInt(usize, line[plus + 1 .. end], 10) catch null;
+}
+
+fn isCondensedSummary(line: []const u8) bool {
+    return line.len != 0 and std.ascii.isDigit(line[0]) and std.mem.indexOf(u8, line, " files +") != null;
+}
+
+/// Maps the first line a fold of the condensed diff left out to a raw diff
+/// line: the start of the hunk that holds it (or of its file), so a
+/// `line_start` call goes on from there, repeating at most the part of that
+/// hunk the fold already showed.
+fn rawLineOfFold(condensed: []const []const u8, keep: usize, raw: []const []const u8, files: []const FileStat) usize {
+    var summary: ?usize = null;
+    for (condensed[0..keep], 0..) |l, i| if (isCondensedSummary(l)) {
+        summary = i;
+        break;
+    };
+    const after = (summary orelse return 1) + 1;
+    if (keep < after) return 1;
+    var headers: usize = 0;
+    for (condensed[after .. keep + 1]) |l| {
+        if (l.len == 0 or (l[0] != '@' and l[0] != '-' and l[0] != '+')) headers += 1;
+    }
+    if (headers == 0 or headers > files.len) return 1;
+    const file = files[headers - 1];
+    // The block the cut line belongs to: the nearest `@` line above it.
+    var at = keep;
+    while (at > after and condensed[at].len != 0 and (condensed[at][0] == '-' or condensed[at][0] == '+')) at -= 1;
+    const first = condensed[at];
+    if (first.len == 0 or first[0] != '@') return file.line;
+    var digits: usize = 1;
+    while (digits < first.len and std.ascii.isDigit(first[digits])) digits += 1;
+    const wanted = std.fmt.parseInt(usize, first[1..digits], 10) catch return file.line;
+    const file_end = if (headers < files.len) files[headers].line - 1 else raw.len;
+    var best = file.line;
+    var i = file.line;
+    while (i < file_end) : (i += 1) {
+        const l = raw[i];
+        if (!std.mem.startsWith(u8, l, "@@")) continue;
+        const new_start = hunkNewStart(l) orelse continue;
+        if (new_start > wanted) break;
+        best = i + 1;
+    }
+    return best;
+}
+
+fn foldDiff(gpa: Allocator, text: []const u8, budget: usize, raw: []const []const u8, files: []const FileStat) !Folded {
     var lines: std.ArrayList([]const u8) = .empty;
     defer lines.deinit(gpa);
     var it = std.mem.splitScalar(u8, text, '\n');
@@ -690,17 +977,18 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
         size += lines.items[fit].len + 1;
     }
     if (fit >= total) {
-        return .{ .text = try gpa.dupe(u8, text), .elided = false, .elided_start = 0, .elided_end = 0, .lines_shown = total, .lines_total = total, .hunks_elided = 0 };
+        return .{ .text = try gpa.dupe(u8, text), .elided = false, .elided_start = 0, .elided_end = 0, .lines_shown = total, .lines_total = total, .hunks_elided = 0, .next_line = 0 };
     }
     var keep = fit;
     while (keep > 0 and !isHunkBoundary(lines.items[keep])) keep -= 1;
-    if (keep == 0) keep = fit;
+    if (keep * 2 < fit) keep = fit;
 
     var hunks_elided: usize = 0;
     for (lines.items[keep..]) |l| {
         if (std.mem.startsWith(u8, l, "@")) hunks_elided += 1;
     }
     const remaining = total - keep;
+    const next_line = rawLineOfFold(lines.items, keep, raw, files);
 
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
@@ -709,7 +997,7 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
         try out.writer.writeAll(l);
     }
     if (keep != 0) try out.writer.writeByte('\n');
-    try out.writer.print(ellipsis ++ " {d} lines in {d} hunks elided; pass detail:\"full\" for the full diff, or read a changed symbol with {s}emetgate_read_symbol", .{ remaining, hunks_elided, tool_names.prefix() });
+    try out.writer.print(ellipsis ++ " {d} lines in {d} hunks elided; pass line_start:{d} for the raw diff from there, or path for one file", .{ remaining, hunks_elided, next_line });
 
     return .{
         .text = try gpa.dupe(u8, out.written()),
@@ -719,13 +1007,22 @@ fn foldDiff(gpa: Allocator, text: []const u8, budget: usize) !Folded {
         .lines_shown = keep,
         .lines_total = total,
         .hunks_elided = hunks_elided,
+        .next_line = next_line,
     };
 }
 
-fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, stdout: []const u8, summary: ?*const git_symbols.Summary, opts: Options) !void {
+const page_note = "raw diff lines line_start..line_end of lines_total; pass line_start:<next_line> for the next page, or path:<file> from files for one file";
+
+const DiffRest = struct { next: usize, total: usize };
+
+fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path: ?[]const u8, stdout: []const u8, summary: ?*const git_symbols.Summary, opts: Options) !?DiffRest {
     try writeBase(js, sub, path, opts);
     if (opts.symbols_only or opts.detail == .full) {
         if (summary) |s| try writeSymbolSummary(js, s.*);
+    }
+    if (summary == null and stdout.len > max_git_output_bytes) {
+        try js.objectField("symbol_changes_skipped");
+        try js.write("the diff is over 256 KiB; pass path for one file to map its symbols");
     }
 
     if (opts.symbols_only) {
@@ -734,36 +1031,39 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
         try js.objectField("note");
         try js.write("symbol summary only; no raw diff bytes — pass detail:\"full\" or drop symbols_only for hunks");
         try js.endObject();
-        return;
+        return null;
     }
 
-    if (opts.detail == .full) {
-        try writeRaw(gpa, js, stdout);
-        try js.endObject();
-        return;
-    }
+    const raw = try splitLines(gpa, stdout);
+    defer gpa.free(raw);
 
-    const condensed = try diff_digest.condense(gpa, stdout, summary);
-    defer gpa.free(condensed);
-    const folded = try foldDiff(gpa, condensed, opts.budget);
-    defer folded.deinit(gpa);
-    try js.objectField("output");
-    try js.write(folded.text);
-    if (!folded.elided) {
-        try js.endObject();
-        return;
-    }
-    try js.objectField("lines_shown");
-    try js.write(folded.lines_shown);
-    try js.objectField("lines_total");
-    try js.write(folded.lines_total);
-    try js.objectField("chars");
-    try js.write(stdout.len);
-    try js.objectField("budget");
-    try js.write(opts.budget);
-    try js.objectField("elided");
-    try js.beginArray();
-    if (folded.elided) {
+    const files = try diffFiles(gpa, raw);
+    defer gpa.free(files);
+
+    if (opts.detail != .full and opts.line_start == null and !opts.cut and stdout.len <= max_git_output_bytes) {
+        const condensed = try diff_digest.condense(gpa, stdout, summary);
+        defer gpa.free(condensed);
+        if (condensed.len <= opts.budget) {
+            try js.objectField("output");
+            try js.write(condensed);
+            try js.endObject();
+            return null;
+        }
+        const stat_used = try writeFileStats(js, files, opts.budget / 4);
+        const folded = try foldDiff(gpa, condensed, opts.budget -| stat_used, raw, files);
+        defer folded.deinit(gpa);
+        try js.objectField("output");
+        try js.write(folded.text);
+        try js.objectField("lines_shown");
+        try js.write(folded.lines_shown);
+        try js.objectField("lines_total");
+        try js.write(folded.lines_total);
+        try js.objectField("chars");
+        try js.write(stdout.len);
+        try js.objectField("budget");
+        try js.write(opts.budget);
+        try js.objectField("elided");
+        try js.beginArray();
         try js.beginObject();
         try js.objectField("line_start");
         try js.write(folded.elided_start);
@@ -774,11 +1074,36 @@ fn writeDiffShow(gpa: Allocator, js: *std.json.Stringify, sub: []const u8, path:
         try js.objectField("hunks");
         try js.write(folded.hunks_elided);
         try js.endObject();
+        try js.endArray();
+        try js.objectField("next_line");
+        try js.write(folded.next_line);
+        try js.objectField("note");
+        try js.write("compact diff folded under the read budget; files gives every file's stat and the raw line it starts on; pass line_start:<next_line> for the raw diff from where the fold cut, path:<file> for one file, or symbols_only:true for symbol_changes only");
+        try js.endObject();
+        return null;
     }
-    try js.endArray();
+
+    // A page of the raw diff: asked for with line_start, or the first page
+    // of a diff too big to condense.
+    const first_page = opts.line_start == null and opts.detail != .full;
+    const stat_used = if (first_page) try writeFileStats(js, files, opts.budget / 4) else 0;
+    const from: usize = if (opts.line_start) |ls| @intCast(@max(ls, 1)) else 1;
+    const to: usize = if (opts.line_end) |le| @intCast(@max(le, 0)) else std.math.maxInt(usize);
+    const byte_budget = opts.budget -| stat_used;
+    const max_lines: usize = if (opts.detail == .full) max_output_lines else std.math.maxInt(usize);
+    const page = try pageLines(gpa, raw, from, to, byte_budget, max_lines, isDiffBoundary);
+    defer page.deinit(gpa);
+    try writePageFields(js, page, opts.cut);
     try js.objectField("note");
-    try js.write("compact diff folded under the read budget; pass detail:\"full\" for every hunk, or symbols_only:true for symbol_changes only");
+    if (opts.cut)
+        try js.write("git printed more than 32 MiB and was stopped; lines_total counts what was read. " ++ page_note)
+    else if (page.first > page.total)
+        try js.write("line_start is past the end of the diff (lines_total lines)")
+    else
+        try js.write(page_note);
     try js.endObject();
+    const next = page.next orelse return null;
+    return .{ .next = next, .total = page.total };
 }
 
 fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, porcelain: []const u8, blame: ?*const git_symbols.BlameReport, opts: Options) !void {
@@ -788,7 +1113,16 @@ fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, porcel
         try js.write(rev);
     }
     const report = blame orelse {
-        try writeBlameLines(gpa, js, porcelain, opts.budget);
+        // No symbol map: the porcelain was cut at capture_limit, or the
+        // file's language has no profile. Per-line text, paged by next_line.
+        const next = try writeBlameLines(gpa, js, porcelain, opts.budget, opts.cut);
+        try js.objectField("note");
+        if (opts.cut)
+            try js.write("git blame printed more than 32 MiB and was stopped, so there is no symbol map; output lines are: line commit text; pass line_start:<next_line> for the next lines")
+        else if (next != null)
+            try js.write("output lines are: line commit text; pass line_start:<next_line> for the next lines")
+        else
+            try js.write("output lines are: line commit text");
         try js.endObject();
         return;
     };
@@ -796,14 +1130,17 @@ fn writeBlame(gpa: Allocator, js: *std.json.Stringify, path: ?[]const u8, porcel
     const symbol_share = if (opts.symbols_only) opts.budget else opts.budget / 2;
     const symbols_left = try writeBlameSummary(js, report.*, symbol_share);
     var ranges_left: usize = 0;
+    var next_line: ?u32 = null;
     if (opts.symbols_only) {} else if (per_line) {
-        try writeBlameLines(gpa, js, porcelain, if (opts.detail == .full) std.math.maxInt(usize) else opts.budget - symbol_share);
+        next_line = try writeBlameLines(gpa, js, porcelain, opts.budget - symbol_share, false);
     } else {
         ranges_left = try writeBlameRanges(gpa, js, report.lines, opts.budget - symbol_share);
     }
     try js.objectField("note");
-    if (symbols_left != 0 or ranges_left != 0)
-        try js.write("cut at the read budget; pass line_start/line_end for the rest, or symbols_only:true")
+    if (ranges_left != 0 or next_line != null)
+        try js.write("cut at the read budget; pass line_start:<next_line> for the next lines")
+    else if (symbols_left != 0)
+        try js.write("symbol_blame cut at the read budget; symbols_only:true gives it the whole budget, or pass line_start/line_end to blame a smaller range")
     else if (per_line)
         try js.write("output lines are: line commit text")
     else
@@ -879,37 +1216,65 @@ fn isoDate(buf: *[16]u8, time: i64) []const u8 {
     return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ year_day.year, month_day.month.numeric(), @as(u32, month_day.day_index) + 1 }) catch "";
 }
 
-fn writeBlameLines(gpa: Allocator, js: *std.json.Stringify, porcelain: []const u8, budget: usize) !void {
+/// Writes blame porcelain as `line commit text` lines, a contiguous run
+/// from the first under `budget` and 800 lines, and returns (and writes) the
+/// file line the next call starts at with `line_start`, when lines were left.
+fn writeBlameLines(gpa: Allocator, js: *std.json.Stringify, porcelain: []const u8, budget: usize, captured_cut: bool) !?u32 {
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
     var sha: []const u8 = "";
     var final_line: u32 = 0;
     var shown: usize = 0;
+    var used: usize = 0;
     var total: usize = 0;
+    var next_line: ?u32 = null;
+    var last_line: u32 = 0;
     var lines = std.mem.splitScalar(u8, porcelain, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trimEnd(u8, raw, "\r");
         if (line.len != 0 and line[0] == '\t') {
             total += 1;
-            const cost = line.len + 16;
-            if (shown < max_output_lines and out.written().len + cost <= budget) {
+            last_line = final_line;
+            if (next_line != null) continue;
+            const text = line[1..];
+            const head_len = std.fmt.count("{d} {s} ", .{ final_line, shortSha(sha) });
+            const cost = head_len + reply_contract.encodedLen(text, .json) + 2;
+            if (shown < max_output_lines and used + cost <= budget) {
                 if (shown != 0) try out.writer.writeByte('\n');
-                try out.writer.print("{d} {s} {s}", .{ final_line, shortSha(sha), line[1..] });
+                try out.writer.print("{d} {s} {s}", .{ final_line, shortSha(sha), text });
+                used += cost;
                 shown += 1;
-            }
+            } else if (shown == 0) {
+                // One line over the whole budget: shortened, so the next
+                // call still moves on.
+                const kept = reply_contract.cut(text, budget -| head_len, .json).kept;
+                try out.writer.print("{d} {s} {s}" ++ ellipsis, .{ final_line, shortSha(sha), kept });
+                shown += 1;
+            } else next_line = final_line;
         } else if (git_symbols.headerStart(line)) |h| {
             sha = h.sha;
             final_line = h.final_line;
         }
     }
+    if (next_line == null and captured_cut and total != 0) next_line = last_line + 1;
     try js.objectField("output");
     try js.write(out.written());
     try js.objectField("lines_shown");
     try js.write(shown);
-    try js.objectField("lines_total");
-    try js.write(total);
+    if (!captured_cut) {
+        try js.objectField("lines_total");
+        try js.write(total);
+    } else {
+        try js.objectField("capture_cut");
+        try js.write(true);
+    }
     try js.objectField("truncated");
-    try js.write(shown < total);
+    try js.write(next_line != null);
+    if (next_line) |n| {
+        try js.objectField("next_line");
+        try js.write(n);
+    }
+    return next_line;
 }
 
 fn writeSymbolSummary(js: *std.json.Stringify, summary: git_symbols.Summary) !void {

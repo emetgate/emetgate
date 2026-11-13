@@ -23,7 +23,7 @@ pub const Job = enum { load, build };
 
 const max_changed = 256;
 const max_changed_bytes = 4 << 20;
-const patch_wait_ms = 250;
+const racy_ns: i64 = 2 * std.time.ns_per_s;
 const fence_timeout_ms = 1000;
 
 pub fn indexDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
@@ -81,6 +81,9 @@ const Dirt = struct {
 const Base = struct {
     ix: Index,
     path: []u8,
+    read_at: i64,
+    /// Folders left out of the index because they lead outside the root.
+    links_out: Set = .empty,
 };
 
 const Worker = struct {
@@ -108,29 +111,37 @@ const Worker = struct {
 
 const PatchJob = struct {
     against: *const Index,
+    against_read_at: i64,
     swap: bool,
     dirt: Dirt,
     settled: Set,
     overlay: ?*const Index,
+    overlay_read_at: i64,
 };
 
 const Patch = struct {
     overlay: ?Index = null,
+    read_at: i64 = 0,
     reuse: bool = false,
     hidden: []u32 = &.{},
     hidden_bits: []u64 = &.{},
     settled: Set = .empty,
     full: bool = false,
+    /// Folders found to lead outside the root; replace the session's set when
+    /// `links_all` (the whole tree was relisted), else add to it.
+    links_out: Set = .empty,
+    links_all: bool = false,
 
     fn deinit(p: *Patch, gpa: Allocator, io: std.Io) void {
         if (p.overlay) |*o| if (!p.reuse) o.close(io);
         gpa.free(p.hidden);
         gpa.free(p.hidden_bits);
         freeSet(gpa, &p.settled);
+        freeSet(gpa, &p.links_out);
     }
 };
 
-const Wait = enum { patch, settle, all };
+const Wait = enum { settle, all };
 
 pub const Session = struct {
     gpa: Allocator,
@@ -141,10 +152,12 @@ pub const Session = struct {
     watcher: ?*change_watch.Watcher = null,
     base: ?*Base = null,
     overlay: ?Index = null,
+    overlay_read_at: i64 = 0,
     hidden: []u32 = &.{},
     hidden_bits: []u64 = &.{},
     settled: Set = .empty,
     outside: Set = .empty,
+    links_out: Set = .empty,
     incoming: Dirt = .{},
     pending: Dirt = .{},
     builder: Worker = .{},
@@ -163,7 +176,6 @@ pub const Session = struct {
     cancel: std.atomic.Value(bool) = .init(false),
     failure: ?anyerror = null,
     waited: bool = false,
-    stale: std.atomic.Value(bool) = .init(false),
     patch_failure: ?anyerror = null,
 
     pub fn create(gpa: Allocator, io: std.Io, root: []const u8) !*Session {
@@ -189,6 +201,7 @@ pub const Session = struct {
         self.gpa.free(self.hidden_bits);
         freeSet(self.gpa, &self.settled);
         freeSet(self.gpa, &self.outside);
+        freeSet(self.gpa, &self.links_out);
         self.incoming.deinit(self.gpa);
         self.pending.deinit(self.gpa);
         if (self.dir) |d| self.gpa.free(d);
@@ -210,18 +223,9 @@ pub const Session = struct {
         if (self.base == null) return self.failure orelse error.Unexpected;
     }
 
-    pub fn invalidate(self: *Session) void {
-        self.stale.store(true, .release);
-    }
-
     pub fn find(self: *Session, pattern: []const u8) !emet_file.Answer {
-        if (self.stale.swap(false, .acq_rel)) {
-            self.refresh(.settle);
-            if (self.patch_failure) |err| {
-                self.stale.store(true, .release);
-                return err;
-            }
-        } else self.refresh(.patch);
+        self.refresh(.settle);
+        if (self.patch_failure) |err| return err;
         return self.search(pattern);
     }
 
@@ -254,7 +258,6 @@ pub const Session = struct {
         self.absorb(wait == .settle);
         self.want_build = self.want_build or self.retry;
         self.retry = false;
-        const deadline = std.Io.Clock.Timestamp.fromNow(self.io, .{ .raw = .fromMilliseconds(patch_wait_ms), .clock = .awake });
         while (true) {
             self.ready.reset();
             self.collect();
@@ -264,10 +267,8 @@ pub const Session = struct {
             if (self.base == null or wait == .all) {
                 if (self.base == null) self.waited = true;
                 self.ready.waitUncancelable(self.io);
-            } else if (wait == .settle and self.patcher.busy()) {
-                self.ready.waitUncancelable(self.io);
             } else if (self.patcher.busy()) {
-                self.ready.waitTimeout(self.io, .{ .deadline = deadline }) catch return;
+                self.ready.waitUncancelable(self.io);
             } else return;
         }
     }
@@ -332,11 +333,17 @@ pub const Session = struct {
             if (self.base) |old| self.retire(old);
             self.base = self.fresh;
             self.fresh = null;
+            freeSet(self.gpa, &self.links_out);
+            if (self.base) |b| {
+                self.links_out = b.links_out;
+                b.links_out = .empty;
+            }
             if (self.base) |b| self.warmer = std.Thread.spawn(.{}, Index.warm, .{ &b.ix, &self.cancel }) catch null;
         }
         if (!patch.reuse) {
             if (self.overlay) |*o| o.close(self.io);
             self.overlay = patch.overlay;
+            self.overlay_read_at = patch.read_at;
         }
         self.gpa.free(self.hidden);
         self.gpa.free(self.hidden_bits);
@@ -344,6 +351,10 @@ pub const Session = struct {
         self.hidden_bits = patch.hidden_bits;
         freeSet(self.gpa, &self.settled);
         self.settled = patch.settled;
+        if (patch.links_all) freeSet(self.gpa, &self.links_out);
+        for (patch.links_out.keys()) |p| putOwned(self.gpa, &self.links_out, p) catch {};
+        var used = patch.links_out;
+        freeSet(self.gpa, &used);
         self.failure = null;
         self.want_build = patch.full;
         if (patch.full) self.build_job = .build;
@@ -352,9 +363,9 @@ pub const Session = struct {
     fn schedule(self: *Session) void {
         if (!self.patcher.busy()) {
             if (self.fresh) |fresh| {
-                self.launchPatch(&fresh.ix, true);
+                self.launchPatch(fresh, true);
             } else if (self.base) |base| {
-                if (!self.incoming.isEmpty()) self.launchPatch(&base.ix, false);
+                if (!self.incoming.isEmpty()) self.launchPatch(base, false);
             }
         }
         if (self.want_build and !self.builder.busy() and self.fresh == null) {
@@ -364,7 +375,7 @@ pub const Session = struct {
         }
     }
 
-    fn launchPatch(self: *Session, against: *const Index, swap: bool) void {
+    fn launchPatch(self: *Session, against: *const Base, swap: bool) void {
         var dirt = self.incoming.take();
         if (swap) {
             dirt.merge(self.gpa, &self.pending) catch {
@@ -377,11 +388,13 @@ pub const Session = struct {
             dirt.all = true;
         };
         self.patch_job = .{
-            .against = against,
+            .against = &against.ix,
+            .against_read_at = against.read_at,
             .swap = swap,
             .dirt = dirt,
             .settled = settled,
             .overlay = if (self.overlay) |*o| o else null,
+            .overlay_read_at = self.overlay_read_at,
         };
         self.launch(&self.patcher, patchJob);
     }
@@ -423,12 +436,14 @@ pub const Session = struct {
         if (warming) |t| t.join();
         old.ix.close(self.io);
         Dir.cwd().deleteFile(self.io, old.path) catch {};
+        freeSet(self.gpa, &old.links_out);
         self.gpa.free(old.path);
         self.gpa.destroy(old);
     }
 
     fn close(self: *Session, b: *Base) void {
         b.ix.close(self.io);
+        freeSet(self.gpa, &b.links_out);
         self.gpa.free(b.path);
         self.gpa.destroy(b);
     }
@@ -459,10 +474,14 @@ pub const Session = struct {
         if (job == .load) {
             for (generations.items) |g| {
                 const path = try self.generationPath(g);
+                const written = Dir.cwd().statFile(self.io, path, .{}) catch {
+                    self.gpa.free(path);
+                    continue;
+                };
                 b.* = .{ .ix = Index.open(self.io, path) catch {
                     self.gpa.free(path);
                     continue;
-                }, .path = path };
+                }, .path = path, .read_at = @truncate(written.mtime.nanoseconds) };
                 self.fresh_loaded = true;
                 break;
             }
@@ -475,8 +494,11 @@ pub const Session = struct {
             const next = if (generations.items.len == 0) 1 else generations.items[0] + 1;
             const path = try self.generationPath(next);
             errdefer self.gpa.free(path);
-            const paths = try emet_file.list(self.io, self.gpa, arena, self.root);
-            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel), .path = path };
+            var links_out: std.ArrayList([]const u8) = .empty;
+            const read_at = now(self.io);
+            const paths = try emet_file.list(self.io, self.gpa, arena, self.root, &links_out);
+            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel, &links_out), .path = path, .read_at = read_at };
+            for (links_out.items) |p| putOwned(self.gpa, &b.links_out, p) catch {};
         }
         return b;
     }
@@ -493,6 +515,7 @@ pub const Session = struct {
 
         var candidates: Set = .empty;
         var listed: Set = .empty;
+        var links_out: std.ArrayList([]const u8) = .empty;
         for (job.settled.keys()) |p| try candidates.put(arena, p, {});
         for (job.dirt.files.keys()) |p| try candidates.put(arena, p, {});
         const subtrees = job.dirt.subtrees.keys();
@@ -504,13 +527,13 @@ pub const Session = struct {
         }
         if (job.dirt.all) {
             freeSet(gpa, &self.outside);
-            for (try emet_file.list(io, gpa, arena, self.root)) |p| {
+            for (try emet_file.list(io, gpa, arena, self.root, &links_out)) |p| {
                 try listed.put(arena, p, {});
                 try candidates.put(arena, p, {});
             }
             for (0..base.h.n_files) |f| try candidates.put(arena, base.path(@intCast(f)), {});
         } else {
-            for (try emet_file.listUnder(io, gpa, arena, self.root, relisted.items)) |p| {
+            for (try emet_file.listUnder(io, gpa, arena, self.root, relisted.items, &links_out)) |p| {
                 try listed.put(arena, p, {});
                 try candidates.put(arena, p, {});
             }
@@ -525,7 +548,7 @@ pub const Session = struct {
             for (job.dirt.files.keys()) |p| {
                 if (base.lookup(p) == null and !listed.contains(p) and !outsideOf(&self.outside, p)) try unknown.append(arena, p);
             }
-            for (try emet_file.listUnder(io, gpa, arena, self.root, unknown.items)) |p| {
+            for (try emet_file.listUnder(io, gpa, arena, self.root, unknown.items, &links_out)) |p| {
                 try listed.put(arena, p, {});
                 try candidates.put(arena, p, {});
             }
@@ -544,11 +567,11 @@ pub const Session = struct {
         var stamps: std.ArrayList(emet_file.Stamp) = .empty;
         var bytes: u64 = 0;
         const keys = candidates.keys();
-        const found = if (job.dirt.all) try emet_file.stampTree(io, arena, self.root, keys) else try emet_file.stampEach(io, arena, self.root, keys);
+        const found = if (job.dirt.all) try emet_file.stampTree(io, arena, self.root, keys, &links_out) else try emet_file.stampEach(io, arena, self.root, keys, &links_out);
         for (keys, found) |p, stamp| {
             if (base.lookup(p)) |f| {
                 const gone = stamp == null or ((job.dirt.all or within(relisted.items, p)) and !listed.contains(p));
-                if (!gone and stamp.?.eql(base.stamps[f])) continue;
+                if (!gone and trusted(stamp.?, base.stamps[f], job.against_read_at)) continue;
                 try hidden.append(arena, f);
                 if (gone) continue;
             } else if (stamp == null or !listed.contains(p)) continue;
@@ -557,8 +580,9 @@ pub const Session = struct {
             bytes += stamp.?.size;
         }
 
-        var patch: Patch = .{ .full = hidden.items.len + shown.items.len > max_changed or bytes > max_changed_bytes };
+        var patch: Patch = .{ .full = hidden.items.len + shown.items.len > max_changed or bytes > max_changed_bytes, .links_all = job.dirt.all };
         errdefer patch.deinit(gpa, io);
+        for (links_out.items) |p| try putOwned(gpa, &patch.links_out, p);
         for (hidden.items) |f| try putOwned(gpa, &patch.settled, base.path(f));
         for (shown.items) |p| try putOwned(gpa, &patch.settled, p);
         std.mem.sort(u32, hidden.items, {}, std.sort.asc(u32));
@@ -569,13 +593,14 @@ pub const Session = struct {
             for (hidden.items) |f| patch.hidden_bits[f / 64] |= @as(u64, 1) << @intCast(f % 64);
         }
         if (job.overlay) |o| {
-            if (unchanged(o, shown.items, stamps.items)) {
+            if (unchanged(o, job.overlay_read_at, shown.items, stamps.items)) {
                 patch.overlay = o.*;
                 patch.reuse = true;
                 return patch;
             }
         }
-        if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel);
+        patch.read_at = now(io);
+        if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel, null);
         return patch;
     }
 
@@ -600,13 +625,21 @@ fn outsideOf(outside: *const Set, p: []const u8) bool {
     return false;
 }
 
-fn unchanged(overlay: *const Index, paths: []const []const u8, stamps: []const emet_file.Stamp) bool {
+fn unchanged(overlay: *const Index, read_at: i64, paths: []const []const u8, stamps: []const emet_file.Stamp) bool {
     if (overlay.h.n_files != paths.len) return false;
     for (paths, stamps) |p, stamp| {
         const f = overlay.lookup(p) orelse return false;
-        if (!stamp.eql(overlay.stamps[f])) return false;
+        if (!trusted(stamp, overlay.stamps[f], read_at)) return false;
     }
     return true;
+}
+
+fn trusted(stamp: emet_file.Stamp, indexed: emet_file.Stamp, read_at: i64) bool {
+    return stamp.eql(indexed) and indexed.mtime < read_at - racy_ns;
+}
+
+fn now(io: std.Io) i64 {
+    return @truncate(std.Io.Clock.real.now(io).nanoseconds);
 }
 
 fn generationOf(name: []const u8) ?u64 {
@@ -625,5 +658,15 @@ pub fn callFind(gpa: Allocator, args: ?Value, event: *telemetry.Event, session: 
     defer buffer.deinit();
     const answer = s.find(pattern) catch |err| return tool_result.failure(gpa, &buffer, err, event);
     try buffer.writer.writeAll(answer.text);
+    try writeLinksOut(&buffer.writer, s.links_out.keys());
     return tool_result.success(gpa, &buffer);
+}
+
+/// Names the folders the index left out because a junction or link takes them
+/// outside the repository, so the omission is visible instead of silent.
+pub fn writeLinksOut(w: *std.Io.Writer, links_out: []const []const u8) !void {
+    if (links_out.len == 0) return;
+    try w.writeAll("skipped (junction or link to a place outside the repository, not searched):");
+    for (links_out) |p| try w.print(" {s}", .{p});
+    try w.writeByte('\n');
 }

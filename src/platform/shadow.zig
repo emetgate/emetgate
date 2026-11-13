@@ -6,6 +6,7 @@ const shadow_root = @import("shadow_root.zig");
 const exe_path = @import("exe_path.zig");
 const own_dir = @import("own_dir.zig");
 const dir_scan = @import("dir_scan.zig");
+const confine = @import("confine.zig");
 const gate_tree = @import("gate_tree.zig");
 const worker_pool = @import("worker_pool.zig");
 const git_index = @import("git_index.zig");
@@ -65,8 +66,45 @@ pub const working_listing = [_][]const u8{
     "--exclude=.zig-cache/", "--exclude=zig-out/",     "--",                       ".",                       ":(exclude,icase)" ++ workspace_dir,
 };
 
+/// Every working file git lists, including those git reaches through a
+/// junction; the shadow copy needs them to rebuild linked folders. A listing
+/// shown to the model goes through `workingListing` instead.
 pub fn workingFiles(gpa: Allocator, io: std.Io, root_abs: []const u8) ![][]u8 {
     return listFiles(gpa, io, root_abs, &working_listing);
+}
+
+/// The working files without those under a folder that is a junction or link
+/// to a place outside the root (git follows junctions), for replies such as
+/// `emetgate_list`. Each such folder, with a trailing slash and owned by `gpa`,
+/// is appended to `outside` when given.
+pub fn workingListing(gpa: Allocator, io: std.Io, root_abs: []const u8, outside: ?*std.ArrayList([]u8)) ![][]u8 {
+    var files = try listFiles(gpa, io, root_abs, &working_listing);
+    errdefer {
+        freeFileList(gpa, files);
+        gpa.free(files);
+    }
+    var confined = try confine.Confine.init(gpa, root_abs);
+    defer confined.deinit();
+    var kept: usize = 0;
+    for (files, 0..) |f, i| {
+        if (try confined.keeps(f)) {
+            files[kept] = f;
+            if (kept != i) files[i] = &.{};
+            kept += 1;
+            continue;
+        }
+        gpa.free(f);
+        files[i] = &.{};
+    }
+    if (outside) |out| for (confined.outside.items) |p| {
+        const copy = try gpa.dupe(u8, p);
+        errdefer gpa.free(copy);
+        try out.append(gpa, copy);
+    };
+    if (kept == files.len) return files;
+    for (files[kept..]) |*f| f.* = &.{};
+    files = try gpa.realloc(files, kept);
+    return files;
 }
 
 fn listFiles(gpa: Allocator, io: std.Io, root_abs: []const u8, listing: []const []const u8) ![][]u8 {
