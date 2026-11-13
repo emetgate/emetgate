@@ -6039,8 +6039,8 @@
     {
       "id": "SR4-hit-cap-ignored",
       "file": "src/protocol/search_v1.zig",
-      "from": "                if (result.hits >= corpus.hit_limit) {",
-      "to": "                if (false) {",
+      "from": "        if (result.hits >= corpus.hit_limit) {\n            result.truncated = true;\n            break;",
+      "to": "        if (false) {\n            result.truncated = true;\n            break;",
       "kills": [
         "the total hit count is capped and truncated is reported",
         "search answers: a capped answer is partial"
@@ -7700,8 +7700,8 @@
     {
       "id": "SA1-partial-answer-reported-complete",
       "file": "src/protocol/search_v1.zig",
-      "from": "                try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
-      "to": "                {}",
+      "from": "        try result.missing.append(gpa, .{ .path = item.path, .reason = .budget });",
+      "to": "        {}",
       "kills": [
         "search answers: a line that runs out of regex steps makes the answer partial and names the file"
       ]
@@ -11812,17 +11812,18 @@
     {
       "id": "TL2-large-file-counted-as-binary",
       "file": "src/protocol/search_v1.zig",
-      "from": "            .large => .too_large,",
-      "to": "            .large => .binary,",
+      "from": "            .large => {\n",
+      "to": "            .large => if (true) .binary else {\n",
       "kills": [
-        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
+        "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk",
+        "claims: a match in a tracked file over the index size limit is found, never reported as no match"
       ]
     },
     {
       "id": "UC1-unclassified-file-not-reported",
       "file": "src/protocol/search_v1.zig",
-      "from": "            } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
-      "to": "            } else if (false) {",
+      "from": "    } else if (item.unclassified and corpus.kinds != null and item.matched_lines != 0) {",
+      "to": "    } else if (false) {",
       "kills": [
         "a file that did not parse cleanly is searched through a live parse, and a kinds filter on it makes the answer partial as unclassified"
       ]
@@ -12161,8 +12162,8 @@
     {
       "id": "TX3-total-counts-only-collected-hits",
       "file": "src/protocol/search_v1.zig",
-      "from": "            result.total += found_here;",
-      "to": "            result.total += item.hits.items.len;",
+      "from": "    result.total += found_here;",
+      "to": "    result.total += item.hits.items.len;",
       "kills": [
         "search text: pages carry the exact total and the next offset, and together they hold every match once"
       ]
@@ -16480,12 +16481,13 @@
     },
     {
       "id": "FW1-write-tool-leaves-find-index-fresh",
-      "file": "src/protocol/handlers.zig",
-      "from": "    defer if (!readOnly(name)) policy.invalidate();\n",
-      "to": "",
+      "file": "src/protocol/find_tools.zig",
+      "from": "            if (fence) self.dirtyAll();\n            return;",
+      "to": "            if (false) self.dirtyAll();\n            return;",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
+        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find",
+        "find after write: FI11 a file written outside emetgate is found by the very next find, also after a same-size rewrite"
       ]
     },
     {
@@ -16511,18 +16513,8 @@
     {
       "id": "FW4-stale-find-skips-settle",
       "file": "src/protocol/find_tools.zig",
-      "from": "        if (self.stale.swap(false, .acq_rel)) {",
-      "to": "        if (false) {",
-      "kills": [
-        "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
-        "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
-      ]
-    },
-    {
-      "id": "FW6-write-leaves-find-session-fresh",
-      "file": "src/protocol/policy.zig",
-      "from": "        if (self.find_session) |session| session.invalidate();\n",
-      "to": "        _ = self;\n",
+      "from": "            } else if (self.patcher.busy()) {\n                self.ready.waitUncancelable(self.io);\n            } else return;",
+      "to": "            } else return;",
       "kills": [
         "find after write: an index with no watcher sees a file written through emetgate_write on the very next find",
         "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
