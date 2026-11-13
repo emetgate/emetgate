@@ -449,11 +449,8 @@ pub const Store = struct {
     }
 
     fn addName(self: *Store, name: []const u8, id: DefId) !void {
-        const slot = try self.by_name.getOrPut(self.gpa, name);
-        if (!slot.found_existing) {
-            slot.key_ptr.* = try self.internName(name);
-            slot.value_ptr.* = .empty;
-        }
+        const slot = try self.by_name.getOrPut(self.gpa, try self.internName(name));
+        if (!slot.found_existing) slot.value_ptr.* = .empty;
         for (slot.value_ptr.items) |existing| {
             if (existing.file == id.file and existing.slot == id.slot) return;
         }
