@@ -224,7 +224,6 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
     var batch = disk.Batch.init(gpa, io, journal_dir);
     if (options.commit == null) batch.root = root;
     batch.created_dirs = options.created_dirs;
-    if (options.trace) |t| t.commit_attempted = true;
     for (prepared, 0..) |p, i| {
         const file_abs = edits[i].file_abs;
         pendings[i] = switch (p.action) {
@@ -242,6 +241,10 @@ pub fn commitPlanned(gpa: Allocator, io: std.Io, root: []const u8, prepared: []c
         count = prepared.len + i + 1;
     }
     commit_entered = true;
+    // Staging each file above writes nothing the user sees, and a failure there
+    // (a read-only or locked file) is discarded by the errdefer; only landing
+    // can leave work for emetgate recover.
+    if (options.trace) |t| t.commit_attempted = true;
     try session.land(gpa, io, root, changes, pendings, &batch, options.commit_step);
     return .{ .committed = committed };
 }

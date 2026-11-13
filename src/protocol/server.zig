@@ -530,7 +530,7 @@ fn handleToolsCall(gpa: Allocator, io: std.Io, runtime: *Runtime, out: *Writer, 
         return switch (err) {
             error.UnknownTool => writeRpcError(out, id, -32602, "Unknown tool"),
             error.MissingArgument => writeMissingArgument(out, id),
-            else => writeRpcError(out, id, -32603, "Internal error"),
+            else => writeToolFailure(gpa, out, id, err),
         };
     };
     defer gpa.free(result.text);
@@ -894,6 +894,16 @@ pub fn writeToolResult(out: *Writer, id: Value, text: []const u8, is_error: bool
     try js.endObject();
 }
 
+/// An error that escaped a tool handler still answers as a tool error with its
+/// name and a fix, not as a bare JSON-RPC "Internal error" the model cannot act on.
+pub fn writeToolFailure(gpa: Allocator, out: *Writer, id: Value, err: anyerror) !void {
+    var buffer: std.Io.Writer.Allocating = .init(gpa);
+    defer buffer.deinit();
+    wire.writeError(&buffer.writer, @errorName(err), wire.exitCode(err)) catch return writeRpcError(out, id, -32603, "Internal error");
+    const text = std.mem.trimEnd(u8, buffer.written(), "\n");
+    return writeToolResult(out, id, text, true);
+}
+
 pub const missing_argument_message = "Missing or invalid argument";
 
 fn writeMissingArgument(out: *Writer, id: Value) !void {
@@ -922,4 +932,21 @@ fn envelope(js: *std.json.Stringify, id: Value) !void {
     try js.write("2.0");
     try js.objectField("id");
     try js.write(id);
+}
+
+test "an error that escapes a tool answers as a tool error with its name and fix, not a bare -32603" {
+    const testing = std.testing;
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeToolFailure(testing.allocator, &out.writer, .{ .integer = 7 }, error.InvalidOp);
+    const parsed = try std.json.parseFromSlice(Value, testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    try testing.expect(parsed.value.object.get("error") == null);
+    const result = parsed.value.object.get("result").?.object;
+    try testing.expect(result.get("isError").?.bool);
+    const text = result.get("content").?.array.items[0].object.get("text").?.string;
+    const reply = try std.json.parseFromSlice(Value, testing.allocator, text, .{});
+    defer reply.deinit();
+    try testing.expectEqualStrings("InvalidOp", reply.value.object.get("error").?.string);
+    try testing.expect(std.mem.indexOf(u8, reply.value.object.get("fix").?.string, "\"delete\"") != null);
 }

@@ -194,7 +194,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
     if (std.mem.eql(u8, command, "mcp") or std.mem.eql(u8, command, "serve")) {
         if (server.refusedRunEntry(args[2..])) |refused| exitWithRunRefusal(refused);
         const split = (try emetgate.map_tools.splitExploreMode(init.arena.allocator(), args[2..])) orelse exitWithUsage();
-        var policy = server.parsePolicy(split.rest) orelse exitWithUsage();
+        var policy = server.parsePolicy(split.rest) orelse exitWithBadArgs(command, split.rest, server.parsePolicy);
         policy.explore_mode = split.mode;
         if (policy.open_run) policy.commit_guard_exe = std.process.executablePathAlloc(init.io, runtime.gpa) catch null;
         defer if (policy.commit_guard_exe) |exe| runtime.gpa.free(exe);
@@ -202,12 +202,12 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return 0;
     }
     if (std.mem.eql(u8, command, "scan")) {
-        const options = scan_command.Options.parse(args[2..]) orelse exitWithUsage();
+        const options = scan_command.Options.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], scan_command.Options.parse);
         return scanCmd(init, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "rule")) {
         if (args.len >= 3) if (rule_catalog.verbOf(args[2])) |verb| return ruleCatalogCmd(init, runtime, verb, args[3..], out);
-        const request = rule_command.parse(args[2..]) orelse exitWithUsage();
+        const request = rule_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], rule_command.parse);
         return ruleCmd(init, runtime, request, out);
     }
     if (std.mem.eql(u8, command, "rules")) {
@@ -227,31 +227,31 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return hookSessionCmd(init, runtime);
     }
     if (std.mem.eql(u8, command, "recover")) {
-        const options = parseRecover(args[2..]) orelse exitWithUsage();
+        const options = parseRecover(args[2..]) orelse exitWithBadArgs(command, args[2..], parseRecover);
         return recoverCmd(init, runtime, options);
     }
     if (std.mem.eql(u8, command, "verify")) {
         if (parseVerifyBranch(args[2..])) |branch| return verifyBranchCmd(init, runtime, branch.options, branch.json, out);
-        const options = parseVerify(args[2..]) orelse exitWithUsage();
+        const options = parseVerify(args[2..]) orelse exitWithBadArgs(command, args[2..], parseVerify);
         return verifyCmd(init, runtime, options.options, options.json, out);
     }
     if (std.mem.eql(u8, command, "receipts") and args.len >= 3 and std.mem.eql(u8, args[2], "attach") and args.len <= 4) {
         return attachCmd(init, runtime, if (args.len == 4) args[3] else "HEAD", out);
     }
     if (std.mem.eql(u8, command, "commit")) {
-        const parsed = parseCommit(args[2..]) orelse exitWithUsage();
+        const parsed = parseCommit(args[2..]) orelse exitWithBadArgs(command, args[2..], parseCommit);
         return commitCmd(init, runtime, parsed, out);
     }
     if (std.mem.eql(u8, command, "facts")) {
-        const options = facts_command.parse(args[2..]) orelse exitWithUsage();
+        const options = facts_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], facts_command.parse);
         return facts_command.run(runtime.gpa, init.io, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "map")) {
-        const options = map_command.parse(args[2..]) orelse exitWithUsage();
+        const options = map_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], map_command.parse);
         return map_command.run(runtime.gpa, init.io, runtime, options, out);
     }
     if (std.mem.eql(u8, command, "find")) {
-        const options = find_command.parse(args[2..]) orelse exitWithUsage();
+        const options = find_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], find_command.parse);
         return find_command.run(runtime.gpa, init.io, options, out);
     }
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
@@ -273,6 +273,7 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
         return lockdown.launch(runtime.gpa, init.io, init.environ_map, passthrough);
     }
+    std.debug.print("emetgate: \"{s}\" is not a command, or it does not take these arguments\n\n", .{command});
     exitWithUsage();
 }
 
@@ -388,6 +389,17 @@ fn exitWithRunRefusal(refused: server.RunRefusal) noreturn {
     };
     std.debug.print("refused --allow-run \"{s}\": {s}\n", .{ refused.entry, why });
     std.process.exit(2);
+}
+
+fn exitWithBadArgs(command: []const u8, args: []const [:0]const u8, comptime parse: anytype) noreturn {
+    if (wire.badArgument(args, parse)) |bad| {
+        std.debug.print("emetgate {s}: cannot use \"{s}\": it is not an option of this command, or its value is missing or invalid\n\n", .{ command, bad });
+    } else if (args.len == 0) {
+        std.debug.print("emetgate {s}: arguments are missing\n\n", .{command});
+    } else {
+        std.debug.print("emetgate {s}: these arguments do not go together\n\n", .{command});
+    }
+    exitWithUsage();
 }
 
 fn exitWithUsage() noreturn {

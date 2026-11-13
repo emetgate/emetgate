@@ -442,7 +442,8 @@ test "scan: a malformed ledger rule stops the scan before any file and names the
 
     const json = try runScan(&repo, &.{"--json"});
     defer json.deinit();
-    try testing.expectEqualStrings("{\"status\":\"error\",\"error\":\"UnknownCheck\",\"exit_code\":19,\"rule\":\"mbad\",\"check\":\"frbid:x\"}\n", json.out);
+    try testing.expect(std.mem.startsWith(u8, json.out, "{\"status\":\"error\",\"error\":\"UnknownCheck\",\"exit_code\":19,\"rule\":\"mbad\",\"check\":\"frbid:x\",\"fix\":\"check is one of "));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, json.out, "\n"));
 }
 
 test "scan: every malformed --check spec exits with the malformed-check code" {
@@ -689,7 +690,8 @@ test "scope: an unresolved scope is reported as one json error line naming rule 
     const outcome = try runScan(&repo, &.{ "--json", "--check", "forbid:fetch(", "--in", "src/gone.js" });
     defer outcome.deinit();
     try testing.expectEqual(@as(u8, 31), outcome.code);
-    try testing.expectEqualStrings("{\"status\":\"error\",\"error\":\"ScopeUnresolved\",\"exit_code\":31,\"rule\":\"forbid:fetch(\",\"where\":\"src/gone.js\",\"reason\":\"FileNotTracked\"}\n", outcome.out);
+    try testing.expect(std.mem.startsWith(u8, outcome.out, "{\"status\":\"error\",\"error\":\"ScopeUnresolved\",\"exit_code\":31,\"rule\":\"forbid:fetch(\",\"where\":\"src/gone.js\",\"reason\":\"FileNotTracked\",\"fix\":\"where names "));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, outcome.out, "\n"));
 }
 
 test "scope: the scanner itself refuses an unresolved scope" {

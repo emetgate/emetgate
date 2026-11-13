@@ -223,7 +223,7 @@ fn attrib(root_abs: []const u8, flag: []const u8) !void {
     gpa.free(result.stderr);
 }
 
-test "batch retry: a batch whose commit started and failed is not kept for a retry" {
+test "batch retry: a read-only file stops the batch before anything lands, so it says disk untouched and keeps the batch for a retry" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo: Repo = undefined;
     try repo.init();
@@ -237,6 +237,8 @@ test "batch retry: a batch whose commit started and failed is not kept for a ret
     defer failed.deinit();
     errdefer std.debug.print("{s}\n", .{failed.text});
     try testing.expect(failed.is_error);
-    try testing.expect(std.mem.indexOf(u8, failed.text, "disk untouched") == null);
-    try testing.expect(failed.string("retry") == null);
+    try testing.expect(std.mem.indexOf(u8, failed.text, "ReadOnlyFile") != null);
+    try testing.expect(std.mem.indexOf(u8, failed.text, "emetgate recover") == null);
+    try testing.expect(failed.string("retry") != null);
+    try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/src/b.ts", .{}));
 }

@@ -1182,10 +1182,14 @@ pub fn writeRuleCheckFailed(writer: *Writer, failure: rules.Failure, note: ?Shad
     try js.write(failure.detail);
     try js.objectField("output");
     try js.write(failure.text);
+    try js.objectField("fix");
+    try tool_names.writeJson(&js, rule_check_crashed_fix);
     try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
 }
+
+pub const rule_check_crashed_fix = "a rule's check could not finish on this file (detail and output say why), so the edit was not judged and nothing was written; the user fixes that check, or changes the rule with emetgate rule supersede or emetgate rule forget";
 
 fn writeViolation(js: *std.json.Stringify, v: rules.Violation, rule_text: []const u8) !void {
     try js.beginObject();
@@ -1320,6 +1324,7 @@ pub fn writeUnresolvedScope(writer: *Writer, rule: []const u8, where: []const u8
     try js.write(where);
     try js.objectField("reason");
     try js.write(reason);
+    try writeFix(&js, "ScopeUnresolved");
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -1337,6 +1342,7 @@ pub fn writeMalformedRule(writer: *Writer, rule: []const u8, check: []const u8, 
     try js.write(rule);
     try js.objectField("check");
     try js.write(check);
+    try writeFix(&js, name);
     try js.endObject();
     try writer.writeByte('\n');
 }
@@ -1363,6 +1369,11 @@ pub fn writeErrorMessage(writer: *Writer, name: []const u8, exit_code: u8, messa
     try js.endObject();
     try writer.writeByte('\n');
 }
+
+const move_unproven_fix = "the move could not be proven to keep every reference and body intact; nothing was written; move it by hand with emetgate_change, all files in one batch, so the gate checks each file";
+pub const unknown_check_fix = "check is one of no_comment, forbid:<text>, no_literal:<text>, q:<tree-sitter query with @violation>, forbid_regex:<regex>, require:<text>, require_comment, no_todo, max_function_lines:<n>, forbid_import:<module>; a commit-message check is message:forbid:<text>, message:forbid_any_case:<text>, message:require:<text>, message:require_any_case:<text>, message:max_lines:<n>, message:max_subject:<n>, message:max_line:<n> or message:conventional";
+/// The fix a reply carries when nothing more specific is known about its error.
+pub const unexpected_fix = "emetgate stopped on an error it has no specific advice for (error names it); retry once, and if it fails the same way the user runs emetgate doctor and reports the error name";
 
 const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "HashMismatch", "the hash is stale or of the wrong kind: symbol hashes come from emetgate_symbols, node ids from emetgate_read_symbol nodes:true, file and doc hashes from emetgate_read_file; read again and retry" },
@@ -1400,12 +1411,12 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "ModuleSideEffect", "pass order_change:true" },
     .{ "DeclaredSideEffect", "pass order_change:true" },
     .{ "InvalidOp", "op is \"write\" or \"delete\"; kind is \"code\" or \"doc\"" },
-    .{ "UnknownDetail", "detail is \"full\" or \"budgeted\"" },
+    .{ "UnknownDetail", "detail is \"full\" or \"budgeted\"; on emetgate_search it is \"full\" or \"compact\"" },
     .{ "PointerNotFound", "emetgate_read_file on the file lists its pointers" },
     .{ "HeadingNotFound", "emetgate_read_file on the file lists its headings" },
-    .{ "InvalidJson", "content must be valid JSON" },
+    .{ "InvalidJson", "the new value, or the file as it is now, is not valid JSON: send one complete JSON value (strings quoted, no trailing comma); if the file itself is broken, replace it whole with emetgate_change {file, hash, content}" },
     .{ "SyntaxCheckFailed", "the edit leaves the file in a state the language's own compiler refuses (for Python: its indentation rules); nothing was written; fix the indentation and resend" },
-    .{ "DocSyntaxInvalid", "a Markdown section starts with its heading line" },
+    .{ "DocSyntaxInvalid", "the new text would not parse in the file's format: a JSON value is one complete JSON value (strings quoted, no trailing comma) that reads back as sent; a Markdown section starts with its own heading line, e.g. ## Title" },
     .{ "UnknownGitSubcommand", "sub is status, diff, log, show or blame; changes go through emetgate_git_write" },
     .{ "MissingGitArgs", "args is the git argv, e.g. [\"switch\",\"-c\",\"topic\"]" },
     .{ "TooManyGitArgs", "at most 32 args; split the work into several calls" },
@@ -1439,7 +1450,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "MissingTrailingNewline", "end the content with a newline" },
     .{ "NotUtf8", "the file is not UTF-8 text; it cannot be edited with these tools" },
     .{ "BinaryFile", "binary files cannot be read or edited with these tools" },
-    .{ "DocTooLarge", "the file is over the size limit; edit it with old_string/new_string items" },
+    .{ "DocTooLarge", "the file or its new content is over what emetgate edits (1 MiB for a non-code file, 16 MiB for source code), whatever the edit form; no emetgate tool can write it: keep each file under the limit by splitting the content, or ask the user to make this change" },
     .{ "EmptyPattern", "pass a non-empty pattern" },
     .{ "IgnoredPath", "the path is git-ignored; write tracked files only" },
     .{ "InvalidPath", "pass a path relative to the repository root" },
@@ -1447,7 +1458,7 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "TooManyNodeEdits", "too many node edits in one call; split them" },
     .{ "Conflict", "the file changed on disk during the write; read it again and retry" },
     .{ "WrittenButUnverified", "the write landed but could not be verified; read the file again before the next edit" },
-    .{ "WorkspaceLockFailed", "another gated write holds the workspace; retry" },
+    .{ "WorkspaceLockFailed", "emetgate could not create its lock in .emetgate, and not because another write holds it: access was denied (the folder is read-only or owned by another account, or this emetgate runs at Low integrity because its exe sits in a folder labelled Low); nothing was written and a retry fails the same way: the user runs emetgate doctor and fixes what it names" },
     .{ "ModelSuppliedTestPolicy", "omit test and typecheck commands; only the user sets them" },
     .{ "InvalidConfig", ".emetgaterc.json is invalid; the user must fix it" },
     .{ "UntrustedRepoMemory", "repository rules are used only when the user starts the server with --allow-repo-memory" },
@@ -1485,8 +1496,111 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "ImportCycle", "the move would create an import cycle; pick another target file" },
     .{ "CaseOnlyRename", "a case-only rename is not supported; move to a temporary name first" },
     .{ "DynamicPathUse", "the file path is built at runtime somewhere; move it by hand and update those sites" },
-    .{ "CommitNotEnabled", "omit message: commits are off on this server" },
-    .{ "MissingCommitMessage", "pass message" },
+    .{ "CommitNotEnabled", "commits are off on this server (no --commit): drop message; to commit the written files, call emetgate_change with commit alone" },
+    .{ "MissingCommitMessage", "this server commits every write (--commit), so a write needs a commit message: pass it as commit on emetgate_change, or as message on emetgate_commit and the legacy write tools" },
+    .{ "ReadOnlyFile", "the file has the Windows read-only attribute; nothing was written; the user clears it (attrib -r <file>, or untick Read-only in its Properties), then the call is retried" },
+    .{ "FileLocked", "another program holds the file open and blocks writing (an editor, a running program, a sync or antivirus client); nothing was written; close it there or wait for it, then retry" },
+    .{ "FileBusy", "another program holds the file open without sharing (a running program, an editor, a sync or antivirus client), so emetgate cannot open it; nothing was written; close it there or wait for it, then retry" },
+    .{ "WorkspaceIsLink", "the repository's .emetgate folder, or a folder on the way to the gate's sandbox copy, is a junction or symbolic link, and emetgate never writes through one; nothing was written; the user deletes the link itself (rmdir <link> in cmd, which leaves its target alone), then retry; emetgate creates a plain folder again" },
+    .{ "LocalAppDataUnavailable", "LOCALAPPDATA is not set in the server's environment, so emetgate has no place for its state; the user sets it (PowerShell: $env:LOCALAPPDATA = \"$env:USERPROFILE\\AppData\\Local\") and restarts Claude Code so the server inherits it" },
+    .{ "OperationInProgress", "a merge, rebase, cherry-pick, revert or bisect is in progress in this repository, and emetgate does not commit in the middle of one; nothing was written; the user finishes or aborts it (git merge --abort, git rebase --abort, git cherry-pick --abort, git revert --abort or git bisect reset), then retry" },
+    .{ "StreamTooLong", "the file is over 64 MiB, the most emetgate reads, and a line range reads the whole file too; no emetgate read tool can show it: ask the user for the part you need" },
+    .{ "BaseChanged", "the file changed on disk while the gate ran (another program or the user wrote it); that change was kept and nothing was written; read the file again and send the edit against what it holds now" },
+    .{ "SymbolReferenced", "the symbol is still used elsewhere; remove or change those uses in the same batch (emetgate_search finds them), then delete it" },
+    .{ "CacheBusy", "another emetgate server holds this repository's caches, or this process may not open them (access denied, for example an exe running at Low integrity); retry when the other server's write ends, and if it repeats the user runs emetgate doctor" },
+    .{ "IsDir", "the path is a directory; emetgate_list with dir lists its files" },
+    .{ "IsDirectory", "the path is a directory; emetgate_list with dir lists its files" },
+    .{ "MissingPath", "sub blame needs path, the file to blame" },
+    .{ "MissingArgument", "an argument is missing, out of range or of the wrong type; the tool's input schema lists them (line_start and line_end go together)" },
+    .{ "InvalidOffset", "offset is a whole number from 0 to 100000; matches past 100000 cannot be paged, so narrow the search with dir or a longer pattern" },
+    .{ "UnknownKind", "kinds is an array of \"code\", \"comment\" and \"string\"" },
+    .{ "UnknownFormat", "format is \"json\" or \"text\"" },
+    .{ "InvalidRegex", "the regex does not compile; correct it, or search the literal text with regex:false" },
+    .{ "RegexNeedsRipgrep", "this regex needs ripgrep (rg), which is not on PATH; search a literal with regex:false or a simpler pattern, or the user installs ripgrep" },
+    .{ "KindsNeedAnIndexedPattern", "kinds works only with a pattern the index can serve; drop kinds, or search a literal with regex:false" },
+    .{ "InconsistentCertificate", "the search result failed its own consistency check; retry, and if it repeats the user runs emetgate doctor" },
+    .{ "GitFailed", "git failed or could not be started; the user checks that git runs in this folder (emetgate doctor checks it), then retry" },
+    .{ "Unexpected", "an unexpected Windows error; retry once, and if it repeats the user runs emetgate doctor" },
+    .{ "OutOfMemory", "emetgate ran out of memory on this call; ask for less (a narrower dir, a line range, fewer files), then retry" },
+    .{ "AccessDenied", "Windows denied access to a file or folder this call needs (read-only, owned by another account, held by security software, or this emetgate runs at Low integrity); nothing was written; the user runs emetgate doctor, which names the cause" },
+    .{ "WrittenButNotIndexed", "the file was written but git add failed; run git add -- <file>; if git refuses because the path is git-ignored, delete the file (or the user adds it with git add -f)" },
+    .{ "UnknownCheck", unknown_check_fix },
+    .{ "UnexpectedCheckArgument", "this check takes no argument after a colon, or its number is not a whole number above 0, e.g. no_todo or max_function_lines:80" },
+    .{ "MissingCheckArgument", "this check needs an argument after a colon, e.g. forbid:eval or max_function_lines:80" },
+    .{ "EmptyCheckArgument", "the argument after the colon is empty, e.g. forbid:eval" },
+    .{ "EmptyCommandCheck", "cmd: needs a command after it" },
+    .{ "CommandCheckTooLong", "the cmd: command is over 4 KiB; put it in a script and run the script" },
+    .{ "CommandCheckNotStatic", "a cmd: check runs a command, which only a rule in the gate may do, not emetgate_scan or added:; scan with a static check such as forbid:<text> or q:<query>" },
+    .{ "QueryTooLong", "the q: query is over 4 KiB; shorten it" },
+    .{ "QuerySyntax", "the q: query is not valid tree-sitter query syntax; check its parentheses, quotes and captures" },
+    .{ "QueryNodeType", "the q: query names a node type the tree-sitter grammar of a file in scope does not have; use that grammar's node names, or narrow where to files of one language" },
+    .{ "QueryField", "the q: query names a field the tree-sitter grammar of a file in scope does not have; use that grammar's field names, or narrow where to files of one language" },
+    .{ "QueryCapture", "a predicate in the q: query names a capture no pattern defines; define it with @name in the pattern first" },
+    .{ "QueryStructure", "the q: query nests nodes in a shape the grammar never produces; follow the grammar's shape" },
+    .{ "QueryLanguage", "the q: query cannot be compiled for the language of a file in scope; narrow where to files of one language" },
+    .{ "QueryMissingViolation", "every pattern of a q: query captures the node to report as @violation" },
+    .{ "QueryUnknownPredicate", "the supported predicates are #eq? #not-eq? #any-of? #match? #not-match?" },
+    .{ "QueryDirective", "directives such as #set! are not supported; drop them" },
+    .{ "QueryPredicateArguments", "#eq? and #not-eq? take a capture and one capture or string, #any-of? a capture and strings, #match? and #not-match? a capture and one regex string" },
+    .{ "QueryQuantifiedCapture", "a capture repeated with + or * costs work the budget cannot see; capture one node per match" },
+    .{ "QueryTooManyCaptures", "at most 8 captures per pattern; drop the ones no predicate uses" },
+    .{ "RegexSyntax", "the regular expression does not compile as PCRE2; correct it" },
+    .{ "RegexUnsupported", "the regular expression uses an escape or a POSIX collating element PCRE2 does not support; write it another way" },
+    .{ "ScopeUnresolved", "where names a file, folder or symbol that is not there now (reason says which); emetgate_list and emetgate_symbols show what exists; correct where, or change the rule with emetgate rule supersede" },
+    .{ "NothingInScope", "no file in the scope has a language profile, so nothing was measured; point where at source files" },
+    .{ "EnforceWithoutCheck", "--enforce needs --check <spec>: only a rule with a check can be enforced" },
+    .{ "MessageRuleWithScope", "a message: check applies to commit messages, so it takes no --in <where>; drop --in" },
+    .{ "InvalidDecision", "the rule text must be 1 byte to 16 KiB of UTF-8, and its check 1 byte to 4 KiB of UTF-8" },
+    .{ "DecisionNotActive", "no active rule has this id; emetgate rule list shows the ids" },
+    .{ "MemoryBusy", "another emetgate process is writing the rules file; retry" },
+    .{ "WhereEmpty", "where is empty; give a file, a dir/ or file#symbol, or ./ for the whole repository" },
+    .{ "WhereTooLong", "where is over 512 bytes; give a shorter scope" },
+    .{ "WhereAbsolute", "where is relative to the repository root, with no drive and no leading slash, e.g. src/ or src/a.ts#f" },
+    .{ "WhereParentSegment", "where may not use ..; give a path inside the repository" },
+    .{ "WhereInternal", "where may not name .git or .emetgate" },
+    .{ "WhereGlob", "where takes no wildcard; give a file, a dir/ or file#symbol, and leave paths out with \" !dir/\" or \" !*.test.ts\"" },
+    .{ "WhereMalformed", "where is a file, a dir/ or file#symbol with / as separator, e.g. src/, src/a.ts or src/a.ts#Class.method" },
+    .{ "WhereExclusionEmpty", "an exclusion after \" !\" is empty; write \" !dir/\" or \" !*.test.ts\"" },
+    .{ "WhereExclusionGlob", "an exclusion takes no wildcard but one leading *, as in \" !*.test.ts\"" },
+    .{ "WhereExclusionAbsolute", "an exclusion is relative to the repository root, with no drive and no leading slash" },
+    .{ "WhereExclusionParentSegment", "an exclusion may not use .." },
+    .{ "WhereExclusionMalformed", "an exclusion is \" !path\" or \" !*suffix\", with no space or # in it and no slash in the suffix" },
+    .{ "WhereTooManyExclusions", "at most 16 exclusions; merge some into a wider one" },
+    .{ "CommitMessageEmpty", "the commit message is blank; send one with text" },
+    .{ "CommitMessageTooLong", "the commit message is over 16 KiB; shorten it" },
+    .{ "CommitMessageNotUtf8", "the commit message is not UTF-8 text; send it as UTF-8" },
+    .{ "CommitMessageNul", "the commit message holds a NUL byte; remove it" },
+    .{ "DetachedHead", "HEAD is not on a branch (detached, or on a tag), and emetgate commits only to a branch; create one with emetgate_change branch, or the user checks one out, then retry" },
+    .{ "NoCommitYet", "the branch has no commit yet; the user makes a first commit by hand, then retry" },
+    .{ "SigningNotSupported", "the repository asks for signed commits, which emetgate cannot make; the user commits by hand, or turns commit signing off for this repository" },
+    .{ "NoCommitIdentity", "git has no committer identity here; the user sets git config user.name and user.email, then retry" },
+    .{ "TargetHasUncommittedChanges", "a file this commit would write has changes no emetgate write made (staged, edited by hand, or untracked); nothing was committed; emetgate_git sub \"status\" shows it: the user commits or reverts that change, or leave the file out of this change" },
+    .{ "TargetNotInHead", "a file this change writes exists on disk but not in HEAD (untracked or ignored), and emetgate does not commit it under your message; the user adds and commits it by hand first, or leave the file out" },
+    .{ "TargetSkipWorktree", "a file this change writes carries git's skip-worktree bit; the user clears it (git update-index --no-skip-worktree <path>), or leave the file out" },
+    .{ "IndexLocked", ".git/index.lock exists: another git command is running, or one crashed; wait and retry, and if no git command is running the user deletes .git/index.lock" },
+    .{ "IndexChanged", "another git command changed the index while emetgate committed; nothing was committed; retry" },
+    .{ "NothingToCommit", "the gated files already match HEAD, so there is nothing to commit; send edits with the commit, or drop commit" },
+    .{ "BranchMoved", "the branch moved while emetgate committed (a checkout or another commit); nothing was committed; retry on the branch now checked out" },
+    .{ "BranchUpdateRefused", "git refused to move the branch (a reference-transaction hook or a ref lock); nothing was committed; the user checks the hook or removes the stale lock under .git, then retry" },
+    .{ "CommitStillPending", "an earlier commit did not finish and could not be finished now; the user runs emetgate recover, then retry" },
+    .{ "TrackedNamesDifferOnlyInCase", "HEAD holds two names that differ only in letter case (paths names them), which a Windows volume cannot hold both of; the user renames or removes one of them in git, then retry" },
+    .{ "GateTreeNotHead", "the gate's copy of HEAD did not match HEAD for the files in paths, and it has been mended; nothing was committed; send the call again" },
+    .{ "GateTreeNotDerived", "the commit was not prepared from the tree just read; nothing was committed; send the call again" },
+    .{ "LocalExportClause", "the old file exports this symbol through an export list, which the move cannot rewrite; export it on its declaration instead, then retry, or move it by hand with emetgate_change" },
+    .{ "SourceDependencyNotExported", "the moved symbol uses a name its old file does not export; export that name there first, then retry" },
+    .{ "UnsupportedImport", "the moved code uses a name bound by an import form the move cannot carry over; move it by hand with emetgate_change" },
+    .{ "UnresolvedImport", "an import the move rewrites would not resolve to the moved code; nothing was written; move it by hand with emetgate_change, all files in one batch, so the gate checks each file" },
+    .{ "TargetNameTaken", "the target already declares this name; pick another target, or rename one of them first" },
+    .{ "TargetCapture", "a name the moved code uses already means something else in the target; rename one of them or pick another target" },
+    .{ "TargetAliasUse", "a file reaches the symbol under an alias or through a chain the move cannot rewrite; import it by its own name there, then retry, or move it by hand with emetgate_change" },
+    .{ "ReExported", "another module re-exports the symbol, so moving it would change that module's exports; move it by hand with emetgate_change" },
+    .{ "NamespaceImportUse", "a file imports the module as a namespace and uses the symbol through it, which the move cannot rewrite; move it by hand with emetgate_change" },
+    .{ "UnhandledReference", "a reference to the symbol is of a kind the move cannot rewrite; move it by hand with emetgate_change, all files in one batch, so the gate checks each file" },
+    .{ "ContentHashMismatch", "the symbol changed since its hash was read; read it again with emetgate_symbols and retry with the new hash" },
+    .{ "BodyChanged", move_unproven_fix },
+    .{ "IncompleteMove", move_unproven_fix },
+    .{ "MovedImportBroken", move_unproven_fix },
+    .{ "ServiceMismatch", move_unproven_fix },
     .{ "LabelDenied", "the sandbox folder is owned by another account and this account may not relabel it; delete it from the account that created it, or pass --shadow-root <a folder you own>" },
 });
 
@@ -1530,7 +1644,7 @@ fn takeFix(name: []const u8) ?Fix {
     if (std.mem.eql(u8, name, "SyntaxCheckFailed")) {
         if (source_check.takeFix(&fix_buffer)) |text| return .{ .text = text, .dynamic = true };
     }
-    return .{ .text = fixFor(name) orelse return null, .dynamic = false };
+    return .{ .text = fixFor(name) orelse unexpected_fix, .dynamic = false };
 }
 
 fn writeFix(js: *std.json.Stringify, name: []const u8) !void {
@@ -1607,6 +1721,10 @@ fn writeStageRejected(gpa: Allocator, writer: *Writer, reason: []const u8, comma
             try js.write(digested.dropped_lines);
         }
     }
+    if (rejectedFix(reason)) |fix| {
+        try js.objectField("fix");
+        try tool_names.writeJson(&js, fix);
+    }
     try writeShadowNote(&js, note);
     try js.endObject();
     try writer.writeByte('\n');
@@ -1645,6 +1763,20 @@ pub fn typecheckReason(report: sandbox.Report) []const u8 {
         .timed_out => "timed_out",
         .output_limit => "output_limit",
     };
+}
+
+const rejected_fixes = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "tests_failed", "the edit makes the tests named in failures fail; nothing was written; change the edit so they pass and send it again" },
+    .{ "typecheck_failed", "the edit does not typecheck (see diagnostics); nothing was written; correct it and send it again" },
+    .{ "test_crashed", "the test command crashed (crash_code) with this edit; nothing was written; if the edit can crash the process, change it; otherwise retry once" },
+    .{ "typecheck_crashed", "the typecheck command crashed (crash_code) with this edit; nothing was written; retry once, and if it crashes again the user checks the typecheck command" },
+    .{ "timed_out", "the gate's command ran past its time limit with this edit; nothing was written; if the edit can make a test hang or loop, change it; if the suite is just slow, the user passes a narrower --test or --test-scoped command" },
+    .{ "output_limit", "the gate's command printed more output than the gate keeps; nothing was written; if the edit makes a test print in a loop, change it; otherwise the user passes a quieter --test command" },
+    .{ "leftover_processes", "the gate's command exited but left a process running (a server, watcher or daemon it started); nothing was written; make the tests stop what they start, or the user changes --test so it waits for them" },
+});
+
+pub fn rejectedFix(reason: []const u8) ?[]const u8 {
+    return rejected_fixes.get(reason);
 }
 
 fn outcomeTag(outcome: sandbox.Outcome) []const u8 {
@@ -1738,6 +1870,7 @@ pub fn writeNotIndexed(writer: *Writer, file: []const u8) !void {
     try js.writer.writeByte('"');
     try std.json.Stringify.encodeJsonStringChars(command, .{}, js.writer);
     try std.json.Stringify.encodeJsonStringChars(file, .{}, js.writer);
+    try std.json.Stringify.encodeJsonStringChars(not_indexed_ignored, .{}, js.writer);
     try js.writer.writeByte('"');
     js.endWriteRaw();
     try js.endObject();
@@ -1745,6 +1878,7 @@ pub fn writeNotIndexed(writer: *Writer, file: []const u8) !void {
 }
 
 pub const not_indexed_message = "the file was written to disk but was not added to the git index; until it is, proposals to other files run in a shadow copy that does not contain it";
+const not_indexed_ignored = "; if git refuses because the path is git-ignored, the file does not belong there: delete it (or the user adds it with git add -f), and do not retry the write, which now meets FileExists";
 
 pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     var js: std.json.Stringify = .{ .writer = writer };
@@ -1760,7 +1894,20 @@ pub fn writeError(writer: *Writer, name: []const u8, exit_code: u8) !void {
     try writer.writeByte('\n');
 }
 
-pub const no_test_command_fix = "the server has no test command: the user restarts it with emetgate mcp --test \"<command>\" or --detect-test, or emetgate lockdown --test \"<command>\"; emetgate lockdown without --test detects one per write";
+/// The command-line argument a parser refuses: the first one after which no
+/// longer list parses, so an unknown flag, or a flag whose value is missing or
+/// invalid, is named instead of only printing the usage. Null when every prefix
+/// parses and only the whole list is refused (two flags that do not go together).
+pub fn badArgument(args: anytype, comptime parse: anytype) ?[]const u8 {
+    var end: usize = 1;
+    while (end <= args.len) : (end += 1) {
+        if (parse(args[0..end]) != null) continue;
+        if (end == args.len or parse(args[0 .. end + 1]) == null) return args[end - 1];
+    }
+    return null;
+}
+
+pub const no_test_command_fix ="the server has no test command: the user restarts it with emetgate mcp --test \"<command>\" or --detect-test, or emetgate lockdown --test \"<command>\"; emetgate lockdown without --test detects one per write";
 pub const not_in_repo_fix = "the file is not inside a git repository: the user runs git init in the project folder (emetgate lockdown does this itself) and the call is retried";
 
 pub fn setupFix(name: []const u8) ?[]const u8 {
@@ -2306,5 +2453,207 @@ test "a committed reply says the tests ran on a mirror only when they ran and we
         try writeNote(&js, case.note, false);
         try js.endObject();
         try std.testing.expectEqual(case.want, std.mem.indexOf(u8, out.written(), verified_text) != null);
+    }
+}
+
+fn embeddedErrorNames(comptime source: []const u8, comptime from: []const u8, comptime to: []const u8, out: *std.ArrayList([]const u8)) !void {
+    const start = std.mem.indexOf(u8, source, from).?;
+    const body = source[start..][0..std.mem.indexOf(u8, source[start..], to).?];
+    var rest: []const u8 = body;
+    while (std.mem.indexOf(u8, rest, "error.")) |at| {
+        rest = rest[at + "error.".len ..];
+        var len: usize = 0;
+        while (len < rest.len and (std.ascii.isAlphanumeric(rest[len]) or rest[len] == '_')) len += 1;
+        if (len != 0 and std.ascii.isUpper(rest[0])) try out.append(testing.allocator, rest[0..len]);
+    }
+}
+
+fn returnedErrorNames(comptime source: []const u8, out: *std.ArrayList([]const u8)) !void {
+    for ([_][]const u8{ "return error.", "orelse error.", "catch error." }) |lead| {
+        var rest: []const u8 = source;
+        while (std.mem.indexOf(u8, rest, lead)) |at| {
+            rest = rest[at + lead.len ..];
+            var len: usize = 0;
+            while (len < rest.len and (std.ascii.isAlphanumeric(rest[len]) or rest[len] == '_')) len += 1;
+            if (len != 0) try out.append(testing.allocator, rest[0..len]);
+        }
+    }
+}
+
+fn expectOwnFix(name: []const u8) !void {
+    const fix = fixFor(name) orelse {
+        std.debug.print("error {s} has no fix in wire.fixes\n", .{name});
+        return error.TestExpectedFix;
+    };
+    try testing.expect(fix.len != 0);
+}
+
+test "every error name the exit-code map knows has its own fix" {
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(testing.allocator);
+    try embeddedErrorNames(@embedFile("wire.zig"), "pub fn exitCode(", "else => 1,", &names);
+    try testing.expect(names.items.len > 150);
+    for (names.items) |name| try expectOwnFix(name);
+}
+
+test "every error a tool file returns has its own fix" {
+    var names: std.ArrayList([]const u8) = .empty;
+    defer names.deinit(testing.allocator);
+    inline for (.{ "handlers.zig", "read_tools.zig", "git_tools.zig", "search_v1.zig", "find_tools.zig", "git_write.zig", "open_run.zig", "move_tool.zig", "move_file_tool.zig", "rename_tool.zig", "edit_tool.zig", "node_tool.zig", "map_tools.zig", "workspace.zig", "policy.zig", "run_tool.zig", "tool_result.zig", "batch_merge.zig", "batch_stage.zig" }) |file| {
+        try returnedErrorNames(@embedFile(file), &names);
+    }
+    // Not tool replies: an unknown tool name is a JSON-RPC error, the rest are test-only.
+    const exempt = [_][]const u8{ "UnknownTool", "SkipZigTest", "TestExpectedRefusal", "TestUnexpectedRefusal" };
+    try testing.expect(names.items.len > 40);
+    outer: for (names.items) |name| {
+        for (exempt) |skip| if (std.mem.eql(u8, skip, name)) continue :outer;
+        try expectOwnFix(name);
+    }
+}
+
+test "errors raised below the tools that reach a reply each have their own fix" {
+    const reached = [_][]const u8{
+        "ReadOnlyFile",        "FileBusy",             "FileLocked",       "WorkspaceIsLink",  "LocalAppDataUnavailable",
+        "OperationInProgress", "StreamTooLong",        "BaseChanged",      "SymbolReferenced", "CacheBusy",
+        "IsDir",               "IsDirectory",          "MissingPath",      "MissingArgument",  "InvalidOffset",
+        "UnknownKind",         "AccessDenied",         "OutOfMemory",      "WorkspaceBusy",    "WorkspaceLockFailed",
+        "InvalidOp",           "MissingCommitMessage", "CommitNotEnabled", "DocTooLarge",      "DocSyntaxInvalid",
+        "InvalidJson",         "WrittenButNotIndexed", "Unexpected",       "GitFailed",        "LabelDenied",
+        "ScopeUnresolved",     "NothingInScope",       "NoTestCommand",    "NotInRepo",
+    };
+    for (reached) |name| try expectOwnFix(name);
+}
+
+fn errorReply(name: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeError(&out.writer, name, 1);
+    return testing.allocator.dupe(u8, out.written());
+}
+
+fn fixOf(reply: []const u8) ![]const u8 {
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, reply, .{});
+    defer parsed.deinit();
+    const fix = parsed.value.object.get("fix") orelse return error.TestExpectedFix;
+    return testing.allocator.dupe(u8, fix.string);
+}
+
+fn expectFixHas(name: []const u8, wanted: []const []const u8, unwanted: []const []const u8) !void {
+    const reply = try errorReply(name);
+    defer testing.allocator.free(reply);
+    const fix = try fixOf(reply);
+    defer testing.allocator.free(fix);
+    for (wanted) |w| if (std.mem.indexOf(u8, fix, w) == null) {
+        std.debug.print("fix of {s} lacks \"{s}\": {s}\n", .{ name, w, fix });
+        return error.TestExpectedText;
+    };
+    for (unwanted) |u| if (std.mem.indexOf(u8, fix, u) != null) {
+        std.debug.print("fix of {s} still says \"{s}\": {s}\n", .{ name, u, fix });
+        return error.TestUnexpectedText;
+    };
+}
+
+test "an error reply with no specific advice still carries a fix" {
+    clearFix();
+    const reply = try errorReply("SomethingNoTableNames");
+    defer testing.allocator.free(reply);
+    const fix = try fixOf(reply);
+    defer testing.allocator.free(fix);
+    try testing.expectEqualStrings(unexpected_fix, fix);
+}
+
+test "corrected fixes say what actually recovers" {
+    clearFix();
+    try expectFixHas("MissingCommitMessage", &.{ "commit on emetgate_change", "message on emetgate_commit" }, &.{"pass message"});
+    try expectFixHas("CommitNotEnabled", &.{ "emetgate_change", "commit alone" }, &.{});
+    try expectFixHas("WorkspaceLockFailed", &.{ "access was denied", "emetgate doctor" }, &.{"another gated write holds the workspace; retry"});
+    try expectFixHas("DocTooLarge", &.{ "1 MiB", "16 MiB", "ask the user" }, &.{"old_string"});
+    try expectFixHas("DocSyntaxInvalid", &.{ "JSON value", "Markdown section" }, &.{});
+    try expectFixHas("InvalidJson", &.{"JSON"}, &.{});
+    try expectFixHas("UnknownDetail", &.{ "budgeted", "compact" }, &.{});
+    try expectFixHas("InvalidOp", &.{ "\"write\"", "\"delete\"" }, &.{});
+    try expectFixHas("ReadOnlyFile", &.{ "read-only", "nothing was written" }, &.{"recover"});
+    try expectFixHas("FileLocked", &.{ "nothing was written", "retry" }, &.{"recover"});
+    try expectFixHas("FileBusy", &.{"retry"}, &.{"recover"});
+    try expectFixHas("WorkspaceIsLink", &.{ "junction", "rmdir" }, &.{});
+    try expectFixHas("LocalAppDataUnavailable", &.{ "LOCALAPPDATA", "restarts" }, &.{});
+    try expectFixHas("OperationInProgress", &.{ "merge", "--abort" }, &.{});
+    try expectFixHas("StreamTooLong", &.{"64 MiB"}, &.{});
+}
+
+test "the not-indexed fix covers a git-ignored path" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeNotIndexed(&out.writer, "ignored/new.txt");
+    const fix = try fixOf(out.written());
+    defer testing.allocator.free(fix);
+    try testing.expect(std.mem.startsWith(u8, fix, "git add -- ignored/new.txt"));
+    try testing.expect(std.mem.indexOf(u8, fix, "git-ignored") != null);
+    try testing.expect(std.mem.indexOf(u8, fix, "FileExists") != null);
+}
+
+test "every reason a gate stage rejects with has a fix, except the one that carries a hint" {
+    const reasons = [_][]const u8{ "tests_failed", "typecheck_failed", "test_crashed", "typecheck_crashed", "timed_out", "output_limit", "leftover_processes" };
+    for (reasons) |reason| try testing.expect((rejectedFix(reason) orelse return error.TestExpectedFix).len != 0);
+    try testing.expect(rejectedFix("test_env_error") == null);
+}
+
+test "rule replies about a bad check or scope carry a fix" {
+    clearFix();
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeMalformedRule(&out.writer, "r1", "frbid:x", "UnknownCheck", 19);
+    const malformed = try fixOf(out.written());
+    defer testing.allocator.free(malformed);
+    try testing.expectEqualStrings(unknown_check_fix, malformed);
+
+    out.clearRetainingCapacity();
+    try writeUnresolvedScope(&out.writer, "r1", "src/gone.js", "FileNotTracked", 31);
+    const scope = try fixOf(out.written());
+    defer testing.allocator.free(scope);
+    try testing.expect(std.mem.indexOf(u8, scope, "emetgate_list") != null);
+}
+
+test "the unknown-check fix names every check there is" {
+    const checks = @import("../engine/checks.zig");
+    const text_checks = @import("../engine/text_checks.zig");
+    var buf: [64]u8 = undefined;
+    for (checks.registry) |check| {
+        const shown = if (check.takes_argument) try std.fmt.bufPrint(&buf, "{s}:<", .{check.name}) else check.name;
+        try testing.expect(std.mem.indexOf(u8, unknown_check_fix, shown) != null);
+    }
+    for (text_checks.registry) |check| {
+        const shown = try std.fmt.bufPrint(&buf, "message:{s}", .{check.name});
+        try testing.expect(std.mem.indexOf(u8, unknown_check_fix, shown) != null);
+    }
+}
+
+fn toyParse(args: []const []const u8) ?usize {
+    var i: usize = 0;
+    var seen: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--flag")) {
+            seen += 1;
+        } else if (std.mem.eql(u8, args[i], "--number")) {
+            if (i + 1 >= args.len) return null;
+            i += 1;
+            seen += std.fmt.parseInt(usize, args[i], 10) catch return null;
+        } else return null;
+    }
+    return seen;
+}
+
+test "a refused command line names the argument it stops at" {
+    const Case = struct { args: []const []const u8, bad: ?[]const u8 };
+    const cases = [_]Case{
+        .{ .args = &.{ "--flag", "--bogus" }, .bad = "--bogus" },
+        .{ .args = &.{ "--bogus", "--flag" }, .bad = "--bogus" },
+        .{ .args = &.{ "--flag", "--number" }, .bad = "--number" },
+        .{ .args = &.{ "--number", "abc", "--flag" }, .bad = "--number" },
+        .{ .args = &.{ "--number", "2", "--flag" }, .bad = null },
+    };
+    for (cases) |case| {
+        const got = badArgument(case.args, toyParse);
+        if (case.bad) |want| try testing.expectEqualStrings(want, got.?) else try testing.expect(got == null);
     }
 }
