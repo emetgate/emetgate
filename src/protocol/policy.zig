@@ -74,10 +74,6 @@ pub const Policy = struct {
         if (self.sent_ledger) |ledger| ledger.reset();
     }
 
-    pub fn invalidate(self: *const Policy) void {
-        if (self.find_session) |session| session.invalidate();
-    }
-
     pub fn treeChoice(self: *const Policy) shadow.Choice {
         return .{ .tree = self.shadow_tree orelse shadow.default_tree, .private = self.shadow_private[0..self.shadow_private_len] };
     }

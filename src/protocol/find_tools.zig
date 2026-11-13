@@ -23,7 +23,7 @@ pub const Job = enum { load, build };
 
 const max_changed = 256;
 const max_changed_bytes = 4 << 20;
-const patch_wait_ms = 250;
+const racy_ns: i64 = 2 * std.time.ns_per_s;
 const fence_timeout_ms = 1000;
 
 pub fn indexDir(gpa: Allocator, root_abs: []const u8) ![]u8 {
@@ -81,6 +81,7 @@ const Dirt = struct {
 const Base = struct {
     ix: Index,
     path: []u8,
+    read_at: i64,
     /// Folders left out of the index because they lead outside the root.
     links_out: Set = .empty,
 };
@@ -110,14 +111,17 @@ const Worker = struct {
 
 const PatchJob = struct {
     against: *const Index,
+    against_read_at: i64,
     swap: bool,
     dirt: Dirt,
     settled: Set,
     overlay: ?*const Index,
+    overlay_read_at: i64,
 };
 
 const Patch = struct {
     overlay: ?Index = null,
+    read_at: i64 = 0,
     reuse: bool = false,
     hidden: []u32 = &.{},
     hidden_bits: []u64 = &.{},
@@ -137,7 +141,7 @@ const Patch = struct {
     }
 };
 
-const Wait = enum { patch, settle, all };
+const Wait = enum { settle, all };
 
 pub const Session = struct {
     gpa: Allocator,
@@ -148,6 +152,7 @@ pub const Session = struct {
     watcher: ?*change_watch.Watcher = null,
     base: ?*Base = null,
     overlay: ?Index = null,
+    overlay_read_at: i64 = 0,
     hidden: []u32 = &.{},
     hidden_bits: []u64 = &.{},
     settled: Set = .empty,
@@ -171,7 +176,6 @@ pub const Session = struct {
     cancel: std.atomic.Value(bool) = .init(false),
     failure: ?anyerror = null,
     waited: bool = false,
-    stale: std.atomic.Value(bool) = .init(false),
     patch_failure: ?anyerror = null,
 
     pub fn create(gpa: Allocator, io: std.Io, root: []const u8) !*Session {
@@ -219,18 +223,9 @@ pub const Session = struct {
         if (self.base == null) return self.failure orelse error.Unexpected;
     }
 
-    pub fn invalidate(self: *Session) void {
-        self.stale.store(true, .release);
-    }
-
     pub fn find(self: *Session, pattern: []const u8) !emet_file.Answer {
-        if (self.stale.swap(false, .acq_rel)) {
-            self.refresh(.settle);
-            if (self.patch_failure) |err| {
-                self.stale.store(true, .release);
-                return err;
-            }
-        } else self.refresh(.patch);
+        self.refresh(.settle);
+        if (self.patch_failure) |err| return err;
         return self.search(pattern);
     }
 
@@ -263,7 +258,6 @@ pub const Session = struct {
         self.absorb(wait == .settle);
         self.want_build = self.want_build or self.retry;
         self.retry = false;
-        const deadline = std.Io.Clock.Timestamp.fromNow(self.io, .{ .raw = .fromMilliseconds(patch_wait_ms), .clock = .awake });
         while (true) {
             self.ready.reset();
             self.collect();
@@ -273,10 +267,8 @@ pub const Session = struct {
             if (self.base == null or wait == .all) {
                 if (self.base == null) self.waited = true;
                 self.ready.waitUncancelable(self.io);
-            } else if (wait == .settle and self.patcher.busy()) {
-                self.ready.waitUncancelable(self.io);
             } else if (self.patcher.busy()) {
-                self.ready.waitTimeout(self.io, .{ .deadline = deadline }) catch return;
+                self.ready.waitUncancelable(self.io);
             } else return;
         }
     }
@@ -351,6 +343,7 @@ pub const Session = struct {
         if (!patch.reuse) {
             if (self.overlay) |*o| o.close(self.io);
             self.overlay = patch.overlay;
+            self.overlay_read_at = patch.read_at;
         }
         self.gpa.free(self.hidden);
         self.gpa.free(self.hidden_bits);
@@ -370,9 +363,9 @@ pub const Session = struct {
     fn schedule(self: *Session) void {
         if (!self.patcher.busy()) {
             if (self.fresh) |fresh| {
-                self.launchPatch(&fresh.ix, true);
+                self.launchPatch(fresh, true);
             } else if (self.base) |base| {
-                if (!self.incoming.isEmpty()) self.launchPatch(&base.ix, false);
+                if (!self.incoming.isEmpty()) self.launchPatch(base, false);
             }
         }
         if (self.want_build and !self.builder.busy() and self.fresh == null) {
@@ -382,7 +375,7 @@ pub const Session = struct {
         }
     }
 
-    fn launchPatch(self: *Session, against: *const Index, swap: bool) void {
+    fn launchPatch(self: *Session, against: *const Base, swap: bool) void {
         var dirt = self.incoming.take();
         if (swap) {
             dirt.merge(self.gpa, &self.pending) catch {
@@ -395,11 +388,13 @@ pub const Session = struct {
             dirt.all = true;
         };
         self.patch_job = .{
-            .against = against,
+            .against = &against.ix,
+            .against_read_at = against.read_at,
             .swap = swap,
             .dirt = dirt,
             .settled = settled,
             .overlay = if (self.overlay) |*o| o else null,
+            .overlay_read_at = self.overlay_read_at,
         };
         self.launch(&self.patcher, patchJob);
     }
@@ -479,10 +474,14 @@ pub const Session = struct {
         if (job == .load) {
             for (generations.items) |g| {
                 const path = try self.generationPath(g);
+                const written = Dir.cwd().statFile(self.io, path, .{}) catch {
+                    self.gpa.free(path);
+                    continue;
+                };
                 b.* = .{ .ix = Index.open(self.io, path) catch {
                     self.gpa.free(path);
                     continue;
-                }, .path = path };
+                }, .path = path, .read_at = @truncate(written.mtime.nanoseconds) };
                 self.fresh_loaded = true;
                 break;
             }
@@ -496,8 +495,9 @@ pub const Session = struct {
             const path = try self.generationPath(next);
             errdefer self.gpa.free(path);
             var links_out: std.ArrayList([]const u8) = .empty;
+            const read_at = now(self.io);
             const paths = try emet_file.list(self.io, self.gpa, arena, self.root, &links_out);
-            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel, &links_out), .path = path };
+            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel, &links_out), .path = path, .read_at = read_at };
             for (links_out.items) |p| putOwned(self.gpa, &b.links_out, p) catch {};
         }
         return b;
@@ -571,7 +571,7 @@ pub const Session = struct {
         for (keys, found) |p, stamp| {
             if (base.lookup(p)) |f| {
                 const gone = stamp == null or ((job.dirt.all or within(relisted.items, p)) and !listed.contains(p));
-                if (!gone and stamp.?.eql(base.stamps[f])) continue;
+                if (!gone and trusted(stamp.?, base.stamps[f], job.against_read_at)) continue;
                 try hidden.append(arena, f);
                 if (gone) continue;
             } else if (stamp == null or !listed.contains(p)) continue;
@@ -593,12 +593,13 @@ pub const Session = struct {
             for (hidden.items) |f| patch.hidden_bits[f / 64] |= @as(u64, 1) << @intCast(f % 64);
         }
         if (job.overlay) |o| {
-            if (unchanged(o, shown.items, stamps.items)) {
+            if (unchanged(o, job.overlay_read_at, shown.items, stamps.items)) {
                 patch.overlay = o.*;
                 patch.reuse = true;
                 return patch;
             }
         }
+        patch.read_at = now(io);
         if (shown.items.len != 0) patch.overlay = try emet_file.build(io, gpa, arena, self.root, shown.items, .memory, &self.cancel, null);
         return patch;
     }
@@ -624,13 +625,21 @@ fn outsideOf(outside: *const Set, p: []const u8) bool {
     return false;
 }
 
-fn unchanged(overlay: *const Index, paths: []const []const u8, stamps: []const emet_file.Stamp) bool {
+fn unchanged(overlay: *const Index, read_at: i64, paths: []const []const u8, stamps: []const emet_file.Stamp) bool {
     if (overlay.h.n_files != paths.len) return false;
     for (paths, stamps) |p, stamp| {
         const f = overlay.lookup(p) orelse return false;
-        if (!stamp.eql(overlay.stamps[f])) return false;
+        if (!trusted(stamp, overlay.stamps[f], read_at)) return false;
     }
     return true;
+}
+
+fn trusted(stamp: emet_file.Stamp, indexed: emet_file.Stamp, read_at: i64) bool {
+    return stamp.eql(indexed) and indexed.mtime < read_at - racy_ns;
+}
+
+fn now(io: std.Io) i64 {
+    return @truncate(std.Io.Clock.real.now(io).nanoseconds);
 }
 
 fn generationOf(name: []const u8) ?u64 {

@@ -92,7 +92,6 @@ pub fn callTool(gpa: Allocator, io: std.Io, runtime: *Runtime, name: []const u8,
     // The model may have lost what it was shown: after a compaction, or when the session has no
     // context watch at all, the ledger forgets, so nothing is ever skipped as "already shown".
     if (context_changed orelse true) policy.ledgerReset();
-    defer if (!readOnly(name)) policy.invalidate();
     var result = try dispatch(gpa, io, runtime, name, args, event, policy);
     if (test_command_mod.takeUnverified()) {
         if (try receipt_note.unverified(gpa, result.text, test_command_mod.unverified_status, unverified_note, args)) |text| {

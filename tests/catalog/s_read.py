@@ -379,8 +379,7 @@ def fi10(ctx):
     check(r.refused or "many/" not in r.body, "R3: dir was silently ignored: " + r.short())
 
 
-@scenario("FI11", "R4", "find right after a change on disk finds the new text",
-          xfail="find answers from its index before it sees a disk change (first call after the change misses); no fix is named in the current work")
+@scenario("FI11", "R4", "find right after a change on disk finds the new text")
 def fi11(ctx):
     root = ctx.fresh("small")
     s = ctx.server(root)
