@@ -11743,7 +11743,7 @@
       "from": "    if (stamp.size > max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "to": "    if (stamp.size >= max_indexed_file_bytes) return .{ .path = path, .stamp = stamp, .state = .large };",
       "kills": [
-        "search answers: a tracked file of exactly the size limit is searched and one a byte larger is excluded as too large"
+        "search answers: a tracked file of exactly the index size limit is searched from the index and one a byte larger is streamed from disk"
       ]
     },
     {
@@ -15391,7 +15391,7 @@
       "id": "HS1-commit-shortstat-dropped",
       "file": "src/protocol/handlers.zig",
       "from": "            if (try commitShortstat(gpa, io, root, c.base, c.oid)) |stat| {",
-      "to": "            if (@as(?[]u8, null)) |stat| {",
+      "to": "            if (if (false) try commitShortstat(gpa, io, root, c.base, c.oid) else @as(?[]u8, null)) |stat| {",
       "kills": [
         "emetgate_commit: the MCP tool commits the pending gated writes"
       ]
@@ -16458,7 +16458,7 @@
       "from": "    if (!is_error or event.trace.commit_attempted) {",
       "to": "    if (!is_error) {",
       "kills": [
-        "batch retry: a batch whose commit started and failed is not kept for a retry"
+        "a failure after the commit began is reported as commit phase, never disk untouched"
       ]
     },
     {
@@ -16506,7 +16506,7 @@
       "from": "        if (std.mem.eql(u8, tool, name)) return true;",
       "to": "        _ = tool;\n        _ = name;\n        return true;",
       "kills": [
-        "find after write: a read only tool leaves the find index alone and every other tool marks it stale",
+        "find after write: the read only tools are told apart from every other tool",
         "find after write: an index with no watcher sees every emetgate_edit across files on the very next find"
       ]
     },

@@ -427,6 +427,7 @@ test "a failure after the commit began is reported as commit phase, never disk u
     try expectContains(response, "\"isError\":true");
     try expectContains(response, "failed in commit phase, run emetgate recover");
     if (std.mem.indexOf(u8, response, "disk untouched") != null) return error.TestClaimedDiskUntouched;
+    if (std.mem.indexOf(u8, response, "\\\"retry\\\"") != null) return error.TestKeptForRetry;
 
     const on_disk = try repo.onDisk();
     defer testing.allocator.free(on_disk);
