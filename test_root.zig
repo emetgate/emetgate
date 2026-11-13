@@ -160,6 +160,7 @@ pub const rule_command = src.rule_command;
 pub const rule_catalog = src.rule_catalog;
 pub const prompt_words = src.prompt_words;
 pub const prompt_hook = src.prompt_hook;
+pub const rule_offer = src.rule_offer;
 pub const run_trim = src.run_trim;
 pub const pretool_hook = src.pretool_hook;
 pub const json_input = src.json_input;
@@ -337,6 +338,7 @@ test {
     _ = @import("tests/test_detect.zig");
     _ = @import("tests/regression_gate.zig");
     _ = @import("tests/prompt_hook.zig");
+    _ = @import("tests/prompt_rule_offer.zig");
     _ = @import("tests/pretool_hook.zig");
     _ = @import("tests/commit_guard.zig");
     _ = @import("tests/run_audit.zig");

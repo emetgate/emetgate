@@ -81,7 +81,9 @@ const usage =
     \\has no mcp tool for adopting, superseding or forgetting a rule.
     \\hook prompt is the UserPromptSubmit hook that lockdown gives claude: it reads
     \\the hook JSON on stdin and answers a prompt that starts with /rule itself, as
-    \\emetgate rule would, so that prompt never reaches the model.
+    \\emetgate rule would, so that prompt never reaches the model. A short prompt that
+    \\states a lasting instruction ("from now on", "never", "bundan sonra", "asla")
+    \\goes on with a note asking the model to offer the /rule line that enforces it.
     \\hook pretool is the PreToolUse hook that lockdown gives claude for emetgate_run:
     \\it reads the hook JSON on stdin, splits the command into words and parts the way
     \\a shell would, and asks the user before a command that deletes recursively, rewrites
@@ -730,7 +732,11 @@ fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) 
     var reader = stdio.stdinReader(init.io, &buffer);
     const input = try reader.interface.allocRemaining(gpa, .limited(prompt_hook.max_input_bytes));
     defer gpa.free(input);
-    const text = (try prompt_hook.ruleText(init.arena.allocator(), input)) orelse return;
+    const prompt = try prompt_hook.promptOf(init.arena.allocator(), input);
+    const text = prompt_hook.argumentsOf(prompt) orelse {
+        if (try prompt_hook.offer(prompt, out)) try out.flush();
+        return;
+    };
     const root = runner.repoRoot(gpa, init.io);
     defer if (root) |path| gpa.free(path) else |_| {};
     try prompt_hook.respond(gpa, init.io, root, text, out);

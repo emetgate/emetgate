@@ -168,6 +168,7 @@ pub const rules_command = @import("protocol/rules_command.zig");
 pub const console_raw = @import("platform/console_raw.zig");
 pub const prompt_words = @import("protocol/prompt_words.zig");
 pub const prompt_hook = @import("protocol/prompt_hook.zig");
+pub const rule_offer = @import("protocol/rule_offer.zig");
 pub const run_trim = @import("protocol/run_trim.zig");
 pub const pretool_hook = @import("protocol/pretool_hook.zig");
 pub const json_input = @import("protocol/json_input.zig");
