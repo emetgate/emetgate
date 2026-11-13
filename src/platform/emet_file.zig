@@ -9,7 +9,7 @@ const dir_scan = @import("dir_scan.zig");
 const confine = @import("confine.zig");
 const worker_pool = @import("worker_pool.zig");
 
-const magic = "EMETv007".*;
+const magic = "EMETv008".*;
 const binary_probe = 8000;
 const max_pattern = 4096;
 const empty: u32 = std.math.maxInt(u32);
@@ -34,6 +34,7 @@ pub const Header = extern struct {
     owner: WaveletPlace,
     prev: WaveletPlace,
     size: u64,
+    read_at: i64,
 };
 
 pub const WaveletPlace = extern struct {
@@ -456,7 +457,9 @@ const Texts = struct {
     }
 };
 
-pub const Target = union(enum) { file: []const u8, memory: void };
+pub const Target = union(enum) { file: FileTarget, memory: void };
+
+pub const FileTarget = struct { path: []const u8, read_at: i64 };
 
 /// Optional build-stage profiler. Null (production) unless set by `find build`.
 pub const BuildProfile = struct {
@@ -676,7 +679,9 @@ pub fn build(io: Io, gpa: Allocator, arena: Allocator, root_path: []const u8, pa
     if (build_profile) |p| p.owner_ns = p.lap();
     const parts: Parts = .{ .h = &h, .t = &t, .ends = ends, .owner = owner, .prev = prev };
     switch (target) {
-        .file => |out_path| {
+        .file => |out| {
+            const out_path = out.path;
+            h.read_at = out.read_at;
             const tmp_path = try std.fmt.allocPrint(arena, "{s}.tmp", .{out_path});
             var file = try Io.Dir.cwd().createFile(io, tmp_path, .{});
             var file_open = true;

@@ -4,6 +4,8 @@ const git_fixture = @import("git_fixture.zig");
 const server = @import("emetgate").server;
 const handlers = @import("emetgate").handlers;
 const find_tools = @import("emetgate").find_tools;
+const change_watch = @import("emetgate").change_watch;
+const emet_file = @import("emetgate").emet_file;
 const map_tools = @import("emetgate").map_tools;
 const fact_file = @import("emetgate").fact_file;
 const symbol = @import("emetgate").symbol;
@@ -224,4 +226,99 @@ test "find after write: FI11 a file written outside emetgate is found by the ver
             last_len = tok.len;
         }
     }
+}
+
+const fresh_js = "export function fresh(a, b) {\n  return a + b;\n}\n";
+
+fn rewriteKeepingStamp(dir: std.Io.Dir, sub_path: []const u8, data: []const u8) !void {
+    const before = try dir.statFile(testing.io, sub_path, .{});
+    try testing.expectEqual(before.size, data.len);
+    try dir.writeFile(testing.io, .{ .sub_path = sub_path, .data = data });
+    var file = try dir.openFile(testing.io, sub_path, .{ .mode = .read_write });
+    defer file.close(testing.io);
+    try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = before.mtime } });
+    const after = try dir.statFile(testing.io, sub_path, .{});
+    try testing.expect(emet_file.Stamp.of(before).eql(.of(after)));
+}
+
+fn setModified(path: []const u8, at: std.Io.Timestamp) !void {
+    var file = try std.Io.Dir.cwd().openFile(testing.io, path, .{ .mode = .read_write });
+    defer file.close(testing.io);
+    try file.setTimestamps(testing.io, .{ .modify_timestamp = .{ .new = at } });
+}
+
+fn rebuildRightAfterTouching(repo: *Repo) !void {
+    try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/src/app.js", .data = app_js });
+    try repo.session.prepare(.build);
+    const touched = try repo.tmp.dir.statFile(testing.io, "repo/src/app.js", .{});
+    try testing.expect(repo.session.base.?.read_at - @as(i64, @truncate(touched.mtime.nanoseconds)) < std.time.ns_per_s);
+}
+
+fn expectSessionFind(session: *find_tools.Session, pattern: []const u8, summary: []const u8) !void {
+    const answer = try session.find(pattern);
+    errdefer std.debug.print("find {s}: {s}\n", .{ pattern, answer.text });
+    try testing.expect(std.mem.startsWith(u8, answer.text, summary));
+}
+
+test "find after write: a watched find fences the change watcher, so a write whose events were not read yet is found by the very next find" {
+    var repo = try Repo.init(true);
+    defer repo.deinit();
+    try testing.expect(repo.session.watcher != null);
+    try repo.expectFind("total", "2 hits in 2 files");
+    change_watch.hold_until_fence = true;
+    defer change_watch.hold_until_fence = false;
+    var content: [64]u8 = undefined;
+    var token: [32]u8 = undefined;
+    for (0..3) |i| {
+        errdefer std.debug.print("round {d}\n", .{i});
+        const tok = try std.fmt.bufPrint(&token, "fenced{d:0>2}word", .{i});
+        try repo.tmp.dir.writeFile(testing.io, .{ .sub_path = "repo/notes.md", .data = try std.fmt.bufPrint(&content, "# Notes\n\n{s}\n", .{tok}) });
+        try repo.expectFind(tok, "1 hits in 1 files");
+    }
+}
+
+test "find after write: a same-size rewrite that puts back the old mtime is found while the index read is under two seconds old" {
+    var repo = try Repo.init(false);
+    defer repo.deinit();
+    try rebuildRightAfterTouching(&repo);
+    try repo.expectFind("total", "2 hits in 2 files");
+    try rewriteKeepingStamp(repo.tmp.dir, "repo/src/app.js", fresh_js);
+    try repo.expectFind("fresh", "1 hits in 1 files");
+    try repo.expectFind("total", "1 hits in 1 files");
+}
+
+test "find after write: an index loaded from disk judges stamps by the time its build read the files, not by the index file's mtime" {
+    var repo = try Repo.init(false);
+    defer repo.deinit();
+    try rebuildRightAfterTouching(&repo);
+    const built = repo.session.base.?;
+    try testing.expectEqual(built.read_at, built.ix.h.read_at);
+    try setModified(built.path, .{ .nanoseconds = @as(i96, built.read_at) + 3600 * std.time.ns_per_s });
+    const loaded = try find_tools.Session.create(gpa, testing.io, repo.root_abs);
+    defer loaded.destroy();
+    try loaded.prepare(.load);
+    try testing.expectEqualStrings(built.path, loaded.base.?.path);
+    try testing.expectEqual(built.read_at, loaded.base.?.read_at);
+    try rewriteKeepingStamp(repo.tmp.dir, "repo/src/app.js", fresh_js);
+    try expectSessionFind(loaded, "fresh", "1 hits in 1 files");
+    try expectSessionFind(loaded, "total", "1 hits in 1 files");
+}
+
+test "find after write: an index file of an older format is rebuilt on load, not misread" {
+    var repo = try Repo.init(false);
+    defer repo.deinit();
+    const old_path = try gpa.dupe(u8, repo.session.base.?.path);
+    defer gpa.free(old_path);
+    repo.session.destroy();
+    repo.session = try find_tools.Session.create(gpa, testing.io, repo.root_abs);
+    const bytes = try std.Io.Dir.cwd().readFileAlloc(testing.io, old_path, gpa, .unlimited);
+    defer gpa.free(bytes);
+    @memcpy(bytes[0..8], "EMETv007");
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = old_path, .data = bytes });
+    try repo.session.prepare(.load);
+    const base = repo.session.base.?;
+    try testing.expect(!std.mem.eql(u8, base.path, old_path));
+    try testing.expectError(error.FileNotFound, std.Io.Dir.cwd().statFile(testing.io, old_path, .{}));
+    try testing.expectEqualSlices(u8, "EMETv008", &base.ix.h.magic);
+    try repo.expectFind("total", "2 hits in 2 files");
 }

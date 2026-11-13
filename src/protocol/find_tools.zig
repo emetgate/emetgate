@@ -474,14 +474,11 @@ pub const Session = struct {
         if (job == .load) {
             for (generations.items) |g| {
                 const path = try self.generationPath(g);
-                const written = Dir.cwd().statFile(self.io, path, .{}) catch {
+                const ix = Index.open(self.io, path) catch {
                     self.gpa.free(path);
                     continue;
                 };
-                b.* = .{ .ix = Index.open(self.io, path) catch {
-                    self.gpa.free(path);
-                    continue;
-                }, .path = path, .read_at = @truncate(written.mtime.nanoseconds) };
+                b.* = .{ .ix = ix, .path = path, .read_at = ix.h.read_at };
                 self.fresh_loaded = true;
                 break;
             }
@@ -497,7 +494,7 @@ pub const Session = struct {
             var links_out: std.ArrayList([]const u8) = .empty;
             const read_at = now(self.io);
             const paths = try emet_file.list(self.io, self.gpa, arena, self.root, &links_out);
-            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = path }, &self.cancel, &links_out), .path = path, .read_at = read_at };
+            b.* = .{ .ix = try emet_file.build(self.io, self.gpa, arena, self.root, paths, .{ .file = .{ .path = path, .read_at = read_at } }, &self.cancel, &links_out), .path = path, .read_at = read_at };
             for (links_out.items) |p| putOwned(self.gpa, &b.links_out, p) catch {};
         }
         return b;
