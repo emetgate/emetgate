@@ -1,189 +1,134 @@
 <p align="center">
-  <img src="assets/aleph.svg" alt="Emetgate" width="190">
+  <img src="assets/readme/hero-once-en.svg" alt="emetgate: say it once" width="100%">
 </p>
+
+<p align="center"><a href="docs/QUICKSTART.md"><b>Quickstart</b></a> · <a href="REFERENCE.md"><b>Reference</b></a> · <a href="VERIFICATION.md"><b>Verification</b></a> · <a href="examples/discount"><b>A real session</b></a></p>
+
+<p align="center"><sub><b>English</b> · <a href="translations/README.tr.md">Türkçe</a> · <a href="translations/README.ko.md">한국어</a> · <a href="translations/README.zh-CN.md">简体中文</a> · <a href="translations/README.es.md">Español</a></sub></p>
+
+> [!NOTE]
+> Windows only, for now. Built for Claude Code; works on TypeScript, JavaScript, Python, C# and Zig projects.
+
+You tell your agent "no comments". It listens for a while. Then the session gets long, the context is compacted, a new session starts the next day, and the same comment comes back. You put it in CLAUDE.md; it stays a request there too.
+
+In emetgate a rule does not live in the conversation. It lives in a separate rule book and is applied to every write the agent makes. If the agent breaks a rule, the write never reaches the disk; the agent sees why and fixes it in the same turn.
+
+This is not a feeling. Claude Code's own documentation says the same:
+
+> *"CLAUDE.md instructions shape Claude's behavior but are not a hard enforcement layer."* ([code.claude.com/docs/en/memory](https://code.claude.com/docs/en/memory))
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
-  <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
-  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
-  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
+  <a href="assets/video/emetgate-ad-en.mp4"><img src="assets/readme/emetgate-ad-en-cover.png" alt="Video: a rule in a Markdown file is a request, in emetgate it is a gate" width="100%"></a>
+  <br><sub>Watch the video: we ask the agent to break the rule on purpose, and the gate still doesn't write it.</sub>
 </p>
 
-<p align="center"><b>English</b> · <a href="translations/README.tr.md">Türkçe</a> · <a href="translations/README.ko.md">한국어</a> · <a href="translations/README.zh-CN.md">简体中文</a> · <a href="translations/README.es.md">Español</a></p>
+## How it works
 
-# Emetgate
+<p align="center">
+  <img src="assets/readme/pillars-once-en.svg" alt="Say it once; the rule stays; fixed before you see it" width="100%">
+</p>
 
-LLMs are fast and capable — hours of work in minutes. But whether they follow your rules is up to them: a model can read "never use this" and use it anyway.
+### Say it once
 
-The usual answer is a better prompt, a longer `AGENTS.md` — rules the model is *asked* to obey. Emetgate takes the other path: a layer between the model and your source tree. Not an instruction it can skip — a gate it has to pass. The model proposes a change; the kernel verifies it; nothing reaches disk unless it passes.
-
-It runs as an MCP server, on Windows, for TypeScript, JavaScript, Python, C# and Zig. Below, each capability is broken into its parts — what each part is, and what it does here. No claim without the code and the real output under it.
-
-## The gate
-
-A change names a symbol and the hash of the code it was based on. Emetgate puts the new body in place, reparses the file, runs your rules, then runs your typecheck and your tests on a copy of the repository inside a sandbox. If every step passes it is written and bound to a receipt; if any step fails, nothing is written.
+When you give a lasting instruction in chat ("from now on", "never"), emetgate asks the agent to offer the `/rule` line that turns it into a rule. You confirm it, and it becomes a rule. You can also write your own rule in one line:
 
 ```
-proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
-                  └── any step fails ─▶ nothing is written (מת)
+emetgate rule add "no lint suppression" --check forbid_regex:eslint-disable --enforce
 ```
 
-| part | what it is | what it does here |
-| --- | --- | --- |
-| shadow workspace | an isolated copy of the repository | the proposed write is applied here first, so tests and typecheck run without touching the real tree; on failure the disk never changed |
-| tree-sitter | an incremental parser | reparses the file to show the change actually parses, and did not break the tree |
-| in-toto receipt | a supply-chain provenance format | binds each passing write to a record of what was built from what, with which tests — checkable later (not signed yet) |
+Or pick from the ready catalog, where the common ones live: no `console.log`, no new comments, no `Co-authored-by`:
 
-## Search
+<img src="assets/readme/term-rules-en.svg" alt="emetgate rule pick and emetgate rule add in a terminal" width="100%">
 
-Two engines: a literal index for speed, and a certified engine for proof.
+### The session ends, the rule stays
 
-### `emetgate_find` — literal search
+The rule lives in a ledger under `.emetgate/`. However long the session runs, after compaction, in tomorrow's new session, the same rule applies to every write.
 
-Plain-text and indexable-pattern search, without going back to disk. Sub-ms warm.
+Under `emetgate lockdown`, Claude Code's own edit and write tools are off; the agent changes files through emetgate's tools, and every change passes the same rules. The agent has no tool to add, change or remove a rule; a command that tries to is asked about first.
 
-| part | what it is | what it does here |
-| --- | --- | --- |
-| suffix array (SA-IS) | the sorted array of every suffix of the text, built in linear time | finds a literal in one `O(m·log n)` binary search, with all its matches at once |
-| two wavelet trees | position→file and repeat-chain maps over the array | tells which match sits in which file, without re-reading the file from disk |
-| mmap'd `.emet` index | one memory-mapped index file | files are not reopened during a search; `~0.7–1 ms` warm |
+Adding a rule to an old repository breaks nothing: only new violations are refused.
 
-### `emetgate_search` — certified search
+### Fixed before you see it
 
-Search that carries, with the result, a proof that it missed nothing.
-
-| part | what it is | what it does here |
-| --- | --- | --- |
-| trigram postings | a compressed inverted index (Elias-Fano / bitmap) | narrows the candidate files fast, without scanning the whole repo |
-| RFC 9162 Merkle tree | a root over the SHA-256 of every file read | the reply carries the root, so a complete or partial answer is provable, not asserted |
-| fail-closed | the certificate is refused as `InconsistentCertificate` if the numbers do not add up | a wrong "complete" is never shown; when in doubt it stays silent |
-| NTFS change barrier | file-change notice via `ReadDirectoryChangesW` | only a changed file is re-read (freshness); zero misses in the benchmark |
-| ripgrep delegation | a regex the index cannot serve (`\b`, lookaround…) | is handed to ripgrep; the reply says `delegated: rg` — no loss of capability |
-
-The reply carries proof, not a claim — real output:
+A refusal goes back to the agent with its line and column; the agent fixes it in the same turn. You see the result that follows the rule.
 
 ```
-$ search "InconsistentCertificate"
-✓ 6 matches in 429 files            # complete, with the Merkle root
-$ search "Allocator"
-partial: matches 1-46 of 1617; next offset:46
-$ search "zzzNeverOccurs"
-✓ no match in 569 files              # even zero is proven
+rejected: rule mf97c482341f15e82 (forbid:console.log) at src\pricing.js:3:3: console.log
+rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // clamp the percent
 ```
 
-> warm ~1.5–3.5 ms · cold (index build) 661 ms · line-for-line parity with ripgrep
+## Why a hook or ESLint is not enough
 
-## Rules
+You can build part of this yourself with Claude Code hooks and ESLint. The difference:
 
-A policy you set once is held on every write. The model reads the rules and cannot change them.
+- **The gate is the same for every write tool.** Lockdown turns off Claude Code's own edit tools; edits, renames and moves pass the same rules. If the agent changes a file with a shell command, it is recorded, frozen paths are put back, and a change that did not pass the gate cannot be committed through emetgate.
+- **The agent can switch ESLint off.** An `eslint-disable` line and `.eslintrc` live in files the agent can edit. emetgate's rules live in a ledger the agent has no tool to change; adding `eslint-disable` can itself hit a rule.
+- **The change is checked as a whole.** A change that touches several files is checked together on a copy of the repository; if it passes all of it is written, if not none of it is.
+- **From chat to rule.** A lasting instruction you give is offered as a rule; you do not write a script per rule.
 
-| part | what it is | what it does here |
-| --- | --- | --- |
-| tree-sitter queries | structural matches over the syntax tree | span/symbol/comment checks: `no_comment`, `require_comment`, `max_function_lines`, `forbid_import`… |
-| regex engine (budgeted) | a step-limited matcher | `forbid_regex` / `no_todo`: a pattern or marker hunt in the changed span |
-| `ledger.ndjson` | an append-only rule book (`.emetgate/`) | rules live here; the model reads them but cannot write them — policy stays human |
-| commit-message check | a message-surface rule | `message:conventional`: conventional commits held at commit time |
+## Also
 
-```
-emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
-emetgate rule add "document exports"  --check require_comment --in src/ --enforce
-```
+**Search says what it read.** When the agent says "I found every use", the answer shows how many files it scanned and whether it read them all. If the numbers do not add up, no result is shown.
 
-## Verified Git
+<img src="assets/readme/term-search-en.svg" alt="emetgate search output with file counts" width="100%">
 
-`emetgate verify --branch base..head` replays every commit of a range against its receipts and returns one verdict for the range. Receipts are not signed and the chain tip is not stored or published, so this catches a receipt edited inconsistently with its commit; it does not catch a commit rewritten together with a freshly made, consistent receipt.
+**Commits carry a record.** Every commit made through the gate carries, in `refs/notes/emetgate`, which files were written and which checks ran. It is a record, not a signature: it shows later how something was written.
 
-| part | what it is | what it does here |
-| --- | --- | --- |
-| blake3 hash chain | each cert = blake3(parent ‖ oid ‖ verdict ‖ receipt) | a changed verdict or receipt shifts the tip, which shows only against a tip kept from an earlier run |
-| CAS refs + private index | write-tree / commit-tree without touching the working tree | a gated, receipted commit — without disturbing your editor |
-| in-toto receipts | provenance bound to the commit (`refs/notes/emetgate`) | no receipt → `partial` (fail-closed); no fabricated "verified" |
-| git rev-list replay | walks the `base..head` range | re-runs the single-commit verify for each, weaving the chain; an empty range is `empty` and fails, never green |
+<img src="assets/readme/term-verify-en.svg" alt="emetgate verify output" width="100%">
 
-```
-$ emetgate verify --branch main..HEAD
-branch partial: 48 commit(s)          # no receipt → fail-closed
-  a179a7f unverified (no receipt)  cert 84c2…
+## Start in 2 minutes
 
-# tamper with one receipt:
-branch broken: 1 commit(s)
-  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
-```
-
-## How it's tested
-
-| part | what it is | what it does here |
-| --- | --- | --- |
-| mutation testing | breaks the code on purpose and checks the suite notices | proves the tests *catch* a fault, not just that they pass |
-| fuzz & red-team | random mutation plus attack corpora | no crash or escape on unexpected or hostile input |
-| ripgrep parity gate | compares the hit-set against rg on every run | search cannot be "fast but wrong"; checked line for line |
-
-For the engine: <!-- generated:engine-mutant-summary -->73 mutants today: 62 killed, 6 proven equivalent, 4 redundant guards kept as defense in depth, 1 open<!-- /generated -->. The list is in [VERIFICATION.md](VERIFICATION.md).
-
-## Measured
-
-| surface | measure | result |
-| --- | --- | --- |
-| full test suite | pass / fail / leaked | 2386 / 0 / 0 |
-| search parity | rg lines = emetgate | 1617=1617 · 6=6 · 2=2 |
-| search warm | median | 1.5–3.5 ms |
-| find warm | median | 0.7–1.0 ms |
-| verify (hand-edited receipt) | verdict | broken (caught) |
-
-```
-python tests/bench/n8n_search.py   ·   zig build test
-```
-
-## Install
-
-New here? Follow [docs/QUICKSTART.md](docs/QUICKSTART.md): install, run `emetgate doctor`, then `emetgate lockdown`.
-
-Install the Windows binary from the [latest release](https://github.com/emetgate/emetgate/releases/latest) in PowerShell, then open a new terminal:
+In PowerShell, then open a new terminal:
 
 ```
 irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
 
-The installer checks the SHA256 of `emetgate.exe`, puts it in `%LOCALAPPDATA%\Programs\emetgate` and adds that folder to your user `PATH` if it is not there yet. After that, `emetgate doctor` and `emetgate lockdown` look for a newer release at most once every 24 hours (2 seconds at most, silent when offline) and install it only if its Ed25519 signature matches the key built into emetgate. `emetgate update` does the same on demand. Set `EMETGATE_NO_UPDATE=1` to turn the daily check off; it is always off when `CI` is set.
-
-Then, in the project folder:
+In your project folder:
 
 ```
-emetgate lockdown --test "npm test"
+emetgate doctor
+emetgate rule pick 1 19 26
+emetgate lockdown
 ```
 
-Windows · TypeScript / JavaScript / Python / C# / Zig. `emetgate lockdown` starts the agent with only the emetgate tools, fail-closed. Leave `--test` out and the test command is detected on every write (`package.json` `scripts.test`, `build.zig`, `Cargo.toml`, `go.mod`, `pyproject.toml`, a `.sln` or `.csproj`). In an empty folder lockdown runs `git init`, and writes land as `unverified_no_tests` until the project has a test command.
-
-Lockdown reads only the project's own `.mcp.json`, never a server registered at user scope. To use emetgate as a server next to the other tools, or to give lockdown your own server arguments, register it for the project:
-
-```
-claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
-```
-
-With that `.mcp.json` in place, lockdown takes the test command from it, and `emetgate lockdown --test` is refused.
-
-## Dig deeper
-
-- [REFERENCE.md](REFERENCE.md) — every tool
-- [VERIFICATION.md](VERIFICATION.md) — receipts & proof
-- [tests/bench](tests/bench) — the benchmarks
+`emetgate lockdown` starts Claude Code with only emetgate's tools. Step by step: [docs/QUICKSTART.md](docs/QUICKSTART.md).
 
 ## Limits
 
-Windows only; TypeScript, JavaScript, Python, C# and Zig. The sandbox blocks writes, not reads or the network. Passing the gate proves a change parses and passes *your* tests — it is only as strong as those tests. The benchmarks are our own, from one machine, and reproducible.
+- Windows only, for now.
+- Rules apply to changes made through emetgate's write tools. A command the agent runs does not pass the gate: the files it changes are reported and frozen paths are put back, but the other rules do not apply to commands.
+- The rule ledger is a file under `.emetgate/`. The agent has no tool to write it, but an edit made by a command is not caught by the hook that watches rule commands.
+- Outside lockdown, in a session opened with the agent's own tools, there is no gate. In other agents that speak MCP, the gate works as long as the agent uses emetgate's tools.
+- Every write takes about 0.2–0.4 s at the gate. We do not promise fewer tokens.
+- Receipts are not signed: they catch a receipt edited out of step with its commit, not a rewritten history.
+- The destructive-command check looks at words; it is not a sandbox.
+
+## Under the hood
+
+<details>
+<summary>The gate: reparse, rules, typecheck and tests on a copy, then one write</summary>
+
+A change names a symbol and the hash of the code it was based on. emetgate puts the new body in place, reparses the file, runs the rules, then runs the typecheck and the tests on a copy of the repository inside a low-integrity sandbox. If every step passes it is written; if one fails, nothing is written. The write goes through a journal; if it is cut off, `emetgate recover` repairs it.
+
+</details>
+
+<details>
+<summary>Rules: syntax-tree queries, patterns, commands, frozen paths, commit messages</summary>
+
+Rule checks are syntax-tree queries (`no_comment`, `require_comment`, `max_function_lines`, `forbid_import`), step-limited regex in the changed span (`forbid_regex`, `no_todo`), commands, frozen paths and commit-message checks (`message:conventional`, no Co-authored-by). The ledger `ledger.ndjson` is append-only; the model reads it and has no tool to write it. Lockdown's chat hook handles a `/rule` line before it reaches the model and offers to turn a lasting instruction into a rule.
+
+</details>
+
+<details>
+<summary>Search and verification: the techniques</summary>
+
+Search uses a suffix-array index and trigram lists; it shows whether an answer is complete or partial with an RFC 9162 Merkle root over the SHA-256 of every file read, and is compared line for line with ripgrep. Commit records are in-toto statements, and `emetgate verify --branch main..HEAD` checks a whole range; a commit without a receipt counts as `partial`. Details: [REFERENCE.md](REFERENCE.md), [VERIFICATION.md](VERIFICATION.md).
+
+</details>
 
 ## Where the name comes from
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/golem-ales-dark.jpg">
-  <img src="assets/golem-ales-light.jpg" alt="A 1899 pen drawing: Rabbi Loew raises his hand and the golem's face forms in smoke, Hebrew letters on its forehead" width="220" align="left">
-</picture>
-
-In the Prague legend, the golem is brought to life by the word **אמת** (*emet*, "truth") on its forehead. Erase the first letter and **אמת** becomes **מת** (*met*, "dead") — the golem falls still. The gate writes the first letter when a change holds; a failing test erases it.
-
-<br clear="left">
-
-## License
+In the Prague legend, the golem comes to life by the word **אמת** (*emet*, "truth") on its forehead; erase the first letter and it becomes **מת** (*met*, "dead"), and it stops. In emetgate, a change that breaks a rule is not written.
 
 MIT. See [LICENSE](LICENSE).
