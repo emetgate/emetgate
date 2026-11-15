@@ -1,192 +1,134 @@
 <p align="center">
-  <img src="../assets/aleph.svg" alt="Emetgate" width="190">
+  <img src="../assets/readme/hero-once-en.svg" alt="emetgate: say it once" width="100%">
 </p>
+
+<p align="center"><a href="../docs/QUICKSTART.md"><b>快速开始</b></a> · <a href="../REFERENCE.md"><b>参考</b></a> · <a href="../VERIFICATION.md"><b>验证</b></a> · <a href="../examples/discount"><b>真实会话</b></a></p>
+
+<p align="center"><sub><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></sub></p>
+
+> [!NOTE]
+> 目前仅支持 Windows。为 Claude Code 打造，适用于 TypeScript、JavaScript、Python、C# 和 Zig 项目。
+
+你告诉智能体"不要加注释"。它会听一阵子。然后会话变长，上下文被压缩，第二天开了新会话，同样的注释又回来了。你把它写进 CLAUDE.md，在那里它也只是一个请求。
+
+在 emetgate 里，规则不在对话中。它存放在一个独立的规则账本里，作用于智能体的每一次写入。智能体违反规则时，写入不会落到磁盘；智能体会看到原因，并在同一轮里修正。
+
+这不是感觉。Claude Code 自己的文档也这么说：
+
+> *"CLAUDE.md instructions shape Claude's behavior but are not a hard enforcement layer."* CLAUDE.md 指令会影响 Claude 的行为，但不是强制执行的一层。([code.claude.com/docs/en/memory](https://code.claude.com/docs/en/memory))
 
 <p align="center">
-  <img src="https://img.shields.io/badge/platform-windows-0078D6?style=flat-square" alt="Platform: Windows">
-  <img src="https://img.shields.io/badge/languages-typescript%20%7C%20javascript%20%7C%20python%20%7C%20c%23%20%7C%20zig-3178C6?style=flat-square" alt="Languages: TypeScript, JavaScript, Python, C#, Zig">
-  <img src="https://img.shields.io/badge/protocol-MCP-1E1B26?style=flat-square" alt="Protocol: MCP">
-  <a href="https://github.com/emetgate/emetgate/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/emetgate/emetgate/ci.yml?branch=main&style=flat-square&label=tests" alt="Tests"></a>
-  <a href="https://github.com/emetgate/emetgate/releases/latest"><img src="https://img.shields.io/github/v/release/emetgate/emetgate?style=flat-square" alt="Latest release"></a>
+  <a href="../assets/video/emetgate-ad-en.mp4"><img src="../assets/readme/emetgate-ad-en-cover.png" alt="视频：Markdown 文件里的规则只是请求，在 emetgate 里它是一道门" width="100%"></a>
+  <br><sub>观看视频：我们故意让智能体违反规则，门依然不会写入。</sub>
 </p>
 
-<p align="center"><a href="../README.md">English</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.es.md">Español</a></p>
+## 工作方式
 
-# Emetgate
+<p align="center">
+  <img src="../assets/readme/pillars-once-en.svg" alt="说一次；规则留下；在你看到之前修好" width="100%">
+</p>
 
-大语言模型既快又能干 —— 几小时的活儿几分钟就干完。但它们是否遵守你的规则，取决于它们自己：模型可以读到"绝不要用这个"，然后照用不误。
+### 只说一次
 
-惯常的答案是更好的提示词、更长的 `AGENTS.md` —— 这些规则只是*请求*模型去遵守。Emetgate 走的是另一条路：在模型与你的源码树之间加一层。不是一条它可以跳过的指令 —— 而是一道它必须通过的闸门。模型提出一次修改；内核对其进行验证；除非通过，否则任何内容都不会落盘。
-
-它作为 MCP 服务器运行，在 Windows 上，面向 TypeScript、JavaScript、Python、C# 和 Zig。下面把每项能力拆成各个部分 —— 每个部分是什么，以及它在这里做什么。没有代码和其下的真实输出，就没有任何主张。
-
-## 闸门
-
-一次修改要指明一个符号，以及它所基于代码的哈希。Emetgate 把新的函数体放到位，重新解析文件，运行你的规则，然后在沙箱内的仓库副本上运行你的类型检查和测试。如果每一步都通过，修改就被写入并绑定到一份收据；如果任何一步失败，就不会写入任何内容。
+当你在对话中给出一条长期指令（"从现在起"、"绝不"），emetgate 会请智能体提出把它变成规则的 `/rule` 行。你确认后，它就成为规则。你也可以用一行写出自己的规则：
 
 ```
-proposal ─▶ reparse ─▶ rules ─▶ typecheck ─▶ tests ─▶ write + receipt  (אמת)
-                  └── any step fails ─▶ nothing is written (מת)
+emetgate rule add "no lint suppression" --check forbid_regex:eslint-disable --enforce
 ```
 
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| 影子工作区 | 仓库的一个隔离副本 | 提议的写入先在这里应用，于是测试和类型检查在不触碰真实目录树的情况下运行；失败时磁盘从未改变 |
-| tree-sitter | 一个增量解析器 | 重新解析文件，表明修改确实能解析，且没有破坏语法树 |
-| in-toto 收据 | 一种供应链溯源格式 | 把每一次通过的写入绑定到一条签名记录：由什么构建出什么、用了哪些测试 —— 之后可核验 |
+或者从内置目录中挑选，常用的都在里面：禁止 `console.log`、禁止新增注释、禁止 `Co-authored-by`：
 
-## 搜索
+<img src="../assets/readme/term-rules-en.svg" alt="终端中的 emetgate rule pick 和 emetgate rule add" width="100%">
 
-两个引擎：求速度的字面量索引，和求证明的认证引擎。
+### 会话结束，规则留下
 
-### `emetgate_find` —— 字面量搜索
+规则存放在 `.emetgate/` 下的账本中。无论会话多长、压缩之后、还是明天的新会话，同一条规则都作用于每一次写入。
 
-无需回到磁盘的纯文本与可索引模式搜索。热态时亚毫秒。
+在 `emetgate lockdown` 下，Claude Code 自带的编辑和写入工具被关闭；智能体通过 emetgate 的工具修改文件，每次修改都经过同样的规则。智能体没有添加、修改或删除规则的工具；试图这样做的命令会先询问你。
 
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| 后缀数组 (SA-IS) | 以线性时间构建的、文本所有后缀的有序数组 | 用一次 `O(m·log n)` 二分查找一次性找到某个字面量及其全部匹配 |
-| 两棵小波树 (wavelet tree) | 数组之上的 位置→文件 与 重复链 映射 | 告诉你哪个匹配在哪个文件里，而无需从磁盘重新读取文件 |
-| mmap 的 `.emet` 索引 | 一个内存映射的索引文件 | 搜索期间文件不会被重新打开；热态 `~0.7–1 ms` |
+给旧仓库添加规则不会破坏任何东西：只有新的违规会被拒绝。
 
-### `emetgate_search` —— 认证搜索
+### 在你看到之前修好
 
-随结果一并给出“没有遗漏任何内容”之证明的搜索。
-
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| 三元组倒排 (trigram postings) | 一个压缩的倒排索引 (Elias-Fano / 位图) | 不扫描整个仓库就快速收窄候选文件 |
-| RFC 9162 默克尔树 | 对读取的每个文件的 SHA-256 取根 | 回复携带该根，于是完整或部分的答案是可证明的，而非断言 |
-| 失败即关闭 (fail-closed) | 若数字对不上，证书以 `InconsistentCertificate` 被拒 | 错误的“完整”绝不会被展示；存疑时保持沉默 |
-| NTFS 变更屏障 | 经由 `ReadDirectoryChangesW` 的文件变更通知 | 只有变更过的文件才被重新读取（新鲜度）；基准测试中零遗漏 |
-| 委托给 ripgrep | 索引无法服务的正则 (`\b`、lookaround…) | 交给 ripgrep；回复写明 `delegated: rg` —— 能力无损失 |
-
-回复携带的是证明，而非主张 —— 真实输出：
+拒绝信息会带着行号和列号返回给智能体，智能体在同一轮中修正。你看到的是遵守规则的结果。
 
 ```
-$ search "InconsistentCertificate"
-✓ 6 matches in 429 files            # complete, with the Merkle root
-$ search "Allocator"
-partial: matches 1-46 of 1617; next offset:46
-$ search "zzzNeverOccurs"
-✓ no match in 569 files              # even zero is proven
+rejected: rule mf97c482341f15e82 (forbid:console.log) at src\pricing.js:3:3: console.log
+rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // clamp the percent
 ```
 
-> 热态 ~1.5–3.5 ms · 冷态（构建索引）661 ms · 与 ripgrep 逐行一致
+## 为什么 hook 或 ESLint 不够
 
-## 规则
+用 Claude Code 的 hook 和 ESLint，你可以自己搭出其中一部分。区别在于：
 
-你设定一次的策略，在每一次写入时都被坚持。模型读取规则，且无法更改它们。
+- **每个写入工具都过同一道门。** lockdown 会关闭 Claude Code 自带的编辑工具；编辑、重命名和移动都经过同样的规则。智能体如果用 shell 命令修改文件，会被记录，冻结路径会被恢复，未通过门的修改无法通过 emetgate 提交。
+- **智能体可以关掉 ESLint。** `eslint-disable` 行和 `.eslintrc` 都在智能体能编辑的文件里。emetgate 的规则在智能体没有工具修改的账本里；添加 `eslint-disable` 本身也可能触发规则。
+- **修改作为整体检查。** 涉及多个文件的修改会在仓库副本上一起检查；通过则全部写入，否则一个也不写。
+- **从对话到规则。** 你给出的长期指令会被提议为规则；不需要为每条规则写脚本。
 
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| tree-sitter 查询 | 语法树之上的结构化匹配 | 跨度/符号/注释检查：`no_comment`、`require_comment`、`max_function_lines`、`forbid_import`… |
-| 正则引擎（带预算） | 一个带步数上限的匹配器 | `forbid_regex` / `no_todo`：在变更跨度内查找某个模式或标记 |
-| `ledger.ndjson` | 一本只追加的规则簿 (`.emetgate/`) | 规则住在这里；模型能读却不能写 —— 策略归人所有 |
-| 提交消息检查 | 一条消息面规则 | `message:conventional`：在提交时坚持 conventional commits |
+## 此外
 
-```
-emetgate rule add "ban lodash"        --check forbid_import:lodash --enforce
-emetgate rule add "document exports"  --check require_comment --in src/ --enforce
-```
+**搜索会说明它读了什么。** 当智能体说"所有用法都找到了"时，结果会显示扫描了多少文件、是否全部读过。数字对不上时不显示结果。
 
-## 已验证的 Git
+<img src="../assets/readme/term-search-en.svg" alt="带文件数量的 emetgate 搜索输出" width="100%">
 
-`emetgate verify --branch base..head` 重放一个分支的全部历史，并返回一个可察觉篡改的裁决。
+**提交带有记录。** 每个经过门的提交都会在 `refs/notes/emetgate` 中记录写入了哪些文件、运行了哪些检查。这是记录，不是签名：它让你事后看到内容是如何写成的。
 
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| blake3 哈希链 | 每份证书 = blake3(parent ‖ oid ‖ verdict ‖ receipt) | 重放一个提交，链尖就会移动 —— 篡改可察觉 |
-| CAS 引用 + 私有索引 | 不触碰工作目录树的 write-tree / commit-tree | 一次经过闸门、带收据的提交 —— 而不打扰你的编辑器 |
-| TLA⁺ 模型检查 | 提交日志的一个形式模型 | 崩溃留下的半成品提交会回到一致状态 —— 已证明 |
-| in-toto 收据 | 绑定到提交的溯源 (`refs/notes/emetgate`) | 没有收据 → `partial`（失败即关闭）；没有伪造的“verified” |
-| git rev-list 重放 | 遍历 `base..head` 区间 | 对每个提交重跑单提交验证，织成那条链 |
+<img src="../assets/readme/term-verify-en.svg" alt="emetgate verify 输出" width="100%">
 
-```
-$ emetgate verify --branch main..HEAD
-branch partial: 48 commit(s)          # no receipt → fail-closed
-  a179a7f unverified (no receipt)  cert 84c2…
+## 2 分钟上手
 
-# tamper with one receipt:
-branch broken: 1 commit(s)
-  3ff23a0 MISMATCH  cert ec79…         # the chain tip shifted → caught
-```
-
-## 如何测试
-
-| 部分 | 它是什么 | 它在这里做什么 |
-| --- | --- | --- |
-| 变异测试 | 故意弄坏代码，看测试套件是否察觉 | 证明测试*抓得住*一个缺陷，而不只是能通过 |
-| TLA⁺ | 对提交日志的一次模型检查 | 崩溃恢复的正确性，与代码分开论证 |
-| 模糊测试与红队 | 随机变异加攻击语料 | 对意外或敌意输入不崩溃、不逃逸 |
-| ripgrep 一致性闸门 | 每次运行都把命中集与 rg 比对 | 搜索不能“快却是错的”；逐行核对 |
-
-就引擎而言：目前 73 个变异体：62 个被杀死，6 个被证明等价，4 个作为纵深防御保留的冗余守卫，1 个未解决。列表在 [VERIFICATION.md](../VERIFICATION.md) 中。
-
-## 已测量
-
-| 面 | 度量 | 结果 |
-| --- | --- | --- |
-| 完整测试套件 | 通过 / 失败 / 泄漏 | 2386 / 0 / 0 |
-| 搜索一致性 | rg 行数 = emetgate | 1617=1617 · 6=6 · 2=2 |
-| 搜索热态 | 中位数 | 1.5–3.5 ms |
-| find 热态 | 中位数 | 0.7–1.0 ms |
-| 验证（被篡改的收据） | 裁决 | broken（已抓住） |
-
-```
-python tests/bench/n8n_search.py   ·   zig build test
-```
-
-## 安装
-
-第一次使用？按 [docs/QUICKSTART.md](../docs/QUICKSTART.md) 操作：安装，运行 `emetgate doctor`，然后运行 `emetgate lockdown`。
-
-在 PowerShell 中从[最新发布](https://github.com/emetgate/emetgate/releases/latest)安装 Windows 二进制文件，然后打开一个新终端：
+在 PowerShell 中运行，然后打开一个新终端：
 
 ```
 irm https://github.com/emetgate/emetgate/releases/latest/download/install.ps1 | iex
 ```
 
-安装脚本会校验 `emetgate.exe` 的 SHA256，把它放进 `%LOCALAPPDATA%\Programs\emetgate`，并在该文件夹不在用户 `PATH` 中时把它加入。之后 `emetgate doctor` 和 `emetgate lockdown` 每 24 小时最多检查一次新版本（最多 2 秒，离线时不输出任何内容），只有当其 Ed25519 签名与 emetgate 内置的密钥匹配时才安装。`emetgate update` 会立即做同样的事。设置 `EMETGATE_NO_UPDATE=1` 可关闭每日检查；设置了 `CI` 时它始终关闭。
-
-然后，在项目文件夹中：
+在项目目录中：
 
 ```
-emetgate lockdown --test "npm test"
+emetgate doctor
+emetgate rule pick 1 19 26
+emetgate lockdown
 ```
 
-Windows · TypeScript / JavaScript / Python / C# / Zig。`emetgate lockdown` 让智能体仅带 emetgate 工具启动，失败即关闭。省略 `--test` 时，每次写入都会检测测试命令（`package.json` `scripts.test`、`build.zig`、`Cargo.toml`、`go.mod`、`pyproject.toml`、`.sln` 或 `.csproj`）。在空文件夹中 lockdown 会运行 `git init`，在项目有测试命令之前，写入记为 `unverified_no_tests`。
+`emetgate lockdown` 只用 emetgate 的工具启动 Claude Code。分步说明：[docs/QUICKSTART.md](../docs/QUICKSTART.md)。
 
-Lockdown 只读取项目自己的 `.mcp.json`，从不读取在用户范围注册的服务器。若要把 emetgate 作为服务器与其他工具并用，或给 lockdown 传入你自己的服务器参数，请为项目注册它：
+## 限制
 
-```
-claude mcp add --scope project emetgate -- emetgate mcp --test "npm test"
-```
+- 目前仅支持 Windows。
+- 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。
+- 规则账本是 `.emetgate/` 下的一个文件。智能体没有写它的工具，但通过命令编辑它不会被监视规则命令的 hook 捕获。
+- 在 lockdown 之外、用智能体自带工具打开的会话中没有门。在其他支持 MCP 的智能体中，只要智能体使用 emetgate 的工具，门就会生效。
+- 每次写入在门上大约耗时 0.2–0.4 s。我们不承诺更少的 token。
+- 收据没有签名：能发现与提交不一致的被改动收据，但发现不了被整体重写的历史。
+- 破坏性命令检查只看词语，不是沙箱。
 
-有了这个 `.mcp.json`，lockdown 会从中读取测试命令，而 `emetgate lockdown --test` 会被拒绝。
+## 内部原理
 
-## 深入了解
+<details>
+<summary>门：在副本上重新解析、规则、类型检查和测试，然后一次写入</summary>
 
-- [REFERENCE.md](../REFERENCE.md) —— 每一个工具
-- [VERIFICATION.md](../VERIFICATION.md) —— 收据与证明
-- [docs/experiments/tla](../docs/experiments/tla) —— TLA⁺ 模型
-- [tests/bench](../tests/bench) —— 基准测试
+一次修改会指定一个符号及其所基于代码的哈希。emetgate 放入新的函数体，重新解析文件，运行规则，然后在仓库副本的低完整性沙箱中运行类型检查和测试。每一步都通过才写入；任一步失败则什么都不写。写入经过日志；中途被打断时由 `emetgate recover` 修复。
 
-## 局限
+</details>
 
-仅 Windows；TypeScript、JavaScript、Python、C# 和 Zig。沙箱阻挡写入，而非读取或网络。通过闸门，证明的是一次修改能解析并通过*你的*测试 —— 它只和那些测试一样强。基准测试是我们自己的，出自一台机器，且可复现。
+<details>
+<summary>规则：语法树查询、模式、命令、冻结路径、提交信息</summary>
+
+规则检查包括语法树查询（`no_comment`、`require_comment`、`max_function_lines`、`forbid_import`）、在修改范围内的限步 regex（`forbid_regex`、`no_todo`）、命令、冻结路径以及提交信息检查（`message:conventional`、禁止 Co-authored-by）。账本 `ledger.ndjson` 只能追加；模型可以读取，但没有写入的工具。lockdown 的对话 hook 会在 `/rule` 行到达模型之前处理它，并提议把长期指令变成规则。
+
+</details>
+
+<details>
+<summary>搜索与验证：所用技术</summary>
+
+搜索使用 suffix array 索引和 trigram 列表；它基于所读每个文件的 SHA-256 计算 RFC 9162 Merkle 根，以表明答案是完整还是部分的，并与 ripgrep 逐行比对。提交记录采用 in-toto 格式，`emetgate verify --branch main..HEAD` 会检查整个范围；没有收据的提交计为 `partial`。详情：[REFERENCE.md](../REFERENCE.md)、[VERIFICATION.md](../VERIFICATION.md)。
+
+</details>
 
 ## 名字的由来
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="../assets/golem-ales-dark.jpg">
-  <img src="../assets/golem-ales-light.jpg" alt="一幅 1899 年的钢笔画：拉比勒夫举起手，傀儡的脸在烟雾中成形，额上有希伯来字母" width="220" align="left">
-</picture>
-
-在布拉格传说中，傀儡（golem）因额上的 **אמת**（*emet*，“真理”）一词而获得生命。抹去第一个字母，**אמת** 便成了 **מת**（*met*，“死亡”）—— 傀儡静止下来。当一次修改成立时，闸门写下第一个字母；一次失败的测试则抹去它。
-
-<br clear="left">
-
-## 许可证
+在布拉格的传说中，泥人凭额头上的 **אמת**（*emet*，"真理"）一词获得生命；擦去第一个字母就变成 **מת**（*met*，"死亡"），它便停止。在 emetgate 中，违反规则的修改不会被写入。
 
 MIT。见 [LICENSE](../LICENSE)。

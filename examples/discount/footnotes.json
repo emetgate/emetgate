@@ -1,0 +1,28 @@
+{
+  "source": "examples/discount/SESSION.md",
+  "callers": 2,
+  "caller_files": "pricing.js'te tanımı, checkout.js'te çağrısı",
+  "rules": 1,
+  "rule_text": "tests are frozen",
+  "tests_total": 12,
+  "tests_failed_first": 5,
+  "claims_off": 5,
+  "claims_on": 4,
+  "search_files": 6,
+  "search_matches": 4,
+  "search_root": "a4eb1d5b5145585c23c9101ea97e1e3fc22e56f817eaa8e2199f9f69787e7a5a",
+  "failing_test": "15% discount on 100 gives 85",
+  "expected": "85",
+  "actual": "-1400",
+  "commit": "24c442122e87b2075086109f358185d2b794f6b6",
+  "receipt": "d5598c51fadd225e0eac370875569de84abe5277e9b437f952b098b297ae0bfa",
+  "test_command": "node --test",
+  "verify_zig": "verified",
+  "verify_py": "consistent",
+  "merkle_leaves": [
+    {"path": "pricing.js"},
+    {"path": "checkout.js"},
+    {"path": "pricing.test.js"},
+    {"path": "checkout.test.js"}
+  ]
+}
