@@ -73,6 +73,7 @@ ok    mcp       no user or local registration in C:\Users\you\.claude.json; lock
 ok    write     C:/Users/you/proje
 ok    state     C:\Users\you\AppData\Local\emetgate\lockdown\...
 ok    data      C:\Users\you\AppData\Local\emetgate: 412.3 MiB in 5310 files
+ok    rules     2 global rules (2 enforced) in C:\Users\you\AppData\Local\emetgate\rules\ledger.ndjson, applied in every repository
 ok    sandbox   low-integrity cmd.exe ran
 ok    appcntr   AppContainer profile available
 ok    console   UTF-8 output
@@ -82,6 +83,8 @@ ready: run `emetgate lockdown` here
 `emetgate doctor --json` prints the same checks as JSON. A `warn` on `path` means another emetgate.exe answers first on PATH; on `mcp`, that emetgate is registered in a config folder other than the one claude reads (`CLAUDE_CONFIG_DIR`); on `running`, that other emetgate processes hold the exe, so update and uninstall wait for them. Doctor never stops a process.
 
 It exits 1 while anything would stop lockdown from working. `warn` lines do not block.
+
+The `rules` line counts your global rules: the ones you add with `emetgate rule add ... --global` or `emetgate rule pick ... --global`, which every repository applies together with its own. It is a `FAIL` when that file cannot be read, since every write would then be refused.
 
 The `server` line starts the emetgate server your `.mcp.json` names, with its arguments, and sends it the first message Claude Code would. A `command` that points at a moved or deleted emetgate, or arguments the server refuses, is a `FAIL`: lockdown takes Claude Code's own tools away, so without a working server the session would have no tools at all. The fix names the emetgate you ran `doctor` with. A server of another version than that emetgate is a `warn`.
 

@@ -44,6 +44,8 @@ O eliges del catálogo incluido, donde están las habituales: sin `console.log`,
 
 La regla vive en un registro bajo `.emetgate/`. Por larga que sea la sesión, después de compactar, en la sesión nueva de mañana, la misma regla se aplica a cada escritura.
 
+Una regla que quieres en todos los proyectos va en tu registro global: añade `--global` a `emetgate rule add` o `emetgate rule pick`. Vive en `%LOCALAPPDATA%\emetgate\rules`, fuera de cualquier repositorio, y se aplica junto con las reglas propias de cada repositorio; un repositorio no puede cambiarla ni quitarla.
+
 Con `emetgate lockdown`, las herramientas propias de edición y escritura de Claude Code están apagadas; el agente cambia archivos con las herramientas de emetgate y cada cambio pasa por las mismas reglas. El agente no tiene herramienta para añadir, cambiar o borrar una regla; un comando que lo intente te pregunta primero.
 
 Añadir una regla a un repositorio antiguo no rompe nada: solo se rechazan las infracciones nuevas.

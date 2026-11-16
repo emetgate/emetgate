@@ -469,7 +469,7 @@ fn kept(want: ?[]const u8, found: Finding) ?Finding {
 }
 
 fn ruleChange(words: []const []const u8) bool {
-    return words.len >= 3 and is(words[0], &.{"emetgate"}) and std.mem.eql(u8, words[1], "rule") and eqlAny(words[2], &.{ "add", "supersede", "forget" });
+    return words.len >= 3 and is(words[0], &.{"emetgate"}) and std.mem.eql(u8, words[1], "rule") and eqlAny(words[2], &.{ "add", "supersede", "forget", "pick" });
 }
 
 fn downloads(arena: Allocator, segment: Segment, depth: usize) Allocator.Error!bool {
@@ -864,7 +864,7 @@ test "command danger: a rule change is found in any part of a command, and a rul
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    for ([_][]const u8{ "emetgate rule add \"no TODO\" no_literal TODO", "npm test && emetgate.exe rule forget d1", "bash -c 'emetgate rule supersede d1 x'" }) |command| {
+    for ([_][]const u8{ "emetgate rule add \"no TODO\" no_literal TODO", "npm test && emetgate.exe rule forget d1", "bash -c 'emetgate rule supersede d1 x'", "emetgate rule pick 1 19 --global", "emetgate rule add x --global" }) |command| {
         try std.testing.expect(try changesRules(arena, command));
     }
     for ([_][]const u8{ "emetgate rule list", "echo emetgate rule add x", "git commit -m 'emetgate rule add'", "npm test" }) |command| {

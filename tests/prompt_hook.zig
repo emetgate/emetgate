@@ -265,7 +265,7 @@ test "prompt hook: /rule add adopts the rule and answers with its id" {
 
     const rows = try listed(&repo);
     defer testing.allocator.free(rows);
-    const row = try std.fmt.allocPrint(testing.allocator, "{s}\tactive\tenforce\tforbid:networkidle\t-\tno networkidle\n", .{id});
+    const row = try std.fmt.allocPrint(testing.allocator, "{s}\tactive\trepo\tenforce\tforbid:networkidle\t-\tno networkidle\n", .{id});
     defer testing.allocator.free(row);
     try testing.expectEqualStrings(row, rows);
 }
@@ -281,7 +281,7 @@ test "prompt hook: /rule list answers with the rows emetgate rule list prints" {
     const id = idOf(added);
     const want = try std.fmt.allocPrint(
         testing.allocator,
-        "id                 state   mode      check     where             rule\n{s}  active  advisory  no check  whole repository  prefer explicit waits",
+        "id                 state   origin  mode      check     where             rule\n{s}  active  repo    advisory  no check  whole repository  prefer explicit waits",
         .{id},
     );
     defer testing.allocator.free(want);
@@ -339,7 +339,7 @@ test "prompt hook: quotes and Turkish letters reach the ledger byte for byte and
     const reply = try say(&repo, "/rule list");
     defer reply.deinit();
     for (reply.raw) |byte| try testing.expect(byte < 0x80);
-    const row = try std.fmt.allocPrint(testing.allocator, "{s}  active  enforce  {s}  whole repository  {s}", .{ idOf(added), check, text });
+    const row = try std.fmt.allocPrint(testing.allocator, "{s}  active  repo    enforce  {s}  whole repository  {s}", .{ idOf(added), check, text });
     defer testing.allocator.free(row);
     try testing.expect(std.mem.endsWith(u8, reply.reason(), row));
     try testing.expect(std.mem.startsWith(u8, reply.reason(), "id "));
@@ -376,7 +376,7 @@ test "prompt hook: a refused rule answers with the error name and the names that
     defer unknown.deinit();
     const want = try std.fmt.allocPrint(
         testing.allocator,
-        "id                 state   mode      check     where             rule\n{s}  active  advisory  no check  whole repository  prefer explicit waits\nerror: DecisionNotActive",
+        "id                 state   origin  mode      check     where             rule\n{s}  active  repo    advisory  no check  whole repository  prefer explicit waits\nerror: DecisionNotActive",
         .{idOf(added)},
     );
     defer testing.allocator.free(want);
@@ -387,7 +387,7 @@ test "prompt hook: a /rule the grammar does not define answers with the usage an
     var repo = try Repo.init();
     defer repo.deinit();
 
-    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce]\n/rule list [--all] [--json]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce]\n/rule forget <id>\n/rule pick [<numbers> [in <path>]]   (pick rules from a catalog; pick alone lists it)\n/rule show <number>   (what a catalog rule checks)";
+    const usage = "/rule add <text> [--check <spec>] [--in <where>] [--enforce] [--global]\n/rule list [--all] [--json] [--global]\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce] [--global]\n/rule forget <id> [--global]\n/rule pick [<numbers> [in <path>]] [--global]   (pick rules from a catalog; pick alone lists it)\n/rule show <number>   (what a catalog rule checks)";
     const prompts = [_][]const u8{ "/rule", "/rule adopt x", "/rule add", "/rule add \"open", "/rule add t --check", "/rule forget a b", "/rule add no networkidle" };
     for (prompts) |prompt| {
         errdefer std.debug.print("prompt: {s}\n", .{prompt});

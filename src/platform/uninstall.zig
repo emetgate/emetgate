@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const shadow = @import("shadow.zig");
 const cache_lease = @import("cache_lease.zig");
 const install_probe = @import("install_probe.zig");
+const user_rules = @import("user_rules.zig");
 const self_update = @import("../update/update.zig");
 
 const Allocator = std.mem.Allocator;
@@ -47,6 +48,12 @@ pub const Facts = struct {
     data_bytes: u64,
     others: []const Process,
     keep_cache: bool,
+    global_rules: ?GlobalRules = null,
+};
+
+pub const GlobalRules = struct {
+    path: []const u8,
+    count: ?usize,
 };
 
 pub const Plan = struct {
@@ -63,6 +70,7 @@ pub const Plan = struct {
     data_bytes: u64,
     keep_cache: bool,
     others: []const Process,
+    global_rules: ?GlobalRules = null,
 
     pub fn removesData(self: Plan) bool {
         return self.data_present and !self.keep_cache;
@@ -171,7 +179,18 @@ pub fn plan(arena: Allocator, facts: Facts, env: *const Environ.Map) !Plan {
         .data_bytes = facts.data_bytes,
         .keep_cache = facts.keep_cache,
         .others = facts.others,
+        .global_rules = if (facts.data_present) facts.global_rules else null,
     };
+}
+
+fn writeGlobalRules(out: *std.Io.Writer, rules: GlobalRules, removed: bool) std.Io.Writer.Error!void {
+    try out.print("  rules    {s} (", .{rules.path});
+    if (rules.count) |count| {
+        try out.print("your {d} global rule{s}, applied in every repository", .{ count, if (count == 1) "" else "s" });
+    } else {
+        try out.writeAll("your global rules; the file cannot be read");
+    }
+    try out.writeAll(if (removed) "; removed with the data folder, " ++ keep_cache_flag ++ " keeps them)\n" else "; kept with the data folder)\n");
 }
 
 pub fn writeSize(out: *std.Io.Writer, bytes: u64) std.Io.Writer.Error!void {
@@ -203,6 +222,7 @@ pub fn writePlan(out: *std.Io.Writer, p: Plan, confirmed: bool) std.Io.Writer.Er
             try out.print("  data     {s} (", .{p.data_dir});
             try writeSize(out, p.data_bytes);
             try out.writeAll(": caches, lockdown files, logs)\n");
+            if (p.global_rules) |rules| try writeGlobalRules(out, rules, true);
         }
     }
     const kept_data = p.data_present and p.keep_cache;
@@ -212,6 +232,7 @@ pub fn writePlan(out: *std.Io.Writer, p: Plan, confirmed: bool) std.Io.Writer.Er
             try out.print("  data     {s} (", .{p.data_dir});
             try writeSize(out, p.data_bytes);
             try out.print(", {s})\n", .{keep_cache_flag});
+            if (p.global_rules) |rules| try writeGlobalRules(out, rules, false);
         }
         for (p.program_extras) |name| try out.print("  {s}\\{s} (not an emetgate file)\n", .{ p.program_dir, name });
         if (!p.self_in_program and p.self_exe.len > 0) try out.print("  {s} (this emetgate is not in the installer's folder; delete it yourself if you want it gone)\n", .{p.self_exe});
@@ -281,6 +302,24 @@ fn listDir(arena: Allocator, io: std.Io, dir_abs: []const u8) !?[]const []const 
     return names.items;
 }
 
+fn holdsGlobalRules(arena: Allocator, data_abs: []const u8) !bool {
+    const resolved = user_rules.dir(arena) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return false;
+    };
+    return samePath(resolved, try user_rules.dirIn(arena, data_abs));
+}
+
+pub fn globalRulesIn(arena: Allocator, io: std.Io, data_abs: []const u8) !?GlobalRules {
+    const dir = try user_rules.dirIn(arena, data_abs);
+    const path = try user_rules.ledgerPath(arena, dir);
+    const count = user_rules.countIn(arena, io, dir) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return .{ .path = path, .count = null };
+    };
+    return .{ .path = path, .count = count orelse return null };
+}
+
 fn exists(io: std.Io, path: []const u8) bool {
     Dir.accessAbsolute(io, path, .{}) catch return false;
     return true;
@@ -304,6 +343,7 @@ pub fn run(arena: Allocator, io: std.Io, env: *const Environ.Map, options: Optio
         .data_bytes = if (data_present) measure(io, data) else 0,
         .others = try otherProcesses(arena),
         .keep_cache = options.keep_cache,
+        .global_rules = if (data_present and try holdsGlobalRules(arena, data)) try globalRulesIn(arena, io, data) else null,
     };
     const p = try plan(arena, facts, env);
     if (!options.yes) {

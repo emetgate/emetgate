@@ -44,6 +44,8 @@ emetgate rule add "no lint suppression" --check forbid_regex:eslint-disable --en
 
 규칙은 `.emetgate/` 아래의 장부에 있습니다. 세션이 아무리 길어져도, 압축된 뒤에도, 내일 새 세션에서도 같은 규칙이 모든 쓰기에 적용됩니다.
 
+모든 프로젝트에 적용할 규칙은 전역 장부에 둡니다. `emetgate rule add` 또는 `emetgate rule pick`에 `--global`을 붙이세요. 이 장부는 어떤 저장소에도 속하지 않는 `%LOCALAPPDATA%\emetgate\rules`에 있고, 각 저장소의 자체 규칙과 함께 적용됩니다. 저장소는 이를 바꾸거나 지울 수 없습니다.
+
 `emetgate lockdown`에서는 Claude Code 자체의 편집·쓰기 도구가 꺼집니다. 에이전트는 emetgate의 도구로 파일을 바꾸고, 모든 변경은 같은 규칙을 통과합니다. 에이전트에게는 규칙을 추가·변경·삭제할 도구가 없으며, 그렇게 하려는 명령은 먼저 사용자에게 묻습니다.
 
 오래된 저장소에 규칙을 추가해도 아무것도 깨지지 않습니다. 새로운 위반만 거부됩니다.

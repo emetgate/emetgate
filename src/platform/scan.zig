@@ -114,6 +114,31 @@ pub fn firstUnresolved(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: 
     return firstUnresolvedIn(gpa, io, runtime, root, files, list);
 }
 
+pub fn applicable(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, list: []const rules.Rule) ![]rules.Rule {
+    for (list) |rule| {
+        if (rule.origin == .global and rule.where != null) break;
+    } else return gpa.dupe(rules.Rule, list);
+    const files = try shadow.trackedFiles(gpa, io, root_abs);
+    defer gpa.free(files);
+    defer shadow.freeFileList(gpa, files);
+    var root = try std.Io.Dir.openDirAbsolute(io, root_abs, .{});
+    defer root.close(io);
+    var kept: std.ArrayList(rules.Rule) = .empty;
+    defer kept.deinit(gpa);
+    for (list) |rule| {
+        if (rule.origin == .global) {
+            if (rule.where) |text| {
+                resolveScope(gpa, io, runtime, root, files, try where_mod.parse(text)) catch |err| switch (err) {
+                    error.OutOfMemory => return err,
+                    else => continue,
+                };
+            }
+        }
+        try kept.append(gpa, rule);
+    }
+    return kept.toOwnedSlice(gpa);
+}
+
 fn firstUnresolvedIn(gpa: Allocator, io: std.Io, runtime: *Runtime, root: std.Io.Dir, files: []const []u8, list: []const rules.Rule) !?Unresolved {
     for (list) |rule| {
         const text = rule.where orelse continue;

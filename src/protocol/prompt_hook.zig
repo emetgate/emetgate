@@ -84,5 +84,5 @@ fn answer(gpa: Allocator, io: std.Io, root: anyerror![]const u8, text: []const u
         return;
     };
     const request = rule_command.parse(words) orelse return reason.writeAll(usage);
-    try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);
+    try rule_command.runAs(.spoken, gpa, io, root, request, reason, reason);
 }

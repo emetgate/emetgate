@@ -91,6 +91,12 @@ const usage =
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
+    \\rule add, supersede, forget and pick with --global write your global ledger,
+    \\%LOCALAPPDATA%\emetgate\rules\ledger.ndjson, instead of the repository's; every
+    \\repository applies its rules together with its own, with --in relative to each
+    \\repository root. A repository cannot replace, forget or loosen a global rule,
+    \\and the global cmd: and q: rules run without --allow-repo-memory. rule list
+    \\shows both, each with its origin; --global lists only the global ones.
     \\hook prompt is the UserPromptSubmit hook that lockdown gives claude: it reads
     \\the hook JSON on stdin and answers a prompt that starts with /rule itself, as
     \\emetgate rule would, so that prompt never reaches the model. A short prompt that
@@ -765,8 +771,8 @@ fn scanCmd(init: std.process.Init, runtime: *Runtime, options: scan_command.Opti
 
 fn ruleCmd(init: std.process.Init, runtime: *Runtime, request: rule_command.Request, out: *std.Io.Writer) !u8 {
     const gpa = runtime.gpa;
-    const root = try runner.repoRoot(gpa, init.io);
-    defer gpa.free(root);
+    const root = runner.repoRoot(gpa, init.io);
+    defer if (root) |path| gpa.free(path) else |_| {};
     var buffer: [4096]u8 = undefined;
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
     defer stderr_writer.interface.flush() catch {};

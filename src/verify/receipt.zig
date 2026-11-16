@@ -311,6 +311,16 @@ pub fn fromValue(arena: Allocator, value: Value) (Invalid || Allocator.Error)!Re
     };
 }
 
+pub const global_rule_prefix = "g";
+
+pub fn isGlobalRuleId(id: []const u8) bool {
+    if (id.len != global_rule_prefix.len + 16 or !std.mem.startsWith(u8, id, global_rule_prefix)) return false;
+    for (id[global_rule_prefix.len..]) |c| {
+        if (!std.ascii.isDigit(c) and !(c >= 'a' and c <= 'f')) return false;
+    }
+    return true;
+}
+
 pub fn ruleDigest(arena: Allocator, id: []const u8, text: []const u8, mode: []const u8, check: ?[]const u8, where: ?[]const u8) !Hash {
     const value = try object(arena, .{
         .id = string(id),

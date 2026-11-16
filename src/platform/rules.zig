@@ -13,6 +13,7 @@ const repo = @import("repo.zig");
 const exe_path = @import("exe_path.zig");
 const commit_message = @import("commit_message.zig");
 const gate_config = @import("gate_config.zig");
+const user_rules = @import("user_rules.zig");
 const rule_catalog = @import("../protocol/rule_catalog.zig");
 const Snapshot = @import("../engine/loader.zig").Snapshot;
 
@@ -34,12 +35,15 @@ pub const Change = struct {
     }
 };
 
+pub const Origin = enum { repo, global };
+
 pub const Rule = struct {
     id: []const u8,
     check: []const u8,
     where: ?[]const u8 = null,
     text: []const u8 = "",
     lang: rule_catalog.Lang = .universal,
+    origin: Origin = .repo,
 };
 
 pub const Enforced = struct {
@@ -48,11 +52,13 @@ pub const Enforced = struct {
     rules: []const Rule,
     outer: ?memory.Recall = null,
     outer_text: ?*std.heap.ArenaAllocator = null,
+    global: ?memory.Recall = null,
 
     pub fn deinit(self: Enforced) void {
         self.gpa.free(self.rules);
         if (self.recall) |r| r.deinit();
         if (self.outer) |r| r.deinit();
+        if (self.global) |r| r.deinit();
         if (self.outer_text) |state| {
             state.deinit();
             self.gpa.destroy(state);
@@ -88,11 +94,45 @@ pub const Report = struct {
 };
 
 pub fn load(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
-    return withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs)));
+    return withGlobal(gpa, io, try withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.recall(gpa, io, root_abs))));
 }
 
 pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Enforced {
-    return withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs)));
+    return withGlobal(gpa, io, try withOuter(gpa, io, root_abs, try enforcedFrom(gpa, try memory.peek(gpa, io, root_abs))));
+}
+
+fn withGlobal(gpa: Allocator, io: std.Io, own: Enforced) !Enforced {
+    var result = own;
+    errdefer result.deinit();
+    const recall = try user_rules.peek(gpa, io);
+    result.global = recall;
+    try refuseTakenIds(recall.decisions, result.recall);
+    try refuseTakenIds(recall.decisions, result.outer);
+    var list: std.ArrayList(Rule) = .empty;
+    defer list.deinit(gpa);
+    try list.appendSlice(gpa, own.rules);
+    for (recall.decisions) |decision| {
+        if (decision.status != .active or !decision.enforce) continue;
+        const check = decision.check orelse continue;
+        try list.append(gpa, globalRule(decision, check));
+    }
+    const merged = try list.toOwnedSlice(gpa);
+    gpa.free(result.rules);
+    result.rules = merged;
+    return result;
+}
+
+fn globalRule(decision: memory.Decision, check: []const u8) Rule {
+    return .{ .id = decision.id, .check = check, .text = decision.text, .where = decision.where, .lang = rule_catalog.langOf(decision.text, check), .origin = .global };
+}
+
+fn refuseTakenIds(global: []const memory.Decision, other: ?memory.Recall) error{GlobalRuleIdInRepo}!void {
+    const recall = other orelse return;
+    for (recall.decisions) |decision| {
+        for (global) |held| {
+            if (std.mem.eql(u8, decision.id, held.id)) return error.GlobalRuleIdInRepo;
+        }
+    }
 }
 
 fn nestedBelowOuter(root_abs: []const u8) ?[]const u8 {
@@ -181,7 +221,7 @@ pub fn judgeUnder(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []cons
 
 fn anyQueryOn(all: []const Rule, changes: []const Change) !bool {
     for (all) |rule| {
-        if (!isQuery(rule)) continue;
+        if (!isQuery(rule) or rule.origin == .global) continue;
         const scope: ?where_mod.Where = if (rule.where) |text| try where_mod.parse(text) else null;
         for (changes) |change| {
             if (change.after == null) continue;
@@ -646,25 +686,37 @@ pub const Adopted = struct {
     mode: []const u8,
     check: ?[]const u8 = null,
     where: ?[]const u8 = null,
+    origin: Origin = .repo,
 };
 
 pub const AdoptedList = struct {
     gpa: Allocator,
     recall: memory.Recall,
+    global: ?memory.Recall = null,
     items: []const Adopted,
 
     pub fn deinit(self: AdoptedList) void {
         self.gpa.free(self.items);
         self.recall.deinit();
+        if (self.global) |r| r.deinit();
     }
 };
 
 pub fn adoptedFor(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const u8) !AdoptedList {
     const recall = try memory.peek(gpa, io, root_abs);
     errdefer recall.deinit();
+    const global = try user_rules.peek(gpa, io);
+    errdefer global.deinit();
+    try refuseTakenIds(global.decisions, recall);
     var list: std.ArrayList(Adopted) = .empty;
     errdefer list.deinit(gpa);
-    for (recall.decisions) |decision| {
+    try appendAdopted(gpa, &list, recall.decisions, rel, .repo);
+    try appendAdopted(gpa, &list, global.decisions, rel, .global);
+    return .{ .gpa = gpa, .recall = recall, .global = global, .items = try list.toOwnedSlice(gpa) };
+}
+
+fn appendAdopted(gpa: Allocator, list: *std.ArrayList(Adopted), decisions: []const memory.Decision, rel: []const u8, origin: Origin) !void {
+    for (decisions) |decision| {
         if (decision.status != .active) continue;
         if (isMessageCheck(decision.check)) continue;
         if (decision.where) |text| {
@@ -677,9 +729,9 @@ pub fn adoptedFor(gpa: Allocator, io: std.Io, root_abs: []const u8, rel: []const
             .mode = if (decision.enforce) "enforce" else "advisory",
             .check = decision.check,
             .where = decision.where,
+            .origin = origin,
         });
     }
-    return .{ .gpa = gpa, .recall = recall, .items = try list.toOwnedSlice(gpa) };
 }
 
 pub const Verdict = enum { passed, violated, crashed };
@@ -807,6 +859,7 @@ const cmd_builtins = [_][]const u8{
 };
 
 const default_pathext = ".COM;.EXE;.BAT;.CMD";
+pub const outside_repo_env = [_]sandbox.EnvVar{.{ .name = "NoDefaultCurrentDirectoryInExePath", .value = "1" }};
 const head_terminators = " \t&|<>";
 
 pub fn commandHead(command: []const u8) []const u8 {
@@ -855,6 +908,14 @@ fn pathExists(io: std.Io, dir: []const u8, name: []const u8, ext: []const u8) !b
 }
 
 pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8) !bool {
+    return resolvableFrom(gpa, io, cwd, head);
+}
+
+pub fn resolvableOutsideRepo(gpa: Allocator, io: std.Io, head: []const u8) !bool {
+    return resolvableFrom(gpa, io, null, head);
+}
+
+fn resolvableFrom(gpa: Allocator, io: std.Io, cwd: ?[]const u8, head: []const u8) !bool {
     if (head.len == 0) return false;
     if (isBuiltin(head)) return true;
 
@@ -863,7 +924,11 @@ pub fn resolvable(gpa: Allocator, io: std.Io, cwd: []const u8, head: []const u8)
     const arena = arena_state.allocator();
 
     const exts = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATHEXT"))) orelse default_pathext;
-    if (try existsIn(io, cwd, head, exts)) return true;
+    if (cwd) |dir| {
+        if (try existsIn(io, dir, head, exts)) return true;
+    } else if (std.fs.path.isAbsolute(head)) {
+        return existsIn(io, "", head, exts);
+    }
     if (hasSeparator(head)) return false;
 
     const path = (try sandbox.environmentValue(arena, std.unicode.utf8ToUtf16LeStringLiteral("PATH"))) orelse return false;
@@ -893,7 +958,7 @@ fn commandRules(gpa: Allocator, io: std.Io, root_abs: []const u8, list: []const 
     var trusted = options.allow_repo_memory;
     for (list) |rule| {
         const due = try commandDue(rule, targets, options.message) orelse continue;
-        if (!trusted) {
+        if (!trusted and rule.origin != .global) {
             if (try ledgerTracked(gpa, io, root_abs)) return error.UntrustedRepoMemory;
             if (nestedBelowOuter(root_abs) != null and try ledgerTracked(gpa, io, outer_root.?)) return error.UntrustedRepoMemory;
             trusted = true;
@@ -936,7 +1001,9 @@ fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, command: []const u8, f
     checks.validateCommand(command) catch return failedGate(gpa, rule, file, "malformed", "");
 
     const head = commandHead(command);
-    if (!try resolvable(gpa, io, options.shadow_abs, head)) return failedGate(gpa, rule, file, "command_not_found", head);
+    const global = rule.origin == .global;
+    const found = if (global) try resolvableOutsideRepo(gpa, io, head) else try resolvable(gpa, io, options.shadow_abs, head);
+    if (!found) return failedGate(gpa, rule, file, "command_not_found", head);
 
     const cmd = exe_path.system(gpa, "cmd.exe") catch |err| {
         if (err == error.OutOfMemory) return error.OutOfMemory;
@@ -948,6 +1015,7 @@ fn runCommandRule(gpa: Allocator, io: std.Io, rule: Rule, command: []const u8, f
         .argv = &argv,
         .cwd = options.shadow_abs,
         .limits = options.limits,
+        .env = if (global) &outside_repo_env else &.{},
     }) catch |err| {
         if (err == error.OutOfMemory) return err;
         return failedGate(gpa, rule, file, "sandbox_unavailable", @errorName(err));

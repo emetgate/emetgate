@@ -292,6 +292,10 @@ pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, 
             try js.write(rule.check);
             try js.objectField("where");
             try js.write(rule.where);
+            if (rule.origin == .global) {
+                try js.objectField("origin");
+                try js.write("global");
+            }
             try js.endObject();
         }
         try js.endArray();
@@ -1555,6 +1559,11 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "InvalidDecision", "the rule text must be 1 byte to 16 KiB of UTF-8, and its check 1 byte to 4 KiB of UTF-8" },
     .{ "DecisionNotActive", "no active rule has this id; emetgate rule list shows the ids" },
     .{ "MemoryBusy", "another emetgate process is writing the rules file; retry" },
+    .{ "UserLedgerCorrupt", "the global rule ledger (%LOCALAPPDATA%\\emetgate\\rules\\ledger.ndjson) has a row emetgate cannot read, so every gate refuses until the user repairs it: emetgate rule list --global moves a damaged last row aside; a damaged row before it is fixed or deleted by hand" },
+    .{ "UserRulesDirIsLink", "the global rule folder %LOCALAPPDATA%\\emetgate\\rules, its parent or its ledger.ndjson is a junction or symbolic link, which emetgate never follows; the user removes the link (rmdir, not del /s) and adds the global rules again" },
+    .{ "UserRulesDirUnavailable", "emetgate could not open or create %LOCALAPPDATA%\\emetgate\\rules, the folder of the global rules; run emetgate doctor" },
+    .{ "GlobalRuleIdInRepo", "the repository ledger .emetgate/ledger.ndjson holds a rule with the id of one of the user's global rules; a repository cannot replace a global rule, so every gate refuses until that row is removed from the repository ledger (emetgate rule list shows both)" },
+    .{ "RuleIsGlobal", "this id names a global rule; repeat the command with --global to change or forget it" },
     .{ "WhereEmpty", "where is empty; give a file, a dir/ or file#symbol, or ./ for the whole repository" },
     .{ "WhereTooLong", "where is over 512 bytes; give a shorter scope" },
     .{ "WhereAbsolute", "where is relative to the repository root, with no drive and no leading slash, e.g. src/ or src/a.ts#f" },
@@ -1840,6 +1849,8 @@ pub fn exitCode(err: anyerror) u8 {
         error.InvalidDecision => 34,
         error.DecisionNotActive => 35,
         error.MemoryBusy => 36,
+        error.UserLedgerCorrupt, error.UserRulesDirIsLink, error.UserRulesDirUnavailable, error.GlobalRuleIdInRepo => 60,
+        error.RuleIsGlobal => 61,
         error.NotInRepo, error.FileOutsideRepo, error.InvalidPath => 2,
         error.WhereEmpty, error.WhereTooLong, error.WhereAbsolute, error.WhereParentSegment, error.WhereInternal, error.WhereGlob, error.WhereMalformed, error.WhereExclusionEmpty, error.WhereExclusionGlob, error.WhereExclusionAbsolute, error.WhereExclusionParentSegment, error.WhereExclusionMalformed, error.WhereTooManyExclusions => 2,
         error.NoTestCommand, error.InvalidConfig => 2,

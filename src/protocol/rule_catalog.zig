@@ -2,6 +2,7 @@ const std = @import("std");
 const rule_command = @import("rule_command.zig");
 const text_checks = @import("../engine/text_checks.zig");
 const memory = @import("../platform/memory.zig");
+const user_rules = @import("../platform/user_rules.zig");
 
 const Writer = std.Io.Writer;
 const Allocator = std.mem.Allocator;
@@ -126,10 +127,22 @@ pub const Marks = struct {
     }
 
     pub fn inRepo(gpa: Allocator, io: std.Io, root: anyerror![]const u8) Marks {
-        const root_abs = root catch return .{};
-        const recalled = memory.recall(gpa, io, root_abs) catch return .{};
+        var marks = global(gpa, io);
+        const root_abs = root catch return marks;
+        const recalled = memory.recall(gpa, io, root_abs) catch return marks;
+        defer recalled.deinit();
+        marks.add(of(recalled.decisions));
+        return marks;
+    }
+
+    fn global(gpa: Allocator, io: std.Io) Marks {
+        const recalled = user_rules.peek(gpa, io) catch return .{};
         defer recalled.deinit();
         return of(recalled.decisions);
+    }
+
+    fn add(self: *Marks, other: Marks) void {
+        for (&self.on, other.on) |*mine, theirs| mine.* = mine.* or theirs;
     }
 
     fn any(self: Marks) bool {
@@ -151,7 +164,7 @@ pub fn run(verb: Verb, gpa: Allocator, io: std.Io, root: anyerror![]const u8, ar
                 try render(out, prefix, Marks.inRepo(gpa, io, root));
                 return .done;
             }
-            try pick(gpa, io, try root, args, prefix, out, err_out);
+            try pick(gpa, io, root, args, prefix, out, err_out);
             return .done;
         },
         .show => return show(out, err_out, prefix, args, Marks.inRepo(gpa, io, root)),
@@ -373,11 +386,15 @@ fn noteSkip(out: *Writer, prefix: []const u8, token: []const u8, entry: ?Entry, 
     }
 }
 
-pub fn pick(gpa: Allocator, io: std.Io, root_abs: []const u8, args: []const [:0]const u8, prefix: []const u8, out: *Writer, err_out: *Writer) !void {
-    if (args.len == 0) return render(out, prefix, .{});
+pub fn pick(gpa: Allocator, io: std.Io, root: anyerror![]const u8, given: []const [:0]const u8, prefix: []const u8, out: *Writer, err_out: *Writer) !void {
+    if (given.len == 0) return render(out, prefix, .{});
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    const args = try withoutGlobal(arena, given);
+    const global = args.len != given.len;
+    if (args.len == 0) return render(out, prefix, Marks.inRepo(gpa, io, root));
+    if (!global) _ = try root;
     var steps: std.ArrayList(Step) = .empty;
     try plan(args, &steps, arena);
     var added: std.ArrayList(Step) = .empty;
@@ -386,12 +403,14 @@ pub fn pick(gpa: Allocator, io: std.Io, root_abs: []const u8, args: []const [:0]
     var sink_buffer: [256]u8 = undefined;
     var sink: Writer.Discarding = .init(&sink_buffer);
     for (steps.items) |step| switch (step) {
-        .note => try out.writeAll("in: no path given; applying picks to the whole repository\n"),
+        .note => try out.print("in: no path given; applying picks to {s}\n", .{if (global) "every repository" else "the whole repository"}),
         .skip => |s| try noteSkip(out, prefix, s.token, find(std.fmt.parseInt(u8, s.token, 10) catch 0), s.reason),
         .add => |a| {
             problems.clearRetainingCapacity();
-            const request: rule_command.Request = .{ .add = decidedOf(a.entry, a.path) };
-            rule_command.runAs(.terse, gpa, io, root_abs, request, &sink.writer, &problems.writer) catch |err| switch (err) {
+            var decided = decidedOf(a.entry, a.path);
+            decided.global = global;
+            const request: rule_command.Request = .{ .add = decided };
+            rule_command.runAs(.terse, gpa, io, root, request, &sink.writer, &problems.writer) catch |err| switch (err) {
                 error.OutOfMemory, error.WriteFailed => return err,
                 else => {
                     try err_out.writeAll(problems.written());
@@ -402,12 +421,21 @@ pub fn pick(gpa: Allocator, io: std.Io, root_abs: []const u8, args: []const [:0]
             try added.append(arena, step);
         },
     };
-    try writeEnforcing(out, added.items);
+    try writeEnforcing(out, added.items, global);
 }
 
-fn writeEnforcing(out: *Writer, added: []const Step) !void {
+fn withoutGlobal(arena: Allocator, args: []const [:0]const u8) ![]const [:0]const u8 {
+    var kept: std.ArrayList([:0]const u8) = .empty;
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, rule_command.global_flag)) continue;
+        try kept.append(arena, arg);
+    }
+    return kept.items;
+}
+
+fn writeEnforcing(out: *Writer, added: []const Step, global: bool) !void {
     if (added.len == 0) return;
-    try out.print("enforcing {d} rule{s}: ", .{ added.len, if (added.len == 1) "" else "s" });
+    try out.print("enforcing {d} {s}rule{s}: ", .{ added.len, if (global) "global " else "", if (added.len == 1) "" else "s" });
     for (added, 0..) |step, i| {
         if (i > 0) try out.writeAll(", ");
         try out.print("{d} {s}", .{ step.add.entry.num, step.add.entry.label });
@@ -599,15 +627,15 @@ test "a pick answers one short line naming the rules it now enforces" {
         .{ .add = .{ .entry = find(19).?, .path = null } },
         .{ .add = .{ .entry = find(26).?, .path = null } },
     };
-    try writeEnforcing(&out.writer, &steps);
+    try writeEnforcing(&out.writer, &steps, false);
     try testing.expectEqualStrings("enforcing 3 rules: 1 no console.log, 19 no new comments, 26 no Co-authored-by\n", out.written());
 
     out.clearRetainingCapacity();
-    try writeEnforcing(&out.writer, &.{.{ .add = .{ .entry = find(30).?, .path = "src/core" } }});
+    try writeEnforcing(&out.writer, &.{.{ .add = .{ .entry = find(30).?, .path = "src/core" } }}, false);
     try testing.expectEqualStrings("enforcing 1 rule: 30 freeze a path in src/core\n", out.written());
 
     out.clearRetainingCapacity();
-    try writeEnforcing(&out.writer, &.{});
+    try writeEnforcing(&out.writer, &.{}, false);
     try testing.expectEqualStrings("", out.written());
 }
 

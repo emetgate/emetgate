@@ -155,6 +155,7 @@ pub const lockdown_slash = src.lockdown_slash;
 pub const doctor = src.doctor;
 pub const test_command = src.test_command;
 pub const memory = src.memory;
+pub const user_rules = src.user_rules;
 pub const journal = src.journal;
 pub const where = src.where;
 pub const wire = src.wire;
@@ -341,6 +342,7 @@ test {
     _ = @import("tests/verify_n_version.zig");
     _ = @import("tests/query.zig");
     _ = @import("tests/rule.zig");
+    _ = @import("tests/user_rules.zig");
     _ = @import("tests/observability.zig");
     _ = @import("tests/recovery_hints.zig");
     _ = @import("tests/readtools.zig");

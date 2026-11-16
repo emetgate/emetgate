@@ -8,6 +8,7 @@ const lockdown_slash = @import("lockdown_slash.zig");
 const test_command = @import("test_command.zig");
 const runner = @import("runner.zig");
 const appcontainer = @import("appcontainer.zig");
+const user_rules = @import("user_rules.zig");
 pub const install_probe = @import("install_probe.zig");
 
 const Allocator = std.mem.Allocator;
@@ -179,6 +180,11 @@ pub fn hint(err: anyerror) ?[]const u8 {
         error.LabelDenied => "a sandbox folder is owned by another account (e.g. Administrators after an elevated run) and this account may not relabel it; delete it from the account that created it, or pass --shadow-root <a folder you own>",
         error.AccessDenied, error.PermissionDenied => "access denied; run from a folder you own (not Program Files or a protected folder), then: emetgate doctor",
         error.FileOutsideRepo => "the path is outside the git repository; cd into the repository first",
+        error.UserLedgerCorrupt => "your global rule ledger, %LOCALAPPDATA%\\emetgate\\rules\\ledger.ndjson, has a row emetgate cannot read; every gate refuses until it is repaired: run emetgate rule list --global, which moves a damaged last row aside, and fix or delete any damaged row before it by hand",
+        error.UserRulesDirIsLink => "%LOCALAPPDATA%\\emetgate\\rules, its parent or its ledger.ndjson is a junction or symbolic link, which emetgate never follows; remove the link (rmdir) and add your global rules again",
+        error.UserRulesDirUnavailable => "emetgate could not open or create %LOCALAPPDATA%\\emetgate\\rules, the folder of your global rules; run: emetgate doctor",
+        error.GlobalRuleIdInRepo => "the repository's .emetgate\\ledger.ndjson holds a rule with the id of one of your global rules; a repository cannot replace a global rule, so remove that row from the repository ledger",
+        error.RuleIsGlobal => "this id names one of your global rules; repeat the command with --global",
         else => null,
     };
 }
@@ -210,6 +216,7 @@ pub fn run(gpa: Allocator, io: std.Io, probe: Probe, out: *std.Io.Writer) !u8 {
     try checks.append(arena, writeCheck(arena, io, "write", root orelse probe.cwd));
     try checks.append(arena, stateCheck(arena, io, probe));
     if (probe.local_app_data) |local| try checks.append(arena, try dataCheck(arena, io, local));
+    try checks.append(arena, try rulesCheck(arena, io));
     try checks.append(arena, sandboxCheck(arena, io, root orelse probe.cwd));
     try checks.append(arena, appContainerCheck());
     try checks.append(arena, codePageCheck(probe.code_page));
@@ -469,6 +476,25 @@ pub fn dataCheck(arena: Allocator, io: std.Io, local_app_data: []const u8) !Chec
     try install_probe.writeBytes(&text.writer, size.bytes);
     try text.writer.print(" in {d} files", .{size.files});
     return .{ .name = "data", .status = .ok, .detail = text.written() };
+}
+
+pub fn rulesCheck(arena: Allocator, io: std.Io) !Check {
+    const dir = user_rules.dir(arena) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return .{ .name = "rules", .status = .fail, .detail = try std.fmt.allocPrint(arena, "the global rules folder could not be found in your user profile ({t}), so every gate refuses", .{err}), .fix = "check that your Windows profile has a Local AppData folder, then run emetgate doctor again" };
+    };
+    const path = try user_rules.ledgerPath(arena, dir);
+    const recalled = user_rules.peekIn(arena, io, dir) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        return .{ .name = "rules", .status = .fail, .detail = try std.fmt.allocPrint(arena, "global rules in {s} cannot be read ({t}), so every gate refuses", .{ path, err }), .fix = hint(err) orelse "repair or delete the file, then: emetgate rule list --global" };
+    };
+    defer recalled.deinit();
+    var enforced: usize = 0;
+    for (recalled.decisions) |decision| {
+        if (decision.enforce) enforced += 1;
+    }
+    const count = recalled.decisions.len;
+    return .{ .name = "rules", .status = .ok, .detail = try std.fmt.allocPrint(arena, "{d} global rule{s} ({d} enforced) in {s}, applied in every repository", .{ count, if (count == 1) "" else "s", enforced, path }) };
 }
 
 fn appendClaude(arena: Allocator, io: std.Io, probe: Probe, checks: *std.ArrayList(Check)) !void {

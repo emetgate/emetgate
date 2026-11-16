@@ -44,6 +44,8 @@ Or pick from the ready catalog, where the common ones live: no `console.log`, no
 
 The rule lives in a ledger under `.emetgate/`. However long the session runs, after compaction, in tomorrow's new session, the same rule applies to every write.
 
+A rule you want in every project goes in your global ledger: add `--global` to `emetgate rule add` or `emetgate rule pick`. It lives in `%LOCALAPPDATA%\emetgate\rules`, outside every repository, and applies together with each repository's own rules; a repository cannot change or remove it.
+
 Under `emetgate lockdown`, Claude Code's own edit and write tools are off; the agent changes files through emetgate's tools, and every change passes the same rules. The agent has no tool to add, change or remove a rule; a command that tries to is asked about first.
 
 Adding a rule to an old repository breaks nothing: only new violations are refused.

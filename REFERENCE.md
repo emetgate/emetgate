@@ -551,12 +551,13 @@ A message command runs after the text rules and the repository checks, in the ga
 `emetgate_skeleton` returns, beside the outline, every adopted rule that covers that file:
 its id, its text, whether it is `enforce` or `advisory`, its predicate and its scope. The
 model reads the rules before it writes a body, so it can obey them instead of proposing a
-violation, getting rejected and trying again.
+violation, getting rejected and trying again. A global rule (see "Global rules" below)
+also carries `"origin":"global"`.
 
 Rule management is available only to the user: from the command line, and as `/rule` typed
 in a session started by `emetgate lockdown` (see "Rules from the prompt" under Lockdown). The
 model-facing tools cannot adopt, change or remove a rule, or change an `enforce` rule to
-`advisory`; under lockdown a command run through `emetgate_run` could, and the `PreToolUse` hook asks the user before an `emetgate rule add`, `supersede` or `forget`. A test (`red line: the served tool surface is exactly this list`) pins the served
+`advisory`; under lockdown a command run through `emetgate_run` could, and the `PreToolUse` hook asks the user before an `emetgate rule add`, `supersede`, `forget` or `pick`. A test (`red line: the served tool surface is exactly this list`) pins the served
 tool names and fails if another tool is added. A second test verifies that the dispatcher
 rejects rule-writing tool names. In `tools/list` the tools that never change the working tree, the git repository or the rule ledger (`emetgate_explore`, `emetgate_evidence`, `emetgate_symbols`, `emetgate_skeleton`, `emetgate_read_symbol`, `emetgate_mutate`, `emetgate_read_file`, `emetgate_list`, `emetgate_search`, `emetgate_find`, `emetgate_scan`, `emetgate_git` and `emetgate_expand`) carry `"annotations":{"readOnlyHint":true}`, so a client may run them in parallel; a third test pins that list.
 
@@ -603,6 +604,96 @@ change the exit code. A query the operator passes with `--check` runs without th
 grant it: a tool call that carries `allow_repo_memory` is refused with `ModelSuppliedTestPolicy`
 and runs nothing, and `tools/list` does not offer the argument. Review a shared ledger with
 `emetgate rule list` before passing the flag.
+
+### Global rules
+
+A rule you want in every repository goes in your global ledger instead of one repository's:
+
+```
+emetgate rule add "no eval" --check forbid:eval --enforce --global
+emetgate rule pick 2 26 --global
+emetgate rule list
+emetgate rule list --global --json
+emetgate rule supersede <id> "no eval or new Function" --check forbid:eval --enforce --global
+emetgate rule forget <id> --global
+```
+
+The global ledger is `%LOCALAPPDATA%\emetgate\rules\ledger.ndjson`, in emetgate's data folder
+and never inside a repository. Its folder is not read from the process environment: emetgate
+asks Windows for the Local AppData folder of the user profile
+(`SHGetKnownFolderPath(FOLDERID_LocalAppData)`), so `LOCALAPPDATA`, `USERPROFILE` or any
+other variable set for the server, for example in the `env` of a repository's `.mcp.json`,
+cannot point it at another, emptier ledger. The caches and the other files in the data
+folder still follow `LOCALAPPDATA`. It has the same row format, the same append-only
+supersede and forget rows, and the same lock as `.emetgate/ledger.ndjson`; its ids start
+with `g` where a repository's start with `m`. `--global` works outside a repository, and
+`/rule ... --global` typed in a lockdown session does the same. Every `emetgate mcp`,
+`try`, `scan`, commit hook and lockdown session applies the global rules together with
+the repository's own: at the edit gate, for commit messages, frozen paths and `cmd:`
+rules, in `emetgate_skeleton` (a global rule carries `"origin":"global"`), and in the
+receipts. `--in` in a global rule is relative to the root of each repository it is
+applied in; a repository that has no such path is not refused by `emetgate scan` with
+`ScopeUnresolved`, the rule just covers nothing there. In a nested repository the global
+rules apply once, relative to the nested repository's root, beside the outer
+repository's re-rooted rules.
+
+`emetgate rule list` shows the repository's rules and then the global ones, each with
+its origin: the text form has an `origin` column after `state` (`repo` or `global`), the
+table `/rule list` prints has one too, and `--json` adds `"origin"` to every row.
+`--global` lists only the global rules. The interactive `emetgate rules` checklist edits
+the repository ledger only.
+
+A repository cannot loosen a global rule:
+
+| What a repository does | Result |
+|---|---|
+| `emetgate rule forget <global id>` or `supersede` without `--global` | refused with `RuleIsGlobal` (exit code 61); nothing is written |
+| its ledger holds a row with a global rule's id | every gate refuses with `GlobalRuleIdInRepo` (exit code 60) |
+| its ledger retires or supersedes a global rule's id | its ledger is corrupt (`LedgerCorrupt`): a repository ledger can only retire its own ids |
+| its ledger holds a rule with the same check | both apply; the repository rule never replaces the global one, and a committed copy that waits for `--allow-repo-memory` does not hold the global one back |
+
+The global ledger is yours, not the repository author's, so its `cmd:` and `q:` rules run
+without `--allow-repo-memory`, also beside a committed repository ledger. A global `cmd:`
+rule runs like any command rule, in the same low-integrity sandbox, in the shadow copy of
+the repository, so the command sees the repository's files. Its program is never taken
+from the repository: the program has to be a `cmd` builtin, an absolute path or a program
+on `PATH`; a bare name that only a file in the repository answers to fails with
+`command_not_found`, and `cmd` runs with `NoDefaultCurrentDirectoryInExePath=1`, so it does
+not look in the repository first. A command like `npm run lint` still runs the scripts
+the repository defines.
+
+The global ledger is read without following links: the data folder, the `rules` folder
+and `ledger.ndjson` itself are refused with `UserRulesDirIsLink` (exit code 60) when one
+is a junction or a symbolic link, and the two folders are held open while the ledger is
+read or written, so they cannot be swapped meanwhile. The gates read it without the lock,
+so many sessions in many repositories can read it at once; a last row without its line
+end is a row still being written and is left out. Any other row emetgate cannot read
+makes every gate refuse with `UserLedgerCorrupt` (exit code 60), whose message names the
+global ledger. `emetgate rule list --global` takes the lock and moves a damaged last row
+aside to `ledger.ndjson.torn-<time>`, as it does for a repository ledger; a damaged row
+before it is fixed or deleted by hand. When it cannot take the lock, because another
+writer holds it or the process may only read the folder (a low-integrity command), it
+lists the rows without the lock instead. Two writers take turns on the lock; the second
+one gets `MemoryBusy` and the ledger stays as the first one left it.
+
+The model has no tool that writes either ledger. A command run through `emetgate_run` at
+low integrity cannot write `%LOCALAPPDATA%\emetgate\rules`; an `as_user` call you approve
+and a toolchain command run with your rights, as they do for every other file you own,
+and the `PreToolUse` hook asks you before an `emetgate rule add`, `supersede`, `forget` or `pick`.
+
+A receipt names every rule that covered the change, global ones included, by id and
+digest. `emetgate verify` on the machine that holds the global rule checks the digest as
+for any rule. On a machine without it, the receipt is `unverified` with the reason "a
+global rule the receipt names is not in this machine's global rules, so it was not
+checked": not verified, since the rule was not checked, and not a mismatch, since nothing
+contradicts the receipt.
+
+`emetgate doctor` has a `rules` line with the global ledger's path, as resolved from the
+user profile, and how many rules it holds; it is a `FAIL` when the ledger or the profile
+folder cannot be read. `emetgate cache prune`, `--all`
+included, never touches the `rules` folder. `emetgate uninstall --yes` removes the whole
+data folder, global rules included, and its dry run lists them on their own `rules` line;
+`--keep-cache` keeps the data folder and the global rules with it.
 
 ## Architecture
 
@@ -842,9 +933,10 @@ In a session started by `emetgate lockdown`, the user manages rules by typing `/
 /rule forget <id>
 /rule pick 1 19 26 in src/
 /rule show 19
+/rule pick 26 --global
 ```
 
-The text after `/rule` is the argument list of `emetgate rule`: it is split into words and handed to the same code, so both forms accept and refuse the same things and write the same ledger. Words are separated by spaces, tabs and line breaks. Single quotes keep everything between them as typed. Double quotes do the same, except that `\"` is one double quote; a backslash anywhere else is an ordinary character, so `"cmd:scripts\lint.cmd"` needs no doubling. A quote that never closes is answered with the usage.
+The text after `/rule` is the argument list of `emetgate rule`: it is split into words and handed to the same code, so both forms accept and refuse the same things and write the same ledger: the repository's, or with `--global` the global one. Words are separated by spaces, tabs and line breaks. Single quotes keep everything between them as typed. Double quotes do the same, except that `\"` is one double quote; a backslash anywhere else is an ordinary character, so `"cmd:scripts\lint.cmd"` needs no doubling. A quote that never closes is answered with the usage.
 
 The prompt does not reach the model. Lockdown gives Claude Code a `UserPromptSubmit` hook, `emetgate hook prompt`, which Claude Code runs on every prompt before any request is sent. The hook reads the hook JSON from stdin and looks at its `prompt` field:
 
@@ -862,7 +954,7 @@ The answer is written for a person, while `emetgate rule` on the command line ke
 
 `/rule pick` alone lists the rule catalog: numbered rules under the headings Code style, Security, Git hygiene and Architecture, one line per rule and two columns where they fit, every line at most 80 columns and plain ASCII, with the usage line `/rule pick <numbers> [in <path>]` and an example on top. A catalog rule made for one language judges only files of that language, at the gate and in a scan of the ledger: rules 1 to 10 JavaScript and TypeScript, 11 to 15 Python, 16 to 18 C#. A rule is recognised by its catalog title and check together; a rule with its own title runs on every language. A rule this repository already enforces (an active `enforce` rule in the ledger with the same check) is marked `*`; with no ledger, or outside a repository, nothing is marked and nothing fails. `/rule pick 1 19 26` enforces those rules on the whole repository; a trailing `in <path>` scopes the code rules to that path and leaves the commit message rules unscoped; rule 30, freeze a path, takes its own path right after its number (`/rule pick 30 src/core`) and is skipped without one. The answer is one line, such as `enforcing 3 rules: 1 no console.log, 19 no new comments, 26 no Co-authored-by`, after a `skip` line for each number that is not in the catalog, was picked twice or lacks its path. The list shows no check specs; `/rule show N` prints rule N's title, what it applies to and its check spec in full, and a number outside the catalog answers one line, `show 31: no such rule; give a number from 1 to 30`. `emetgate rule pick` and `emetgate rule show` do the same from the command line, where a refused `show` exits 1.
 
-The hook is of type `command` in exec form (`"command": "<absolute emetgate.exe>", "args": ["hook", "prompt"]`), so no shell reads the path. It is not an `mcp_tool` hook: that would need a rule-writing tool on the MCP surface, where the model could call it. The served tool list is unchanged. The model can type `emetgate rule add`, `supersede` or `forget` into `emetgate_run`; the `PreToolUse` hook asks the user before such a command runs.
+The hook is of type `command` in exec form (`"command": "<absolute emetgate.exe>", "args": ["hook", "prompt"]`), so no shell reads the path. It is not an `mcp_tool` hook: that would need a rule-writing tool on the MCP surface, where the model could call it. The served tool list is unchanged. The model can type `emetgate rule add`, `supersede`, `forget` or `pick` into `emetgate_run`; the `PreToolUse` hook asks the user before such a command runs.
 
 Lockdown writes two files, both under its own directory `%LOCALAPPDATA%\emetgate\lockdown\<key of the emetgate.exe path>\`, and nothing into the project or into `~/.claude`:
 
@@ -1216,7 +1308,7 @@ Each file and receipt is reported as `verified`, `unverified` or `mismatch`; the
 
 The text output is one header line (`branch <verdict>: N commit(s)`), then one line per commit with its verdict and certificate; `--json` prints the verdict, the count, the tip and every link. Receipts are not signed and the tip is not kept, so the chain shows tampering only when a receipt is edited inconsistently with its commit; a history rewritten together with freshly made, consistent receipts verifies as well as the original did.
 
-**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->7,068 non-blank lines of Zig in 39 files, 817 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->479 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, `merged` and the merge rules included, plus one more verdict, `consistent` (exit code 55). For a merge it keeps git's merged tree in a temporary directory of the system, not in the repository. It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
+**The checker's size.** The decision logic is `src/verify/` (canonical JSON, the receipt format and the checker). It parses with tree-sitter and hashes, and imports no code that writes, no journal, no sandbox and no protocol code; a test (`verify tcb`) fails the build if it ever does. Git access and the test rerun live in `src/platform/verify_run.zig`, outside the checker. What the checker trusts: <!-- generated:verifier-tcb -->7,077 non-blank lines of Zig in 39 files, 826 of them in the 3 files of `src/verify/`<!-- /generated -->, plus the tree-sitter C runtime and grammars and the Zig standard library. A second checker, written in Python from the format above and not from the Zig code, lives in `tools/verify_py/` (<!-- generated:python-checker-size -->479 non-blank lines of Python, plus 298 in the vendored BLAKE3<!-- /generated -->): `python tools/verify_py/emetgate_verify.py <commit> [--repo <dir>] [--json]`, with the same verdicts, exit codes and JSON shape, `merged` and the merge rules included, plus one more verdict, `consistent` (exit code 55). For a merge it keeps git's merged tree in a temporary directory of the system, not in the repository. It uses only the standard library, `git`, and the pure Python BLAKE3 by one of BLAKE3's authors (`vendor/pure_python_blake3`, CC0), which a test checks against BLAKE3's official test vectors; its RFC 8785 canonicalizer is its own. It checks the note's canonical form, the receipt format, the subject digests (`blake3-128` and `sha256`) against the commit's blobs, the `before`/`after` chain, the last `after` against the commit, the command digests and exit codes, and the changes no receipt covers. Symbol hashes, alpha hashes, the test rerun and rule digests need tree-sitter, a sandbox or the ledger format, so it lists them as `not_checked` and never counts them as verified. The Python checker is independent but partial: `consistent` means that everything it checks holds and that the fields in `not_checked` were not checked; it does not mean verified, and it reports `verified` only when `not_checked` is empty. Every scenario in `tests/verify_receipts.zig` runs both checkers and fails when they disagree on anything the Python checker checks (N-version), so it runs in `zig build test`, in `tools/accept.ps1` and in CI. Limits: a file touched by two receipts in one commit has an intermediate state that the commit does not contain, so the checks that need it report `unverified`; receipts are written for the MCP tools, not for the `emetgate try` CLI; receipts are not signed.
 
 ### Search
 
@@ -1659,7 +1751,8 @@ only by `--all`, and only when no other `emetgate.exe`, `emetgate.old.exe` or
 named. Nothing is killed. They are removed without following junctions or symlinks.
 A plain `prune` prints their size and leaves them alone. `--dry-run` reports what would
 be removed and freed and deletes nothing. The exit code is 1 when an entry could not
-be removed or the running processes could not be listed.
+be removed or the running processes could not be listed. No form of `prune` touches the
+`rules` folder, which holds the global rules (see "Global rules").
 
 ### Fact store
 
