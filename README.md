@@ -76,6 +76,14 @@ You can build part of this yourself with Claude Code hooks and ESLint. The diffe
 
 <img src="assets/readme/term-verify-en.svg" alt="emetgate verify output" width="100%">
 
+Check a commit with the test command you trust; the command a receipt records is never rerun, so without `--test` the commit stays `unverified`:
+
+```
+emetgate verify HEAD --test "npm test"
+```
+
+**See what a session cost.** `emetgate report` sums up the latest session in the project that called emetgate's tools: duration, model turns, input, output and cache tokens, an estimated cost in USD, tool calls by name, and what the gate did (writes applied and rejected, rule violations, test runs, receipts, commits). `--session <id>` picks one session, `--all` lists every session in a table, `--json` prints the same numbers as JSON. Tokens come from Claude Code's own transcript (`projects/` under `CLAUDE_CONFIG_DIR`, or `~/.claude`); the cost uses built-in list prices per model, so it is an estimate, not your bill.
+
 ## Start in 2 minutes
 
 In PowerShell, then open a new terminal:
@@ -92,7 +100,31 @@ emetgate rule pick 1 19 26
 emetgate lockdown
 ```
 
-`emetgate lockdown` starts Claude Code with only emetgate's tools. Step by step: [docs/QUICKSTART.md](docs/QUICKSTART.md).
+`emetgate doctor` is a one-screen install check, one `ok`, `warn` or `FAIL` line each with its fix: which emetgate PATH runs and any shadowed copies, whether a newer release is out, claude and the config folder it reads (`CLAUDE_CONFIG_DIR` or `~/.claude`), where emetgate is registered as an MCP server, other running emetgate processes, the data folder's size, and whether this folder is a git repository. `--json` prints the same as JSON.
+
+`emetgate lockdown` starts Claude Code with only emetgate's tools. Run it inside your project folder (a git repo), not from your home folder or a drive root. Step by step: [docs/QUICKSTART.md](docs/QUICKSTART.md).
+
+## Uninstall
+
+```
+emetgate uninstall
+emetgate uninstall --yes
+```
+
+The first command removes nothing: it lists the program folder (`%LOCALAPPDATA%\Programs\emetgate`), its entry in your user PATH and the data folder (`%LOCALAPPDATA%\emetgate`, caches that can reach a few GB) with its size. `--yes` removes them; add `--keep-cache` to keep the data folder. The program folder goes a few seconds after the command exits, since a running emetgate.exe cannot delete itself. If other emetgate processes are running, it lists their PIDs and removes nothing until you close them. The `.emetgate` folder and `.mcp.json` entry in each project stay; delete them by hand.
+
+### Disk use
+
+emetgate keeps per-project caches (search index, facts, the copy the tests run on) under `%LOCALAPPDATA%\emetgate`. The server removes caches unused for 30 days once a day. To see and trim them yourself:
+
+```
+emetgate cache size                  # total, per folder and per project (--json for scripts)
+emetgate cache prune --dry-run       # what would go, nothing deleted
+emetgate cache prune                 # remove caches unused for 14 days (--older-than <days>)
+emetgate cache prune --all           # remove every cache no running emetgate is using
+```
+
+A cache that a running emetgate holds a lease on is never removed. The shared `cache` and `run-tmp` folders (package caches and TEMP of sandboxed commands) are cleared only by `--all`, and only while no other emetgate process runs.
 
 ## Limits
 
@@ -123,7 +155,7 @@ Rule checks are syntax-tree queries (`no_comment`, `require_comment`, `max_funct
 <details>
 <summary>Search and verification: the techniques</summary>
 
-Search uses a suffix-array index and trigram lists; it shows whether an answer is complete or partial with an RFC 9162 Merkle root over the SHA-256 of every file read, and is compared line for line with ripgrep. Commit records are in-toto statements, and `emetgate verify --branch main..HEAD` checks a whole range; a commit without a receipt counts as `partial`. Details: [REFERENCE.md](REFERENCE.md), [VERIFICATION.md](VERIFICATION.md).
+Search uses a suffix-array index and trigram lists; it shows whether an answer is complete or partial with an RFC 9162 Merkle root over the SHA-256 of every file read, and is compared line for line with ripgrep. Commit records are in-toto statements, and `emetgate verify --branch main..HEAD --test "<cmd>"` checks a whole range; a commit without a receipt counts as `partial`. Details: [REFERENCE.md](REFERENCE.md), [VERIFICATION.md](VERIFICATION.md).
 
 </details>
 

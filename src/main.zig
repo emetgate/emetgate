@@ -29,7 +29,10 @@ const receipts = emetgate.receipts;
 const facts_command = emetgate.facts_command;
 const map_command = emetgate.map_command;
 const find_command = emetgate.find_command;
+const cache_command = emetgate.cache_command;
+const report_command = emetgate.report_command;
 const self_update = emetgate.self_update;
+const uninstall = emetgate.uninstall;
 const verify_run = emetgate.verify_run;
 const verify_branch = emetgate.verify_branch;
 const commit_group = emetgate.commit_group;
@@ -57,8 +60,9 @@ const usage =
     \\       emetgate receipts attach [<commit>]
     \\       emetgate commit -m <message> [--shadow-root <dir>]
     \\       emetgate lockdown [--test <command>] [--no-marks] [<claude args>...]
-    \\       emetgate doctor   (first run: checks claude, git, the test command and the sandbox; exit 1 if lockdown would not work)
+    \\       emetgate doctor [--json]   (install and health check: which emetgate PATH runs, the latest release, claude and its config folder, MCP registrations, other running emetgate processes, the data folder, git, the tests and the sandbox; exit 1 if lockdown would not work)
     \\       emetgate update   (install the latest signed release now; doctor and lockdown check once a day, off with EMETGATE_NO_UPDATE=1 or CI set)
+    \\       emetgate uninstall [--yes] [--keep-cache]   (dry run: lists the program folder, PATH entry and data folder it would remove; --yes removes them)
     \\       emetgate --version | help
     \\       emetgate facts build [--threads <n>] [--no-store] [--json]
     \\       emetgate facts (callers | callees | refs) <symbol> [--file <path>] [--depth <n>] [--budget <chars>] [--json]
@@ -75,7 +79,15 @@ const usage =
     \\       emetgate map explore <r1,r2,r3> --question <text> [--k <n>] [--list <n>] [--explore-budget <chars>] [--no-store]
     \\       emetgate map eval --set <file.json> [--limit <n>] [--k <n>] [--list <n>] [--explore-budget <chars>] [--with-text] [--no-store]
     \\
-++ find_command.usage ++
+++ find_command.usage ++ cache_command.usage ++ report_command.usage ++
+    \\
+    \\cache size prints how much disk %LOCALAPPDATA%\emetgate takes, per folder and per
+    \\project cache (--json for a script). cache prune removes the project caches not
+    \\used for 14 days (--older-than <days>) or whose repository is gone, and the oldest
+    \\ones past --max-mb <n>; --all removes every one that no running emetgate holds a
+    \\lease on, and clears the shared cache and run-tmp folders when no other emetgate
+    \\process runs. --dry-run only says what it would remove. It runs the same sweep the
+    \\server starts once a day.
     \\
     \\rule writes to the ledger and is deliberately CLI-only: an audited model
     \\has no mcp tool for adopting, superseding or forgetting a rule.
@@ -231,6 +243,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return recoverCmd(init, runtime, options);
     }
     if (std.mem.eql(u8, command, "verify")) {
+        if (args.len == 2) {
+            std.debug.print("{s}", .{verify_run.usage});
+            std.process.exit(2);
+        }
         if (parseVerifyBranch(args[2..])) |branch| return verifyBranchCmd(init, runtime, branch.options, branch.json, out);
         const options = parseVerify(args[2..]) orelse exitWithBadArgs(command, args[2..], parseVerify);
         return verifyCmd(init, runtime, options.options, options.json, out);
@@ -254,6 +270,14 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         const options = find_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], find_command.parse);
         return find_command.run(runtime.gpa, init.io, options, out);
     }
+    if (std.mem.eql(u8, command, "cache")) {
+        const options = cache_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], cache_command.parse);
+        return cache_command.run(runtime.gpa, init.io, options, out);
+    }
+    if (std.mem.eql(u8, command, "report")) {
+        const options = report_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], report_command.parse);
+        return report_command.run(runtime.gpa, init.io, init.environ_map, options, out);
+    }
     if (std.mem.eql(u8, command, "--version") or std.mem.eql(u8, command, "version")) {
         try out.print("emetgate {s}\n", .{server.server_version});
         return 0;
@@ -263,15 +287,22 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         return 0;
     }
     if (std.mem.eql(u8, command, "update") and args.len == 2) return updateCmd(init, runtime, out);
-    if (std.mem.eql(u8, command, "doctor") and args.len == 2) {
-        autoUpdate(init, runtime);
-        return doctorCmd(init, runtime, out);
+    if (std.mem.eql(u8, command, "uninstall")) {
+        const options = uninstall.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], uninstall.parse);
+        return uninstall.run(init.arena.allocator(), init.io, init.environ_map, options, out);
+    }
+    if (std.mem.eql(u8, command, "doctor") and (args.len == 2 or (args.len == 3 and std.mem.eql(u8, args[2], "--json")))) {
+        const fresh = autoUpdateOutcome(init, runtime);
+        return doctorCmd(init, runtime, fresh, args.len == 3, out);
     }
     if (std.mem.eql(u8, command, "lockdown")) {
         autoUpdate(init, runtime);
         const passthrough = try init.arena.allocator().alloc([]const u8, args.len - 2);
         for (args[2..], 0..) |arg, i| passthrough[i] = arg;
-        return lockdown.launch(runtime.gpa, init.io, init.environ_map, passthrough);
+        return lockdown.launch(runtime.gpa, init.io, init.environ_map, passthrough) catch |err| {
+            if (lockdown.isOutsideProject(err)) return exitCodeFor(err);
+            return err;
+        };
     }
     std.debug.print("emetgate: \"{s}\" is not a command, or it does not take these arguments\n\n", .{command});
     exitWithUsage();
@@ -308,7 +339,7 @@ fn extractFlags(init: std.process.Init, args: []const [:0]const u8) Extracted {
     return .{ .json = json, .allow_repo_config = allow_repo_config, .allow_repo_memory = allow_repo_memory, .rest = rest };
 }
 
-fn doctorCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
+fn doctorCmd(init: std.process.Init, runtime: *Runtime, fresh: ?self_update.Outcome, json: bool, out: *std.Io.Writer) !u8 {
     const arena = init.arena.allocator();
     const cwd = try std.Io.Dir.cwd().realPathFileAlloc(init.io, ".", arena);
     const self_exe = try std.process.executablePathAlloc(init.io, arena);
@@ -318,7 +349,34 @@ fn doctorCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8
         .local_app_data = init.environ_map.get(lockdown_slash.local_app_data_variable),
         .version = server.server_version,
         .code_page = doctor.consoleCodePage(),
+        .env = init.environ_map,
+        .release = doctorRelease(init, fresh),
+        .scan_processes = true,
+        .json = json,
     }, out);
+}
+
+fn doctorRelease(init: std.process.Init, fresh: ?self_update.Outcome) doctor.Release {
+    const arena = init.arena.allocator();
+    var release: doctor.Release = .{ .disabled = self_update.autoDisabled(init.environ_map, self_update.auto_in_build) };
+    const current = self_update.Version.parse(server.server_version) orelse {
+        release.release_build = false;
+        return release;
+    };
+    if (fresh) |outcome| switch (outcome) {
+        .updated => |next| release.updated_to = std.fmt.allocPrint(arena, "{f}", .{next}) catch null,
+        .offline => |err| release.offline = err,
+        else => {},
+    };
+    const data_dir = emetgate.cache_lease.defaultDataDir(arena) catch return release;
+    var files: self_update.Disk = .{ .io = init.io };
+    const seen = self_update.known(arena, files.system(), data_dir);
+    if (seen.latest) |latest| {
+        release.latest = std.fmt.allocPrint(arena, "{f}", .{latest}) catch null;
+        release.newer = latest.order(current) == .gt;
+    }
+    if (seen.checked_at) |at| release.checked_ago_s = std.Io.Timestamp.now(init.io, .real).toSeconds() - at;
+    return release;
 }
 
 fn updaterFor(runtime: *Runtime, files: *self_update.Disk, exe_path: []const u8) self_update.Updater {
@@ -341,16 +399,21 @@ fn announceDownload(latest: self_update.Version) void {
 }
 
 fn autoUpdate(init: std.process.Init, runtime: *Runtime) void {
-    if (self_update.autoDisabled(init.environ_map, self_update.auto_in_build)) return;
+    _ = autoUpdateOutcome(init, runtime);
+}
+
+fn autoUpdateOutcome(init: std.process.Init, runtime: *Runtime) ?self_update.Outcome {
+    if (self_update.autoDisabled(init.environ_map, self_update.auto_in_build)) return null;
     const gpa = runtime.gpa;
-    const exe_path = std.process.executablePathAlloc(init.io, gpa) catch return;
+    const exe_path = std.process.executablePathAlloc(init.io, gpa) catch return null;
     defer gpa.free(exe_path);
-    const data_dir = emetgate.cache_lease.defaultDataDir(gpa) catch return;
+    const data_dir = emetgate.cache_lease.defaultDataDir(gpa) catch return null;
     defer gpa.free(data_dir);
     var files: self_update.Disk = .{ .io = init.io };
     const now = std.Io.Timestamp.now(init.io, .real).toSeconds();
-    const outcome = self_update.autoCheck(updaterFor(runtime, &files, exe_path), init.environ_map, self_update.auto_in_build, data_dir, now) orelse return;
+    const outcome = self_update.autoCheck(updaterFor(runtime, &files, exe_path), init.environ_map, self_update.auto_in_build, data_dir, now) orelse return null;
     if (outcome.shownWhenAuto()) printOutcome(outcome);
+    return outcome;
 }
 
 fn printOutcome(outcome: self_update.Outcome) void {
@@ -364,6 +427,7 @@ fn updateCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8
     const exe_path = try std.process.executablePathAlloc(init.io, init.arena.allocator());
     var files: self_update.Disk = .{ .io = init.io };
     const outcome = updaterFor(runtime, &files, exe_path).run();
+    if (emetgate.cache_lease.defaultDataDir(init.arena.allocator())) |data_dir| self_update.recordLatest(runtime.gpa, files.system(), data_dir, outcome) else |_| {}
     try outcome.write(out, server.server_version, self_update.arrowFor(doctor.consoleCodePage()));
     return outcome.exitCode();
 }

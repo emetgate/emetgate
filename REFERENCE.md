@@ -779,7 +779,7 @@ claude --add-dir <lockdown directory> --settings <lockdown directory>\settings.j
 
 The first two flags give the session the `/rule` command and are described under "Rules from the prompt" below. The last one loads a plugin that only draws and is described under "Marks in the transcript"; `--no-marks`, as the first argument after `lockdown` (or the first after `--test <command>`), leaves it out. `--setting-sources project` loads only the project's `.claude/settings.json`: the user's own settings and their hooks (a `SessionStart` hook that tells the model to use tools this session does not have, for one) do not reach a locked session.
 
-**Starting in an empty folder.** When the current directory is in no git repository, lockdown runs `git init` there and says so on stderr (`emetgate lockdown: the directory was not a git repository, ran git init`); the gate needs a repository for its shadow copy and receipts. The `git init` is the last step before Claude Code starts: `claude` is found, the `.mcp.json` is read and the lockdown files are written first, so a launch that stops (`ClaudeNotFound`, `NoEmetgateServer` and the rest) leaves the folder as it was. Lockdown does not run `git init`, and stops with `LockdownInitRefused` and a stderr line naming the folder, when the folder is a drive root (`C:\`, `\\server\share`), is or holds the folder of `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `SystemRoot`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramData` or `PUBLIC` (so `C:\Users` and the home folder itself), holds an `NTUSER.DAT` in itself or a subfolder (a user profile), or has a `.git` one or two folders down (a folder of projects); the scan stops after 4096 folders and does not follow links. The fix is to `cd` into a project folder, or to run `git init` there yourself. Lockdown finds `claude` on PATH but skips every PATH folder that lies inside the current folder, so a `claude.cmd` planted in a repository is never run. npm puts `claude.cmd` in `%APPDATA%\npm`, inside the home folder, so lockdown started from the home folder skips it: it then stops with `ClaudeOnlyUnderWorkingDir` and the stderr line `emetgate lockdown: skipped <path>: its PATH folder lies inside the current folder, and lockdown runs no program from there`, and `emetgate doctor` reports the same, instead of `ClaudeNotFound`. A project `.mcp.json` emetgate entry whose arguments name no `--test`, `--test=` or `--detect-test` gets `--detect-test` added in the config lockdown hands Claude Code, so writes and `emetgate_run` have a test command; the file itself is not changed. Without a `.mcp.json`, lockdown's own config starts the server as `emetgate mcp --test <command>` when `--test <command>` (or `--test=<command>`) is given, and as `emetgate mcp --detect-test` otherwise. `--test` together with a project `.mcp.json` stops with `LockdownTestWithMcpConfig`, since that file sets the server's arguments; put `--test` in the `.mcp.json` entry instead. A test command added with `claude mcp add ... --test` does not reach lockdown: lockdown starts its own server, not the one registered with Claude Code.
+**Starting in an empty folder.** When the current directory is in no git repository, lockdown runs `git init` there and says so on stderr (`emetgate lockdown: the directory was not a git repository, ran git init`); the gate needs a repository for its shadow copy and receipts. The `git init` is the last step before Claude Code starts: `claude` is found, the `.mcp.json` is read and the lockdown files are written first, so a launch that stops (`ClaudeNotFound`, `NoEmetgateServer` and the rest) leaves the folder as it was. Lockdown does not run `git init`, and stops with `LockdownInitRefused` (exit 1) and the stderr lines `emetgate lockdown: <folder> is not a project folder: <reason>.` and `Fix: cd into your project folder (a git repo) and run: emetgate lockdown`, when the folder is a drive root (`C:\`, `\\server\share`), is or holds the folder of `USERPROFILE`, `HOME`, `APPDATA`, `LOCALAPPDATA`, `SystemRoot`, `ProgramFiles`, `ProgramFiles(x86)`, `ProgramData` or `PUBLIC` (so `C:\Users` and the home folder itself), holds an `NTUSER.DAT` in itself or a subfolder (a user profile), or has a `.git` one or two folders down (a folder of projects); the scan stops after 4096 folders and does not follow links. The fix is to `cd` into a project folder, or to run `git init` there yourself. Lockdown finds `claude` on PATH but skips every PATH folder that lies inside the current folder, so a `claude.cmd` planted in a repository is never run. npm puts `claude.cmd` in `%APPDATA%\npm`, inside the home folder, so lockdown started from the home folder stops with `LockdownInitRefused` when the home folder is no git repository (checked before `claude` is looked up), and otherwise skips that `claude.cmd`: it then stops with `ClaudeOnlyUnderWorkingDir` (exit 1) and the same two stderr lines, whose reason names the skipped `<path>`, and `emetgate doctor` reports the same, instead of `ClaudeNotFound`. A project `.mcp.json` emetgate entry whose arguments name no `--test`, `--test=` or `--detect-test` gets `--detect-test` added in the config lockdown hands Claude Code, so writes and `emetgate_run` have a test command; the file itself is not changed. Without a `.mcp.json`, lockdown's own config starts the server as `emetgate mcp --test <command>` when `--test <command>` (or `--test=<command>`) is given, and as `emetgate mcp --detect-test` otherwise. `--test` together with a project `.mcp.json` stops with `LockdownTestWithMcpConfig`, since that file sets the server's arguments; put `--test` in the `.mcp.json` entry instead. A test command added with `claude mcp add ... --test` does not reach lockdown: lockdown starts its own server, not the one registered with Claude Code.
 
 **Arguments are checked.** Every `tools/call` passes one check (`src/protocol/arg_check.zig`) before the tool runs: a key the tool's served schema does not hold, other than an alias the tool accepts (such as `path` for `file`) or a field it honors outside the schema (`detail`, `message`, `within` on `emetgate_symbols`), is refused as `UnknownArgument`, with a `fix` naming the accepted parameters, and a value of the wrong JSON type (`raw:"yes"`, `line_start:"3"`) is the invalid-params error `Missing or invalid argument: raw (boolean)`; `null` counts as not given. The items of `edits` (`emetgate_change`, `emetgate_try_batch`) and of `files` (`emetgate_read_file`) are checked the same way, so `dry_run` on `emetgate_change`, at the top or inside an item, is refused and nothing is written. A policy field such as `test_cmd` is `ModelSuppliedTestPolicy` on every tool.
 
@@ -1629,6 +1629,37 @@ emetgate find bench <pattern>... [--root <dir>]
 On n8n (29,129 files, 204 MB of text, a 2.5 GB index) the index builds in about 105 s,
 the first search after the server starts takes about 1 s, and a search then takes
 0.1 to 0.25 ms at the median and under 0.5 ms at p99.
+
+### Caches
+
+```
+emetgate cache size [--json]
+emetgate cache prune [--older-than <days>] [--max-mb <n>] [--dry-run]
+emetgate cache prune --all [--dry-run]
+```
+
+The per-repository caches (`find`, `index`, `facts`, `shadow`, each keyed by a hash of
+the repository path) live under `%LOCALAPPDATA%\emetgate`. `emetgate mcp` sweeps them
+once a day in the background, removing entries unused for 30 days, entries whose
+repository is gone, and the least recently used entries past 5 GB
+(`--cache-max-age-days`, `--cache-max-mb`).
+
+`cache size` prints the total size of the data directory, each top-level folder, and
+each repository cache with its repository path and the days since it was last used,
+biggest first; `--json` prints the same as one object (`data_dir`, `total_bytes`,
+`folders`, `projects`, `failed`). Hard-linked files are not counted, since they take no
+extra space.
+
+`cache prune` runs the same sweep with its own limits: 14 days (`--older-than`), no
+size cap unless `--max-mb` is given. `--all` removes every repository cache. A cache
+whose lease a running emetgate holds is never removed. The shared `cache` and
+`run-tmp` folders (the package caches and TEMP of low-integrity commands) are cleared
+only by `--all`, and only when no other `emetgate.exe`, `emetgate.old.exe` or
+`emetgate.new.exe` process runs; otherwise they are kept and the running PIDs are
+named. Nothing is killed. They are removed without following junctions or symlinks.
+A plain `prune` prints their size and leaves them alone. `--dry-run` reports what would
+be removed and freed and deletes nothing. The exit code is 1 when an entry could not
+be removed or the running processes could not be listed.
 
 ### Fact store
 

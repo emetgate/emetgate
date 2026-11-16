@@ -210,6 +210,32 @@ test "self update: the automatic check runs at most once per 24 hours and record
     try testing.expectEqual(@as(u32, 2_000), update.check_deadline_ms);
 }
 
+test "self update: the automatic check keeps the latest release it saw, so doctor can compare offline" {
+    var folder = try Folder.init();
+    defer folder.deinit();
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    var faulty: Faulty = .{};
+    const key = (try signWith(1, new_image)).key;
+
+    const none = update.known(testing.allocator, faulty.system(), folder.data);
+    try testing.expect(none.latest == null and none.checked_at == null);
+
+    const offline = [_]Served{.{ .suffix = "/releases/latest", .err = error.ConnectFailed }};
+    var unreachable_fetch: FakeFetch = .{ .served = &offline };
+    _ = update.autoCheck(folder.updater(&unreachable_fetch, &faulty, key), &env, true, folder.data, 1_700_000_000);
+    try folder.expectContent("data\\update\\latest", null);
+
+    const current = [_]Served{.{ .suffix = "/releases/latest", .body = "{\"tag_name\":\"v0.8.0\",\"prerelease\":false,\"draft\":false}" }};
+    var fetch: FakeFetch = .{ .served = &current };
+    const outcome = update.autoCheck(folder.updater(&fetch, &faulty, key), &env, true, folder.data, 1_800_000_000) orelse return error.TestExpectedCheck;
+    try testing.expect(outcome == .up_to_date);
+    try folder.expectContent("data\\update\\latest", "0.8.0");
+    const seen = update.known(testing.allocator, faulty.system(), folder.data);
+    try testing.expectEqual(std.math.Order.eq, seen.latest.?.order(update.Version.parse("0.8.0").?));
+    try testing.expectEqual(@as(?i64, 1_800_000_000), seen.checked_at);
+}
+
 threadlocal var announced: ?update.Version = null;
 
 fn recordAnnounce(latest: update.Version) void {

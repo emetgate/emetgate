@@ -448,6 +448,12 @@ const cli_cases = [_]CliCase{
         .exit_code = 2,
         .stderr_contains = "usage:",
     },
+    .{
+        .name = "verify alone prints only its own usage with the trusted test command",
+        .args = &.{"verify"},
+        .exit_code = 2,
+        .stderr_contains = "usage: emetgate verify <commit> --test \"<trusted test command>\"",
+    },
 };
 
 fn addEndToEndTests(b: *std.Build, exe: *std.Build.Step.Compile, step: *std.Build.Step) void {

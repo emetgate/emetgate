@@ -172,7 +172,7 @@ fn namesFlag(args: []const std.json.Value, flag: []const u8) bool {
     return false;
 }
 
-fn isEmetgateServer(server: std.json.Value) bool {
+pub fn isEmetgateServer(server: std.json.Value) bool {
     if (server != .object) return false;
     const command = server.object.get("command") orelse return false;
     const args = server.object.get("args") orelse return false;
@@ -451,12 +451,28 @@ pub fn needsRepo(gpa: Allocator, io: std.Io, dir: std.Io.Dir, dir_abs: []const u
     defer gpa.free(git);
     if (try gitSucceeds(gpa, io, git, dir_abs, env, &.{ "rev-parse", "--show-toplevel" })) return false;
     if (initRefusal(io, dir, dir_abs, env)) |why| {
-        const line = try std.fmt.allocPrint(gpa, "emetgate lockdown: {s} is not a git repository and is {s}, so lockdown does not run git init there\n", .{ dir_abs, why.text() });
-        defer gpa.free(line);
-        std.Io.File.stderr().writeStreamingAll(io, line) catch {};
+        const reason = try std.fmt.allocPrint(gpa, "it is not a git repository and is {s}", .{why.text()});
+        defer gpa.free(reason);
+        try printOutsideProject(gpa, io, dir_abs, reason);
         return error.LockdownInitRefused;
     }
     return true;
+}
+
+pub const outside_project_fix = "cd into your project folder (a git repo) and run: emetgate lockdown";
+
+pub fn outsideProjectMessage(gpa: Allocator, dir_abs: []const u8, reason: []const u8) ![]u8 {
+    return std.fmt.allocPrint(gpa, "emetgate lockdown: {s} is not a project folder: {s}.\nFix: " ++ outside_project_fix ++ "\n", .{ dir_abs, reason });
+}
+
+pub fn isOutsideProject(err: anyerror) bool {
+    return err == error.LockdownInitRefused or err == error.ClaudeOnlyUnderWorkingDir;
+}
+
+fn printOutsideProject(gpa: Allocator, io: std.Io, dir_abs: []const u8, reason: []const u8) !void {
+    const text = try outsideProjectMessage(gpa, dir_abs, reason);
+    defer gpa.free(text);
+    std.Io.File.stderr().writeStreamingAll(io, text) catch {};
 }
 
 fn initRepo(gpa: Allocator, io: std.Io, dir_abs: []const u8, env: *const std.process.Environ.Map) !void {
@@ -515,15 +531,15 @@ pub fn checkProjectSettings(gpa: Allocator, io: std.Io, dir: std.Io.Dir) !void {
     return error.LockdownProjectSetting;
 }
 
-pub fn resolveClaude(gpa: Allocator, io: std.Io, program: []const u8) ![]u8 {
+pub fn resolveClaude(gpa: Allocator, io: std.Io, program: []const u8, dir_abs: []const u8) ![]u8 {
     return exe_path.resolve(gpa, program, null) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.ExecutableNotFound, error.NameInvalid => {
             const planted = try exe_path.skipped(gpa, program, null) orelse return error.ClaudeNotFound;
             defer gpa.free(planted);
-            const line = try std.fmt.allocPrint(gpa, "emetgate lockdown: skipped {s}: its PATH folder lies inside the current folder, and lockdown runs no program from there\n", .{planted});
-            defer gpa.free(line);
-            std.Io.File.stderr().writeStreamingAll(io, line) catch {};
+            const reason = try std.fmt.allocPrint(gpa, "the only claude on PATH, {s}, lies inside it, and lockdown runs no program from inside the current folder", .{planted});
+            defer gpa.free(reason);
+            try printOutsideProject(gpa, io, dir_abs, reason);
             return error.ClaudeOnlyUnderWorkingDir;
         },
     };
@@ -543,11 +559,11 @@ pub fn launchIn(gpa: Allocator, io: std.Io, dir: std.Io.Dir, parent_env: *const 
     const local_app_data = parent_env.get(lockdown_slash.local_app_data_variable) orelse return error.LocalAppDataUnavailable;
     try checkProjectConfig(gpa, io, dir, tests.command);
     try checkProjectSettings(gpa, io, dir);
-    const resolved = try resolveClaude(gpa, io, program);
-    defer gpa.free(resolved);
     const dir_abs = try dir.realPathFileAlloc(io, ".", gpa);
     defer gpa.free(dir_abs);
     const init_repo = try needsRepo(gpa, io, dir, dir_abs, parent_env);
+    const resolved = try resolveClaude(gpa, io, program, dir_abs);
+    defer gpa.free(resolved);
     const slash = try lockdown_slash.install(gpa, io, local_app_data, self_exe);
     defer slash.deinit(gpa);
     const config_abs = try chooseMcpConfig(gpa, io, dir, slash.dir, self_exe, tests.command);

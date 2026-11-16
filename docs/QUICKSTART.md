@@ -58,20 +58,28 @@ One line per check, each `ok`, `warn` or `FAIL`, and every `FAIL` ends with the 
 
 ```
 ok    emetgate  0.10.4 at C:\Users\you\AppData\Local\Programs\emetgate\emetgate.exe
+ok    path      `emetgate` runs this exe, the only copy on PATH
+ok    release   0.10.4 is the latest release (checked 3 h ago)
+ok    running   no other emetgate process
 ok    claude    2.1.311 (Claude Code) at C:\Users\you\AppData\Roaming\npm\claude.cmd
 ok    login     signed in
+ok    config    claude uses C:\Users\you\.claude (default, CLAUDE_CONFIG_DIR not set); user and local MCP servers live in C:\Users\you\.claude.json
 ok    git       C:\Program Files\Git\cmd\git.exe
 ok    repo      C:/Users/you/proje
 ok    .mcp.json one emetgate server
 ok    server    answers as emetgate 0.10.4
 ok    tests     "npm test"
+ok    mcp       no user or local registration in C:\Users\you\.claude.json; lockdown brings its own server
 ok    write     C:/Users/you/proje
 ok    state     C:\Users\you\AppData\Local\emetgate\lockdown\...
+ok    data      C:\Users\you\AppData\Local\emetgate: 412.3 MiB in 5310 files
 ok    sandbox   low-integrity cmd.exe ran
 ok    appcntr   AppContainer profile available
 ok    console   UTF-8 output
 ready: run `emetgate lockdown` here
 ```
+
+`emetgate doctor --json` prints the same checks as JSON. A `warn` on `path` means another emetgate.exe answers first on PATH; on `mcp`, that emetgate is registered in a config folder other than the one claude reads (`CLAUDE_CONFIG_DIR`); on `running`, that other emetgate processes hold the exe, so update and uninstall wait for them. Doctor never stops a process.
 
 It exits 1 while anything would stop lockdown from working. `warn` lines do not block.
 
@@ -82,6 +90,8 @@ The `server` line starts the emetgate server your `.mcp.json` names, with its ar
 ```powershell
 emetgate lockdown
 ```
+
+Run it inside your project folder (a git repo). From your home folder or a drive root it stops with `is not a project folder` and the fix: `cd` into your project folder and run `emetgate lockdown` again.
 
 What to expect:
 
