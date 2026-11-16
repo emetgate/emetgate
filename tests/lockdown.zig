@@ -630,6 +630,40 @@ test "a claude on PATH only inside the working folder stays skipped, and the err
     try testing.expect(doctor.hint(error.ClaudeNotFound) != null);
 }
 
+test "lockdown from the home folder stops as outside a project before it looks up claude, and changes nothing" {
+    if (@import("builtin").os.tag != .windows) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(testing.io, "home/AppData/Roaming/npm");
+    const home = try tmp.dir.realPathFileAlloc(testing.io, "home", gpa);
+    defer gpa.free(home);
+    var parent = try outsideRepo(gpa, &tmp);
+    defer parent.deinit();
+    try parent.put("USERPROFILE", home);
+    var dir = try tmp.dir.openDir(testing.io, "home", .{ .iterate = true });
+    defer dir.close(testing.io);
+    const err = lockdown.launchIn(gpa, testing.io, dir, &parent, "claude-that-does-not-exist-x", "C:/tools/emetgate.exe", &.{ "-p", "hi" });
+    try testing.expectError(error.LockdownInitRefused, err);
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, "home/.git", .{}));
+    try testing.expect(lockdown.isOutsideProject(error.LockdownInitRefused));
+    try testing.expect(lockdown.isOutsideProject(error.ClaudeOnlyUnderWorkingDir));
+    try testing.expect(!lockdown.isOutsideProject(error.ClaudeNotFound));
+}
+
+test "the outside-project message says what went wrong and how to fix it in two lines" {
+    const gpa = testing.allocator;
+    const text = try lockdown.outsideProjectMessage(gpa, "C:\\Users\\someone", "it is not a git repository and is your home folder");
+    defer gpa.free(text);
+    try testing.expectEqualStrings(
+        "emetgate lockdown: C:\\Users\\someone is not a project folder: it is not a git repository and is your home folder.\n" ++
+            "Fix: cd into your project folder (a git repo) and run: emetgate lockdown\n",
+        text,
+    );
+    try testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, "\n"));
+    try testing.expect(std.mem.indexOf(u8, text, "ClaudeOnlyUnderWorkingDir") == null);
+}
+
 test "a project settings agent field is refused in every spelling claude reads" {
     const gpa = testing.allocator;
     const refused = [_][]const u8{

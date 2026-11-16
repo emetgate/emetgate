@@ -76,6 +76,14 @@ rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // cl
 
 <img src="../assets/readme/term-verify-en.svg" alt="emetgate verify 输出" width="100%">
 
+用你信任的测试命令检查提交；收据中记录的命令永远不会被重新运行，所以不加 `--test` 时提交会保持 `unverified`：
+
+```
+emetgate verify HEAD --test "npm test"
+```
+
+**查看一次会话的花费。** `emetgate report` 汇总项目中最近一次调用 emetgate 工具的会话：时长、模型轮次、input、output 和 cache token、以美元计的估算费用、按名称统计的工具调用，以及闸门做了什么（应用和拒绝的写入、规则违规、测试运行、收据、提交）。`--session <id>` 选择一个会话，`--all` 以表格列出所有会话，`--json` 以 JSON 输出同样的数字。token 来自 Claude Code 自己的会话记录（`CLAUDE_CONFIG_DIR` 或 `~/.claude` 下的 `projects/`）；费用按内置的各模型标价计算，因此只是估算，不是你的账单。
+
 ## 2 分钟上手
 
 在 PowerShell 中运行，然后打开一个新终端：
@@ -92,7 +100,31 @@ emetgate rule pick 1 19 26
 emetgate lockdown
 ```
 
-`emetgate lockdown` 只用 emetgate 的工具启动 Claude Code。分步说明：[docs/QUICKSTART.md](../docs/QUICKSTART.md)。
+`emetgate doctor` 是一屏的安装检查，每行一个 `ok`、`warn` 或 `FAIL` 及其修复方法：PATH 运行的是哪个 emetgate 以及被遮蔽的副本、是否有新版本、claude 及其读取的配置目录（`CLAUDE_CONFIG_DIR` 或 `~/.claude`）、emetgate 作为 MCP 服务器注册在哪里、其他正在运行的 emetgate 进程、数据目录的大小，以及当前目录是否为 git 仓库。`--json` 以 JSON 输出同样内容。
+
+`emetgate lockdown` 只用 emetgate 的工具启动 Claude Code。请在项目目录（git 仓库）中运行，而不是在主目录或驱动器根目录。分步说明：[docs/QUICKSTART.md](../docs/QUICKSTART.md)。
+
+## 卸载
+
+```
+emetgate uninstall
+emetgate uninstall --yes
+```
+
+第一条命令不删除任何东西：它列出程序目录（`%LOCALAPPDATA%\Programs\emetgate`）、用户 PATH 中的条目和数据目录（`%LOCALAPPDATA%\emetgate`，缓存可达数 GB）及其大小。`--yes` 会删除它们；加上 `--keep-cache` 可保留数据目录。由于正在运行的 emetgate.exe 无法删除自己，程序目录会在命令退出几秒后删除。如果有其他 emetgate 进程在运行，它会列出其 PID，并在你关闭它们之前不删除任何东西。各项目中的 `.emetgate` 目录和 `.mcp.json` 条目会保留，请手动删除。
+
+### 磁盘占用
+
+emetgate 在 `%LOCALAPPDATA%\emetgate` 下保存每个项目的缓存（搜索索引、事实、测试运行用的副本）。服务器每天删除一次 30 天未使用的缓存。要自己查看和清理：
+
+```
+emetgate cache size                  # total, per folder and per project (--json for scripts)
+emetgate cache prune --dry-run       # what would go, nothing deleted
+emetgate cache prune                 # remove caches unused for 14 days (--older-than <days>)
+emetgate cache prune --all           # remove every cache no running emetgate is using
+```
+
+正在运行的 emetgate 持有租约的缓存永远不会被删除。共享的 `cache` 和 `run-tmp` 目录（包缓存和沙箱命令的 TEMP）只有在使用 `--all` 且没有其他 emetgate 进程运行时才会清空。
 
 ## 限制
 
@@ -123,7 +155,7 @@ emetgate lockdown
 <details>
 <summary>搜索与验证：所用技术</summary>
 
-搜索使用 suffix array 索引和 trigram 列表；它基于所读每个文件的 SHA-256 计算 RFC 9162 Merkle 根，以表明答案是完整还是部分的，并与 ripgrep 逐行比对。提交记录采用 in-toto 格式，`emetgate verify --branch main..HEAD` 会检查整个范围；没有收据的提交计为 `partial`。详情：[REFERENCE.md](../REFERENCE.md)、[VERIFICATION.md](../VERIFICATION.md)。
+搜索使用 suffix array 索引和 trigram 列表；它基于所读每个文件的 SHA-256 计算 RFC 9162 Merkle 根，以表明答案是完整还是部分的，并与 ripgrep 逐行比对。提交记录采用 in-toto 格式，`emetgate verify --branch main..HEAD --test "<cmd>"` 会检查整个范围；没有收据的提交计为 `partial`。详情：[REFERENCE.md](../REFERENCE.md)、[VERIFICATION.md](../VERIFICATION.md)。
 
 </details>
 

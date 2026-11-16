@@ -21,6 +21,7 @@ const max_depth = 64;
 pub const Policy = struct {
     max_age_days: u32 = default_max_age_days,
     max_mb: u64 = default_max_mb,
+    dry_run: bool = false,
 
     pub fn maxAgeNs(self: Policy) i96 {
         return @as(i96, self.max_age_days) * std.time.ns_per_day;
@@ -108,7 +109,7 @@ fn locked(gpa: Allocator, io: std.Io, data_abs: []const u8, policy: Policy, now:
     defer if (lock) |held| held.release();
     if (daily and try stampFresh(io, data_abs, now)) return .{};
     var report = try collect(gpa, io, data_abs, policy, now, cancel);
-    writeStamp(io, data_abs, now) catch |err| report.fail(err);
+    if (!policy.dry_run) writeStamp(io, data_abs, now) catch |err| report.fail(err);
     return report;
 }
 
@@ -133,7 +134,7 @@ fn writeStamp(io: std.Io, data_abs: []const u8, now: i96) !void {
 
 fn collect(gpa: Allocator, io: std.Io, data_abs: []const u8, policy: Policy, now: i96, cancel: ?*const std.atomic.Value(bool)) !Report {
     var report: Report = .{ .ran = true };
-    try clearTombstones(gpa, io, data_abs, &report);
+    if (!policy.dry_run) try clearTombstones(gpa, io, data_abs, &report);
     var entries: std.AutoArrayHashMapUnmanaged(Key, Entry) = .empty;
     defer entries.deinit(gpa);
     var unmeasured: std.AutoArrayHashMapUnmanaged(Key, void) = .empty;
@@ -191,9 +192,10 @@ fn settle(gpa: Allocator, io: std.Io, data_abs: []const u8, policy: Policy, now:
     defer held.release(drop);
     const verdict = try recordedVerdict(gpa, io, data_abs, held, &entry.key);
     const last_used = if (held.created) entry.last_used else @max(entry.last_used, held.modifiedNs(io) orelse entry.last_used);
-    const aged = now - last_used > policy.maxAgeNs();
+    const aged = policy.max_age_days == 0 or now - last_used > policy.maxAgeNs();
     const over = total > policy.maxBytes();
     if (verdict != .gone and !aged and !over) return if (verdict == .refused) .refused else .kept;
+    if (policy.dry_run) return .removed;
     if (!try removeEntries(gpa, io, data_abs, &entry.key)) return .live;
     drop = true;
     return .removed;
@@ -406,6 +408,162 @@ fn scanLeases(gpa: Allocator, io: std.Io, data_abs: []const u8, entries: *std.Au
         const stat = dir.statFile(io, item.name, .{ .follow_symlinks = false }) catch continue;
         slot.value_ptr.last_used = @max(slot.value_ptr.last_used, stat.mtime.nanoseconds);
     }
+}
+
+pub const Folder = struct {
+    name: []u8,
+    bytes: u64,
+};
+
+pub const Project = struct {
+    key: Key,
+    bytes: u64,
+    last_used: i96,
+    root: ?[]u8,
+};
+
+pub const Usage = struct {
+    total: u64 = 0,
+    folders: []Folder = &.{},
+    projects: []Project = &.{},
+    failed: usize = 0,
+    first_failure: ?anyerror = null,
+
+    pub fn deinit(self: *Usage, gpa: Allocator) void {
+        for (self.folders) |folder| gpa.free(folder.name);
+        gpa.free(self.folders);
+        for (self.projects) |project| if (project.root) |root| gpa.free(root);
+        gpa.free(self.projects);
+        self.* = .{};
+    }
+
+    fn fail(self: *Usage, err: anyerror) void {
+        self.failed += 1;
+        if (self.first_failure == null) self.first_failure = err;
+    }
+};
+
+pub fn measure(gpa: Allocator, io: std.Io, data_abs: []const u8) !Usage {
+    var usage: Usage = .{};
+    errdefer usage.deinit(gpa);
+    var folders: std.ArrayList(Folder) = .empty;
+    defer {
+        for (folders.items) |folder| gpa.free(folder.name);
+        folders.deinit(gpa);
+    }
+    {
+        var dir = Dir.openDirAbsolute(io, data_abs, .{ .iterate = true, .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound => return usage,
+            else => |e| return e,
+        };
+        defer dir.close(io);
+        var it = dir.iterate();
+        while (try it.next(io)) |item| {
+            switch (item.kind) {
+                .directory => {
+                    var entry: Entry = .{ .key = undefined };
+                    measureFolder(io, dir, item.name, &entry) catch |err| usage.fail(err);
+                    const name = try gpa.dupe(u8, item.name);
+                    folders.append(gpa, .{ .name = name, .bytes = entry.bytes }) catch |err| {
+                        gpa.free(name);
+                        return err;
+                    };
+                    usage.total +|= entry.bytes;
+                },
+                .file => {
+                    const stat = dir.statFile(io, item.name, .{ .follow_symlinks = false }) catch |err| {
+                        usage.fail(err);
+                        continue;
+                    };
+                    usage.total +|= stat.size;
+                },
+                else => {},
+            }
+        }
+    }
+    std.mem.sort(Folder, folders.items, {}, biggerFolder);
+
+    var entries: std.AutoArrayHashMapUnmanaged(Key, Entry) = .empty;
+    defer entries.deinit(gpa);
+    var unmeasured: std.AutoArrayHashMapUnmanaged(Key, void) = .empty;
+    defer unmeasured.deinit(gpa);
+    var report: Report = .{};
+    for (families) |family| scanFamily(gpa, io, data_abs, family, &entries, &unmeasured, &report) catch |err| report.fail(err);
+    scanLeases(gpa, io, data_abs, &entries) catch |err| report.fail(err);
+    if (report.first_failure) |err| {
+        usage.failed += report.failed;
+        if (usage.first_failure == null) usage.first_failure = err;
+    }
+
+    const projects = try gpa.alloc(Project, entries.count());
+    var filled: usize = 0;
+    errdefer {
+        for (projects[0..filled]) |project| if (project.root) |root| gpa.free(root);
+        gpa.free(projects);
+    }
+    for (entries.values()) |entry| {
+        projects[filled] = .{ .key = entry.key, .bytes = entry.bytes, .last_used = entry.last_used, .root = try recordedRoot(gpa, io, data_abs, &entry.key) };
+        filled += 1;
+    }
+    std.mem.sort(Project, projects, {}, biggerProject);
+    usage.folders = try folders.toOwnedSlice(gpa);
+    usage.projects = projects;
+    return usage;
+}
+
+pub fn folderBytes(io: std.Io, folder_abs: []const u8) !?u64 {
+    if (try shadow.isReparsePoint(folder_abs)) return 0;
+    var dir = Dir.openDirAbsolute(io, folder_abs, .{ .iterate = true, .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => |e| return e,
+    };
+    defer dir.close(io);
+    var entry: Entry = .{ .key = undefined };
+    try measureTree(io, dir, &entry, 0);
+    return entry.bytes;
+}
+
+fn measureFolder(io: std.Io, parent: Dir, name: []const u8, entry: *Entry) !void {
+    var dir = try parent.openDir(io, name, .{ .iterate = true, .follow_symlinks = false });
+    defer dir.close(io);
+    try measureTree(io, dir, entry, 0);
+}
+
+fn recordedRoot(gpa: Allocator, io: std.Io, data_abs: []const u8, key: []const u8) !?[]u8 {
+    const paths = [_][]const u8{ cache_lease.leases_dir, shadow_family };
+    for (paths) |family| {
+        const path = if (std.mem.eql(u8, family, shadow_family))
+            try std.fmt.allocPrint(gpa, "{s}\\{s}\\{s}\\{s}", .{ data_abs, family, key, shadow_root.marker_name })
+        else
+            try std.fmt.allocPrint(gpa, "{s}\\{s}\\{s}", .{ data_abs, family, key });
+        defer gpa.free(path);
+        const recorded = Dir.cwd().readFileAlloc(io, path, gpa, .limited(max_marker_bytes)) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => continue,
+        };
+        if (recorded.len != 0) return recorded;
+        gpa.free(recorded);
+    }
+    return null;
+}
+
+fn biggerFolder(_: void, a: Folder, b: Folder) bool {
+    if (a.bytes != b.bytes) return a.bytes > b.bytes;
+    return std.mem.order(u8, a.name, b.name) == .lt;
+}
+
+fn biggerProject(_: void, a: Project, b: Project) bool {
+    if (a.bytes != b.bytes) return a.bytes > b.bytes;
+    return std.mem.order(u8, &a.key, &b.key) == .lt;
+}
+
+pub fn writeSize(out: *std.Io.Writer, bytes: u64) !void {
+    const units = [_][]const u8{ "KB", "MB", "GB", "TB" };
+    if (bytes < 1024) return out.print("{d} B", .{bytes});
+    var scaled: f64 = @as(f64, @floatFromInt(bytes)) / 1024.0;
+    var unit: usize = 0;
+    while (scaled >= 1024.0 and unit + 1 < units.len) : (unit += 1) scaled /= 1024.0;
+    try out.print("{d:.1} {s}", .{ scaled, units[unit] });
 }
 
 var noted: std.atomic.Value(u16) = .init(0);

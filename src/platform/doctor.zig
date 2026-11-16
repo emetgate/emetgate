@@ -8,6 +8,7 @@ const lockdown_slash = @import("lockdown_slash.zig");
 const test_command = @import("test_command.zig");
 const runner = @import("runner.zig");
 const appcontainer = @import("appcontainer.zig");
+pub const install_probe = @import("install_probe.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -33,6 +34,20 @@ pub const Probe = struct {
     local_app_data: ?[]const u8,
     version: []const u8,
     code_page: u32 = 0,
+    env: ?*const std.process.Environ.Map = null,
+    release: Release = .{},
+    scan_processes: bool = false,
+    json: bool = false,
+};
+
+pub const Release = struct {
+    release_build: bool = true,
+    disabled: bool = false,
+    latest: ?[]const u8 = null,
+    newer: bool = false,
+    checked_ago_s: ?i64 = null,
+    offline: ?anyerror = null,
+    updated_to: ?[]const u8 = null,
 };
 
 pub fn statusWord(status: Status) []const u8 {
@@ -182,18 +197,29 @@ pub fn run(gpa: Allocator, io: std.Io, probe: Probe, out: *std.Io.Writer) !u8 {
     const arena = arena_state.allocator();
     var checks: std.ArrayList(Check) = .empty;
 
-    try checks.append(arena, selfCheck(arena, probe));
+    try checks.append(arena, .{ .name = "emetgate", .status = .ok, .detail = try std.fmt.allocPrint(arena, "{s} at {s}", .{ probe.version, probe.self_exe }) });
+    try checks.append(arena, try pathLine(arena, io, probe));
+    try checks.append(arena, try releaseCheck(arena, probe.version, probe.release));
+    if (probe.scan_processes) try checks.append(arena, processLine(arena));
     try appendClaude(arena, io, probe, &checks);
+    const config = if (probe.env) |env| try claudeConfig(arena, env) else null;
+    if (probe.env != null) try checks.append(arena, try configCheck(arena, io, config));
     const root = try appendRepo(arena, io, probe, &checks);
     try checks.append(arena, try mcpAndTests(arena, io, probe, root, &checks));
+    if (config) |found| try appendRegistrations(arena, io, probe, found, root, &checks);
     try checks.append(arena, writeCheck(arena, io, "write", root orelse probe.cwd));
     try checks.append(arena, stateCheck(arena, io, probe));
+    if (probe.local_app_data) |local| try checks.append(arena, try dataCheck(arena, io, local));
     try checks.append(arena, sandboxCheck(arena, io, root orelse probe.cwd));
     try checks.append(arena, appContainerCheck());
     try checks.append(arena, codePageCheck(probe.code_page));
 
-    for (checks.items) |check| try writeLine(out, check);
     const code = exitCode(checks.items);
+    if (probe.json) {
+        try writeJson(out, probe, checks.items, code == 0);
+        return code;
+    }
+    for (checks.items) |check| try writeLine(out, check);
     if (code == 0) {
         try out.writeAll("ready: run `emetgate lockdown` here\n");
     } else {
@@ -202,15 +228,247 @@ pub fn run(gpa: Allocator, io: std.Io, probe: Probe, out: *std.Io.Writer) !u8 {
     return code;
 }
 
-fn selfCheck(arena: Allocator, probe: Probe) Check {
-    const detail = std.fmt.allocPrint(arena, "{s} at {s}", .{ probe.version, probe.self_exe }) catch probe.version;
-    const found = exe_path.resolve(arena, "emetgate", null) catch {
-        const dir = std.fs.path.dirname(probe.self_exe) orelse probe.self_exe;
-        const fix = std.fmt.allocPrint(arena, "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';{s}', 'User')  then open a new terminal", .{dir}) catch "";
-        return .{ .name = "emetgate", .status = .warn, .detail = std.fmt.allocPrint(arena, "{s}; not on PATH", .{detail}) catch detail, .fix = fix };
+const JsonCheck = struct { name: []const u8, status: []const u8, detail: []const u8, fix: []const u8 };
+
+pub fn writeJson(out: *std.Io.Writer, probe: Probe, checks: []const Check, ready: bool) !void {
+    var buf: [64]JsonCheck = undefined;
+    const count = @min(checks.len, buf.len);
+    for (checks[0..count], buf[0..count]) |check, *item| {
+        item.* = .{ .name = check.name, .status = @tagName(check.status), .detail = check.detail, .fix = check.fix };
+    }
+    try std.json.Stringify.value(.{ .version = probe.version, .exe = probe.self_exe, .cwd = probe.cwd, .ready = ready, .checks = buf[0..count] }, .{ .whitespace = .indent_2 }, out);
+    try out.writeByte('\n');
+}
+
+pub fn onPath(arena: Allocator, io: std.Io, path_list: []const u8, pathext: []const u8, name: []const u8) ![]const []const u8 {
+    var hits: std.ArrayList([]const u8) = .empty;
+    var entries = std.mem.tokenizeScalar(u8, path_list, ';');
+    while (entries.next()) |raw| {
+        const dir = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
+        if (dir.len == 0) continue;
+        var extensions = std.mem.tokenizeScalar(u8, pathext, ';');
+        while (extensions.next()) |ext_raw| {
+            const ext = std.mem.trim(u8, ext_raw, " ");
+            if (ext.len < 2 or ext[0] != '.') continue;
+            const candidate = try std.fmt.allocPrint(arena, "{s}\\{s}{s}", .{ dir, name, try std.ascii.allocLowerString(arena, ext) });
+            std.Io.Dir.cwd().access(io, candidate, .{}) catch continue;
+            for (hits.items) |seen| {
+                if (std.ascii.eqlIgnoreCase(seen, candidate)) break;
+            } else try hits.append(arena, candidate);
+        }
+    }
+    return hits.toOwnedSlice(arena);
+}
+
+pub fn samePath(a: []const u8, b: []const u8) bool {
+    if (std.ascii.eqlIgnoreCase(a, b)) return true;
+    var a_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
+    var b_buf: [std.os.windows.PATH_MAX_WIDE]u16 = undefined;
+    const a_final = exe_path.finalName(&a_buf, a) orelse return false;
+    const b_final = exe_path.finalName(&b_buf, b) orelse return false;
+    return std.mem.eql(u16, a_final, b_final);
+}
+
+fn pathLine(arena: Allocator, io: std.Io, probe: Probe) !Check {
+    const hits: []const []const u8 = if (probe.env) |env|
+        try onPath(arena, io, env.get("PATH") orelse "", env.get("PATHEXT") orelse ".COM;.EXE;.BAT;.CMD", "emetgate")
+    else if (exe_path.resolve(arena, "emetgate", null)) |found|
+        try arena.dupe([]const u8, &.{found})
+    else |_|
+        &.{};
+    var first_version: ?[]const u8 = null;
+    if (hits.len != 0 and !samePath(hits[0], probe.self_exe)) {
+        if (capture(arena, io, &.{ hits[0], "--version" }, probe.cwd)) |text| {
+            const line = std.mem.trim(u8, std.mem.sliceTo(text, '\n'), " \r\t");
+            if (std.mem.startsWith(u8, line, "emetgate ")) first_version = line["emetgate ".len..];
+        }
+    }
+    return pathCheck(arena, probe.self_exe, hits, first_version);
+}
+
+pub fn pathCheck(arena: Allocator, self_exe: []const u8, hits: []const []const u8, first_version: ?[]const u8) !Check {
+    if (hits.len == 0) {
+        const dir = std.fs.path.dirname(self_exe) orelse self_exe;
+        return .{ .name = "path", .status = .warn, .detail = "emetgate is not on PATH, so a new terminal and `claude mcp add ... emetgate` cannot find it", .fix = try std.fmt.allocPrint(arena, "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';{s}', 'User')  then open a new terminal", .{dir}) };
+    }
+    var others: std.Io.Writer.Allocating = .init(arena);
+    for (hits[1..], 0..) |hit, i| {
+        if (i != 0) try others.writer.writeAll("; ");
+        try others.writer.writeAll(hit);
+    }
+    if (!samePath(hits[0], self_exe)) {
+        const version = if (first_version) |v| try std.fmt.allocPrint(arena, " (emetgate {s})", .{v}) else "";
+        const also = if (hits.len > 1) try std.fmt.allocPrint(arena, "; also on PATH: {s}", .{others.written()}) else "";
+        return .{ .name = "path", .status = .warn, .detail = try std.fmt.allocPrint(arena, "`emetgate` runs {s}{s}, not this {s}{s}", .{ hits[0], version, self_exe, also }), .fix = try std.fmt.allocPrint(arena, "delete {s} or remove {s} from PATH, then open a new terminal", .{ hits[0], std.fs.path.dirname(hits[0]) orelse hits[0] }) };
+    }
+    if (hits.len > 1) {
+        return .{ .name = "path", .status = .warn, .detail = try std.fmt.allocPrint(arena, "{d} copies on PATH; {s} runs, the others are shadowed: {s}", .{ hits.len, hits[0], others.written() }), .fix = "delete the shadowed copies (or remove their folders from PATH) so no session or config starts an old one" };
+    }
+    return .{ .name = "path", .status = .ok, .detail = "`emetgate` runs this exe, the only copy on PATH" };
+}
+
+fn ago(arena: Allocator, seconds: ?i64) ![]const u8 {
+    const s = seconds orelse return "time unknown";
+    if (s < 3600) return "under an hour ago";
+    if (s < 2 * 86400) return std.fmt.allocPrint(arena, "{d} h ago", .{@divTrunc(s, 3600)});
+    return std.fmt.allocPrint(arena, "{d} days ago", .{@divTrunc(s, 86400)});
+}
+
+pub fn releaseCheck(arena: Allocator, version: []const u8, release: Release) !Check {
+    if (release.updated_to) |next| return .{ .name = "release", .status = .warn, .detail = try std.fmt.allocPrint(arena, "this exe was just replaced by emetgate {s}; this run is still {s}", .{ next, version }), .fix = "run emetgate doctor again" };
+    if (!release.release_build) return .{ .name = "release", .status = .ok, .detail = try std.fmt.allocPrint(arena, "{s} is not a release version; nothing to compare", .{version}) };
+    if (release.latest) |latest| {
+        const when = try ago(arena, release.checked_ago_s);
+        if (release.newer) return .{ .name = "release", .status = .warn, .detail = try std.fmt.allocPrint(arena, "emetgate {s} is out, this is {s} (checked {s})", .{ latest, version, when }), .fix = "emetgate update" };
+        return .{ .name = "release", .status = .ok, .detail = try std.fmt.allocPrint(arena, "{s} is the latest release (checked {s})", .{ version, when }) };
+    }
+    if (release.offline) |err| return .{ .name = "release", .status = .warn, .detail = try std.fmt.allocPrint(arena, "skipped: GitHub could not be reached ({t})", .{err}), .fix = "emetgate update, when online" };
+    if (release.disabled) return .{ .name = "release", .status = .warn, .detail = "not checked: the automatic check is off (EMETGATE_NO_UPDATE, CI, or a debug build)", .fix = "emetgate update" };
+    return .{ .name = "release", .status = .warn, .detail = "not checked yet", .fix = "emetgate update" };
+}
+
+fn processLine(arena: Allocator) Check {
+    const found = install_probe.emetgateProcesses(arena) catch |err| return .{ .name = "running", .status = .warn, .detail = std.fmt.allocPrint(arena, "could not list processes ({t})", .{err}) catch "could not list processes" };
+    return processCheck(arena, found) catch .{ .name = "running", .status = .warn, .detail = "out of memory" };
+}
+
+pub fn processCheck(arena: Allocator, found: []const install_probe.Process) !Check {
+    if (found.len == 0) return .{ .name = "running", .status = .ok, .detail = "no other emetgate process" };
+    var detail: std.Io.Writer.Allocating = .init(arena);
+    try detail.writer.print("{d} other emetgate process{s}: ", .{ found.len, if (found.len == 1) "" else "es" });
+    for (found, 0..) |process, i| {
+        if (i != 0) try detail.writer.writeAll("; ");
+        const shown = if (process.command_line.len != 0) process.command_line else process.image;
+        try detail.writer.print("pid {d} {s}", .{ process.pid, shown[0..@min(shown.len, 160)] });
+    }
+    return .{ .name = "running", .status = .warn, .detail = detail.written(), .fix = "they hold emetgate.exe open, so update and uninstall wait; close the claude sessions that started them (doctor stops nothing)" };
+}
+
+pub const ClaudeConfig = struct {
+    dir: []const u8,
+    json: []const u8,
+    from_env: bool,
+    default_json: ?[]const u8 = null,
+};
+
+pub const claude_config_variable = "CLAUDE_CONFIG_DIR";
+
+pub fn claudeConfig(arena: Allocator, env: *const std.process.Environ.Map) !?ClaudeConfig {
+    const home = env.get("USERPROFILE");
+    const default_json = if (home) |h| try std.fs.path.join(arena, &.{ h, ".claude.json" }) else null;
+    if (env.get(claude_config_variable)) |raw| {
+        const dir = std.mem.trimEnd(u8, std.mem.trim(u8, raw, " \""), "\\/");
+        if (dir.len != 0) return .{ .dir = dir, .json = try std.fs.path.join(arena, &.{ dir, ".claude.json" }), .from_env = true, .default_json = default_json };
+    }
+    const h = home orelse return null;
+    return .{ .dir = try std.fs.path.join(arena, &.{ h, ".claude" }), .json = default_json.?, .from_env = false };
+}
+
+pub fn configCheck(arena: Allocator, io: std.Io, config: ?ClaudeConfig) !Check {
+    const found = config orelse return .{ .name = "config", .status = .warn, .detail = "neither CLAUDE_CONFIG_DIR nor USERPROFILE is set, so claude's config folder is unknown", .fix = "open a normal terminal for your Windows user" };
+    if (!found.from_env) return .{ .name = "config", .status = .ok, .detail = try std.fmt.allocPrint(arena, "claude uses {s} (default, CLAUDE_CONFIG_DIR not set); user and local MCP servers live in {s}", .{ found.dir, found.json }) };
+    std.Io.Dir.cwd().access(io, found.dir, .{}) catch return .{ .name = "config", .status = .warn, .detail = try std.fmt.allocPrint(arena, "CLAUDE_CONFIG_DIR is {s}, which does not exist; claude starts there with no settings or MCP servers", .{found.dir}), .fix = "fix or unset CLAUDE_CONFIG_DIR, so every terminal uses the same config folder" };
+    return .{ .name = "config", .status = .ok, .detail = try std.fmt.allocPrint(arena, "claude uses {s} (CLAUDE_CONFIG_DIR); user and local MCP servers live in {s}; a terminal without the variable reads {s} instead", .{ found.dir, found.json, found.default_json orelse "%USERPROFILE%\\.claude.json" }) };
+}
+
+pub const Registration = struct { scope: []const u8, name: []const u8, command: []const u8 };
+
+pub const max_claude_json_bytes = 64 * 1024 * 1024;
+
+pub fn sameProject(key: []const u8, dir: []const u8) bool {
+    const a = std.mem.trimEnd(u8, key, "\\/");
+    const b = std.mem.trimEnd(u8, dir, "\\/");
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        const xs = if (x == '\\') '/' else x;
+        const ys = if (y == '\\') '/' else y;
+        if (std.ascii.toLower(xs) != std.ascii.toLower(ys)) return false;
+    }
+    return true;
+}
+
+pub fn registrations(arena: Allocator, config_text: []const u8, projects: []const []const u8) ![]const Registration {
+    const parsed = std.json.parseFromSliceLeaky(std.json.Value, arena, config_text, .{}) catch return error.McpConfigInvalid;
+    if (parsed != .object) return error.McpConfigInvalid;
+    var found: std.ArrayList(Registration) = .empty;
+    if (parsed.object.get("mcpServers")) |servers| try collectServers(arena, "user", servers, &found);
+    if (parsed.object.get("projects")) |all| {
+        if (all == .object) {
+            var entries = all.object.iterator();
+            while (entries.next()) |entry| {
+                for (projects) |project| {
+                    if (!sameProject(entry.key_ptr.*, project)) continue;
+                    if (entry.value_ptr.* != .object) break;
+                    if (entry.value_ptr.object.get("mcpServers")) |servers| try collectServers(arena, "local", servers, &found);
+                    break;
+                }
+            }
+        }
+    }
+    return found.toOwnedSlice(arena);
+}
+
+fn collectServers(arena: Allocator, scope: []const u8, servers: std.json.Value, found: *std.ArrayList(Registration)) !void {
+    if (servers != .object) return;
+    var entries = servers.object.iterator();
+    while (entries.next()) |entry| {
+        if (!lockdown.isEmetgateServer(entry.value_ptr.*)) continue;
+        try found.append(arena, .{ .scope = scope, .name = entry.key_ptr.*, .command = entry.value_ptr.object.get("command").?.string });
+    }
+}
+
+fn readRegistrations(arena: Allocator, io: std.Io, path: []const u8, projects: []const []const u8) !?[]const Registration {
+    const text = std.Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(max_claude_json_bytes)) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
     };
-    _ = found;
-    return .{ .name = "emetgate", .status = .ok, .detail = detail };
+    return try registrations(arena, text, projects);
+}
+
+fn appendRegistrations(arena: Allocator, io: std.Io, probe: Probe, config: ClaudeConfig, root: ?[]const u8, checks: *std.ArrayList(Check)) !void {
+    const projects: []const []const u8 = if (root) |r| &.{ probe.cwd, r } else &.{probe.cwd};
+    const found = readRegistrations(arena, io, config.json, projects) catch |err| {
+        try checks.append(arena, .{ .name = "mcp", .status = .warn, .detail = try std.fmt.allocPrint(arena, "could not read {s} ({t})", .{ config.json, err }), .fix = "repair the JSON, or run claude once so it rewrites the file" });
+        return;
+    };
+    const elsewhere: ?[]const Registration = if (config.default_json) |other| readRegistrations(arena, io, other, projects) catch null else null;
+    try checks.appendSlice(arena, try registrationChecks(arena, io, probe.self_exe, config, found orelse &.{}, elsewhere orelse &.{}));
+}
+
+pub fn registrationChecks(arena: Allocator, io: std.Io, self_exe: []const u8, config: ClaudeConfig, found: []const Registration, elsewhere: []const Registration) ![]const Check {
+    var lines: std.ArrayList(Check) = .empty;
+    for (found) |reg| {
+        const name = if (std.mem.eql(u8, reg.scope, "user")) "mcp user" else "mcp local";
+        const fix = try std.fmt.allocPrint(arena, "claude mcp remove {s} -s {s}  then  claude mcp add -s {s} {s} -- \"{s}\" mcp", .{ reg.name, reg.scope, reg.scope, reg.name, self_exe });
+        const located = locateServer(arena, io, reg.command) orelse {
+            try lines.append(arena, .{ .name = name, .status = .warn, .detail = try std.fmt.allocPrint(arena, "{s} -> {s}, which is not there; claude sessions get no emetgate tools from it", .{ reg.name, reg.command }), .fix = fix });
+            continue;
+        };
+        if (!samePath(located, self_exe)) {
+            try lines.append(arena, .{ .name = name, .status = .warn, .detail = try std.fmt.allocPrint(arena, "{s} -> {s}, not this {s}", .{ reg.name, located, self_exe }), .fix = fix });
+            continue;
+        }
+        try lines.append(arena, .{ .name = name, .status = .ok, .detail = try std.fmt.allocPrint(arena, "{s} -> {s}", .{ reg.name, located }) });
+    }
+    if (found.len != 0) return lines.toOwnedSlice(arena);
+    if (config.from_env and elsewhere.len != 0) {
+        try lines.append(arena, .{ .name = "mcp", .status = .warn, .detail = try std.fmt.allocPrint(arena, "emetgate is registered in {s}, but CLAUDE_CONFIG_DIR makes claude read {s}, where it is not", .{ config.default_json.?, config.json }), .fix = try std.fmt.allocPrint(arena, "in a terminal with CLAUDE_CONFIG_DIR set: claude mcp add -s user emetgate -- \"{s}\" mcp", .{self_exe}) });
+        return lines.toOwnedSlice(arena);
+    }
+    try lines.append(arena, .{ .name = "mcp", .status = .ok, .detail = try std.fmt.allocPrint(arena, "no user or local registration in {s}; lockdown brings its own server", .{config.json}) });
+    return lines.toOwnedSlice(arena);
+}
+
+pub fn dataCheck(arena: Allocator, io: std.Io, local_app_data: []const u8) !Check {
+    const dir = try std.fs.path.join(arena, &.{ local_app_data, "emetgate" });
+    std.Io.Dir.cwd().access(io, dir, .{}) catch return .{ .name = "data", .status = .ok, .detail = try std.fmt.allocPrint(arena, "{s} (not created yet)", .{dir}) };
+    const size = install_probe.treeSize(arena, dir) catch |err| return .{ .name = "data", .status = .warn, .detail = try std.fmt.allocPrint(arena, "{s}: could not measure ({t})", .{ dir, err }) };
+    var text: std.Io.Writer.Allocating = .init(arena);
+    try text.writer.print("{s}: ", .{dir});
+    if (!size.complete) try text.writer.writeAll("over ");
+    try install_probe.writeBytes(&text.writer, size.bytes);
+    try text.writer.print(" in {d} files", .{size.files});
+    return .{ .name = "data", .status = .ok, .detail = text.written() };
 }
 
 fn appendClaude(arena: Allocator, io: std.Io, probe: Probe, checks: *std.ArrayList(Check)) !void {
@@ -234,6 +492,17 @@ fn appendClaude(arena: Allocator, io: std.Io, probe: Probe, checks: *std.ArrayLi
     try checks.append(arena, loginCheck(if (status) |text| loggedIn(arena, text) else null));
 }
 
+fn repoMissing(arena: Allocator, io: std.Io, probe: Probe, err: anyerror) Check {
+    const plain: Check = .{ .name = "repo", .status = .fail, .detail = std.fmt.allocPrint(arena, "{s} is not inside a git repository ({t})", .{ probe.cwd, err }) catch "not in a repository", .fix = "cd into your project, or run: git init" };
+    const env = probe.env orelse return plain;
+    var dir = std.Io.Dir.openDirAbsolute(io, probe.cwd, .{}) catch return plain;
+    defer dir.close(io);
+    if (lockdown.initRefusal(io, dir, probe.cwd, env)) |why| {
+        return .{ .name = "repo", .status = .fail, .detail = std.fmt.allocPrint(arena, "{s} is not a git repository and is {s}, so lockdown will not run git init here", .{ probe.cwd, why.text() }) catch plain.detail, .fix = "cd into your project folder" };
+    }
+    return .{ .name = "repo", .status = .warn, .detail = std.fmt.allocPrint(arena, "{s} is not a git repository yet; lockdown runs git init here first", .{probe.cwd}) catch plain.detail, .fix = "or run git init yourself, so doctor can check the tests too" };
+}
+
 pub fn loginCheck(state: ?bool) Check {
     const signed_in = state orelse return .{ .name = "login", .status = .warn, .detail = "could not read `claude auth status`", .fix = claude_login };
     if (signed_in) return .{ .name = "login", .status = .ok, .detail = "signed in" };
@@ -247,7 +516,7 @@ fn appendRepo(arena: Allocator, io: std.Io, probe: Probe, checks: *std.ArrayList
     };
     try checks.append(arena, .{ .name = "git", .status = .ok, .detail = git });
     const root = repo.gitToplevel(arena, io, probe.cwd) catch |err| {
-        try checks.append(arena, .{ .name = "repo", .status = .fail, .detail = std.fmt.allocPrint(arena, "{s} is not inside a git repository ({t})", .{ probe.cwd, err }) catch "not in a repository", .fix = "cd into your project, or run: git init" });
+        try checks.append(arena, repoMissing(arena, io, probe, err));
         return null;
     };
     try checks.append(arena, .{ .name = "repo", .status = .ok, .detail = root });
@@ -271,7 +540,13 @@ fn mcpAndTests(arena: Allocator, io: std.Io, probe: Probe, root: ?[]const u8, ch
             return .{ .name = "tests", .status = .fail, .detail = "skipped: .mcp.json could not be read" };
         },
     }
-    if (root == null) return .{ .name = "tests", .status = .fail, .detail = "skipped: needs a git repository" };
+    if (root == null) {
+        const repo_warned = for (checks.items) |check| {
+            if (std.mem.eql(u8, check.name, "repo")) break check.status == .warn;
+        } else false;
+        if (repo_warned) return .{ .name = "tests", .status = .warn, .detail = "skipped until the folder is a git repository" };
+        return .{ .name = "tests", .status = .fail, .detail = "skipped: needs a git repository" };
+    }
     const given = if (server.names_test) server.given else test_command.detect;
     const command = test_command.resolveTestCommand(arena, io, config_path, given, server.allow_repo_config) catch |err| return testFailure(err);
     if (test_command.takeUnverified()) return noTestsFound();

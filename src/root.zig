@@ -181,6 +181,8 @@ pub const map_command = @import("protocol/map_command.zig");
 pub const map_tools = @import("protocol/map_tools.zig");
 pub const find_tools = @import("protocol/find_tools.zig");
 pub const find_command = @import("protocol/find_command.zig");
+pub const cache_command = @import("protocol/cache_command.zig");
+pub const report_command = @import("protocol/report_command.zig");
 pub const diagnostics = @import("protocol/diagnostics.zig");
 pub const server = @import("protocol/server.zig");
 pub const workspace = @import("protocol/workspace.zig");
@@ -218,6 +220,7 @@ pub const markdown_heading = @import("engine/lang/markdown/heading.zig");
 pub const python_indent = @import("engine/lang/python/indent.zig");
 pub const source_check = @import("engine/source_check.zig");
 pub const self_update = @import("update/update.zig");
+pub const uninstall = @import("platform/uninstall.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

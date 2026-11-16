@@ -1,6 +1,7 @@
 const std = @import("std");
 const bounded_run = @import("bounded_run.zig");
 const checker = @import("../verify/checker.zig");
+const jcs = @import("../verify/jcs.zig");
 const receipt = @import("../verify/receipt.zig");
 const receipts = @import("receipts.zig");
 const verify_merge = @import("verify_merge.zig");
@@ -22,10 +23,18 @@ pub const Options = struct {
     limits: sandbox.Limits = .{},
 };
 
+pub const usage =
+    \\usage: emetgate verify <commit> --test "<trusted test command>" [--typecheck <command>] [--skip-tests] [--json]
+    \\       emetgate verify --branch <base[..head]> --test "<trusted test command>" [--typecheck <command>] [--skip-tests] [--json]
+    \\a receipt's own command is never rerun: without --test a commit whose receipts ran tests stays unverified (exit 53)
+    \\
+;
+
 pub const Result = struct {
     commit: []const u8,
     parent: ?[]const u8,
     report: checker.Report,
+    hint: ?[]const u8 = null,
 };
 
 const Context = struct {
@@ -39,6 +48,9 @@ const Context = struct {
     tests_ran: bool = false,
     typecheck: ?bool = null,
     typecheck_ran: bool = false,
+    missing_test: bool = false,
+    missing_typecheck: bool = false,
+    other_command: bool = false,
     rule_digests: std.StringHashMapUnmanaged(Hash) = .empty,
 
     fn blob(self: *Context, rev: ?[]const u8, path: []const u8) !?[]const u8 {
@@ -102,8 +114,18 @@ const Context = struct {
             .@"test" => self.options.test_command,
             .typecheck => self.options.typecheck_command,
             .run => null,
-        } orelse return null;
-        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) return null;
+        } orelse {
+            switch (kind) {
+                .@"test" => self.missing_test = true,
+                .typecheck => self.missing_typecheck = true,
+                .run => {},
+            }
+            return null;
+        };
+        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) {
+            self.other_command = true;
+            return null;
+        }
         const ran = if (kind == .@"test") &self.tests_ran else &self.typecheck_ran;
         const slot = if (kind == .@"test") &self.tests else &self.typecheck;
         if (!ran.*) {
@@ -170,7 +192,40 @@ pub fn run(gpa: Allocator, arena: Allocator, io: std.Io, runtime: *Runtime, root
         .before_text = Context.beforeText,
         .after_text = Context.afterText,
     });
-    return .{ .commit = commit, .parent = parent, .report = report };
+    return .{ .commit = commit, .parent = parent, .report = report, .hint = try hintFor(arena, &context, report, note) };
+}
+
+fn notRerunOnly(outcome: checker.Outcome) bool {
+    return outcome.verdict != .unverified or std.mem.eql(u8, outcome.reason, checker.not_rerun);
+}
+
+fn onlyNotRerun(report: checker.Report) bool {
+    for (report.receipts) |r| if (!notRerunOnly(r.outcome)) return false;
+    for (report.files) |f| if (!notRerunOnly(f.outcome)) return false;
+    return true;
+}
+
+fn recordedCommand(arena: Allocator, note: ?[]const u8, kind: receipt.CheckKind) ?[]const u8 {
+    const parsed = jcs.parse(arena, note orelse return null) catch return null;
+    if (parsed.value != .array) return null;
+    for (parsed.value.array.items) |item| {
+        const r = receipt.fromValue(arena, item) catch continue;
+        for (r.checks) |one| if (one.kind == kind) return one.command;
+    }
+    return null;
+}
+
+fn hintFor(arena: Allocator, context: *const Context, report: checker.Report, note: ?[]const u8) !?[]const u8 {
+    if (report.verdict != .unverified or context.other_command) return null;
+    if (!context.missing_test and !context.missing_typecheck) return null;
+    if (!onlyNotRerun(report)) return null;
+    var text: std.Io.Writer.Allocating = .init(arena);
+    const w = &text.writer;
+    const what = if (context.missing_test and context.missing_typecheck) "test and typecheck commands" else if (context.missing_test) "test command" else "typecheck command";
+    try w.print("pass the trusted {s}, e.g. emetgate verify {s}", .{ what, context.options.commit });
+    if (context.missing_test) try w.print(" --test \"{s}\"", .{recordedCommand(arena, note, .@"test") orelse "npm test"});
+    if (context.missing_typecheck) try w.print(" --typecheck \"{s}\"", .{recordedCommand(arena, note, .typecheck) orelse "npx tsc --noEmit"});
+    return text.written();
 }
 
 pub fn writeJson(w: *std.Io.Writer, result: Result) !void {
@@ -218,6 +273,10 @@ pub fn writeJson(w: *std.Io.Writer, result: Result) !void {
         try js.endObject();
     }
     try js.endArray();
+    if (result.hint) |hint| {
+        try js.objectField("hint");
+        try js.write(hint);
+    }
     try js.endObject();
     try w.writeByte('\n');
 }
@@ -236,6 +295,7 @@ pub fn writeText(w: *std.Io.Writer, result: Result) !void {
         if (r.outcome.reason.len != 0) try w.print("  ({s})", .{r.outcome.reason});
         try w.writeByte('\n');
     }
+    if (result.hint) |hint| try w.print("hint: {s}\n", .{hint});
 }
 
 pub fn exitCode(verdict: checker.Verdict) u8 {

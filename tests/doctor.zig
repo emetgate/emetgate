@@ -317,3 +317,247 @@ test "doctor: an .mcp.json whose emetgate server is not on disk fails the server
     try testing.expect(std.mem.indexOf(u8, text, "C:\\nowhere\\emetgate.exe") != null);
     try testing.expect(hasLine(text, "not ready: "));
 }
+
+fn touch(dir: []const u8, name: []const u8, data: []const u8) ![]const u8 {
+    try std.Io.Dir.cwd().createDirPath(testing.io, dir);
+    const path = try std.fs.path.join(testing.allocator, &.{ dir, name });
+    errdefer testing.allocator.free(path);
+    try std.Io.Dir.cwd().writeFile(testing.io, .{ .sub_path = path, .data = data });
+    return path;
+}
+
+test "doctor: every emetgate on PATH is listed in PATH order, once, and a missing folder is skipped" {
+    var place = try Place.make("path");
+    defer place.deinit();
+    const a = place.arena.allocator();
+    const first = try std.fs.path.join(a, &.{ place.dir, "first" });
+    const second = try std.fs.path.join(a, &.{ place.dir, "second" });
+    testing.allocator.free(try touch(first, "emetgate.exe", "x"));
+    testing.allocator.free(try touch(second, "emetgate.cmd", "x"));
+    const path_list = try std.fmt.allocPrint(a, "{s};C:\\no\\such\\folder;\"{s}\\\";{s}", .{ first, second, first });
+    const hits = try doctor.onPath(a, testing.io, path_list, ".COM;.EXE;.BAT;.CMD", "emetgate");
+    try testing.expectEqual(@as(usize, 2), hits.len);
+    try testing.expect(std.ascii.endsWithIgnoreCase(hits[0], "first\\emetgate.exe"));
+    try testing.expect(std.ascii.endsWithIgnoreCase(hits[1], "second\\emetgate.cmd"));
+}
+
+test "doctor: the path line is ok for one copy, and warns when another copy runs first or shadows the rest" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const self = "C:\\nowhere\\new\\emetgate.exe";
+    const old = "C:\\nowhere\\old\\emetgate.exe";
+
+    const none = try doctor.pathCheck(a, self, &.{}, null);
+    try testing.expectEqual(doctor.Status.warn, none.status);
+    try testing.expect(std.mem.indexOf(u8, none.fix, "C:\\nowhere\\new") != null);
+
+    const only = try doctor.pathCheck(a, self, &.{"c:\\NOWHERE\\new\\emetgate.exe"}, null);
+    try testing.expectEqual(doctor.Status.ok, only.status);
+
+    const shadowing = try doctor.pathCheck(a, self, &.{ old, self }, "0.9.0");
+    try testing.expectEqual(doctor.Status.warn, shadowing.status);
+    try testing.expect(std.mem.indexOf(u8, shadowing.detail, "runs C:\\nowhere\\old\\emetgate.exe (emetgate 0.9.0), not this C:\\nowhere\\new\\emetgate.exe; also on PATH: C:\\nowhere\\new\\emetgate.exe") != null);
+    try testing.expect(std.mem.indexOf(u8, shadowing.fix, "remove C:\\nowhere\\old from PATH") != null);
+
+    const shadowed = try doctor.pathCheck(a, self, &.{ self, old }, null);
+    try testing.expectEqual(doctor.Status.warn, shadowed.status);
+    try testing.expect(std.mem.indexOf(u8, shadowed.detail, "2 copies on PATH") != null);
+    try testing.expect(std.mem.indexOf(u8, shadowed.detail, old) != null);
+}
+
+test "doctor: the release line compares with the last release seen, and says why when it could not" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const newer = try doctor.releaseCheck(a, "0.10.4", .{ .latest = "0.10.5", .newer = true, .checked_ago_s = 3 * 3600 });
+    try testing.expectEqual(doctor.Status.warn, newer.status);
+    try testing.expectEqualStrings("emetgate 0.10.5 is out, this is 0.10.4 (checked 3 h ago)", newer.detail);
+    try testing.expectEqualStrings("emetgate update", newer.fix);
+
+    const latest = try doctor.releaseCheck(a, "0.10.4", .{ .latest = "0.10.4", .checked_ago_s = 5 * 86400 });
+    try testing.expectEqual(doctor.Status.ok, latest.status);
+    try testing.expectEqualStrings("0.10.4 is the latest release (checked 5 days ago)", latest.detail);
+
+    const offline = try doctor.releaseCheck(a, "0.10.4", .{ .offline = error.ConnectFailed });
+    try testing.expectEqual(doctor.Status.warn, offline.status);
+    try testing.expect(std.mem.indexOf(u8, offline.detail, "ConnectFailed") != null);
+
+    try testing.expect(std.mem.indexOf(u8, (try doctor.releaseCheck(a, "0.10.4", .{ .disabled = true })).detail, "EMETGATE_NO_UPDATE") != null);
+    try testing.expectEqual(doctor.Status.ok, (try doctor.releaseCheck(a, "0.0.0-dev", .{ .release_build = false })).status);
+    const replaced = try doctor.releaseCheck(a, "0.10.4", .{ .updated_to = "0.10.5", .latest = "0.10.5", .newer = true });
+    try testing.expect(std.mem.indexOf(u8, replaced.detail, "just replaced by emetgate 0.10.5") != null);
+}
+
+test "doctor: other emetgate processes are listed with pid and command line, and only warn" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expect(doctor.install_probe.isEmetgateImage("EMETGATE.EXE"));
+    try testing.expect(doctor.install_probe.isEmetgateImage("emetgate.old.exe"));
+    try testing.expect(!doctor.install_probe.isEmetgateImage("emetgate-helper.exe"));
+
+    try testing.expectEqual(doctor.Status.ok, (try doctor.processCheck(a, &.{})).status);
+    const two = try doctor.processCheck(a, &.{
+        .{ .pid = 41, .image = "C:\\x\\emetgate.exe", .command_line = "\"C:\\x\\emetgate.exe\" mcp --test \"npm test\"" },
+        .{ .pid = 42, .image = "C:\\y\\emetgate.exe", .command_line = "" },
+    });
+    try testing.expectEqual(doctor.Status.warn, two.status);
+    try testing.expectEqualStrings("2 other emetgate processes: pid 41 \"C:\\x\\emetgate.exe\" mcp --test \"npm test\"; pid 42 C:\\y\\emetgate.exe", two.detail);
+    try testing.expect(std.mem.indexOf(u8, two.fix, "stops nothing") != null);
+
+    const own = try doctor.install_probe.emetgateProcesses(a);
+    for (own) |process| try testing.expect(process.pid != 0);
+}
+
+test "doctor: claude's config folder is CLAUDE_CONFIG_DIR when set, else the home .claude, and a missing one warns" {
+    var place = try Place.make("config");
+    defer place.deinit();
+    const a = place.arena.allocator();
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try testing.expect((try doctor.claudeConfig(a, &env)) == null);
+    try testing.expectEqual(doctor.Status.warn, (try doctor.configCheck(a, testing.io, null)).status);
+
+    try env.put("USERPROFILE", "C:\\Users\\you");
+    const home = (try doctor.claudeConfig(a, &env)).?;
+    try testing.expectEqualStrings("C:\\Users\\you\\.claude", home.dir);
+    try testing.expectEqualStrings("C:\\Users\\you\\.claude.json", home.json);
+    try testing.expect(!home.from_env);
+    try testing.expectEqual(doctor.Status.ok, (try doctor.configCheck(a, testing.io, home)).status);
+
+    const missing = try std.fs.path.join(a, &.{ place.dir, "gone" });
+    try env.put("CLAUDE_CONFIG_DIR", missing);
+    const moved = (try doctor.claudeConfig(a, &env)).?;
+    try testing.expect(moved.from_env);
+    try testing.expectEqualStrings("C:\\Users\\you\\.claude.json", moved.default_json.?);
+    try testing.expect(std.mem.endsWith(u8, moved.json, "gone\\.claude.json"));
+    const warned = try doctor.configCheck(a, testing.io, moved);
+    try testing.expectEqual(doctor.Status.warn, warned.status);
+    try testing.expect(std.mem.indexOf(u8, warned.fix, "CLAUDE_CONFIG_DIR") != null);
+
+    try env.put("CLAUDE_CONFIG_DIR", place.dir);
+    const present = try doctor.configCheck(a, testing.io, (try doctor.claudeConfig(a, &env)).?);
+    try testing.expectEqual(doctor.Status.ok, present.status);
+    try testing.expect(std.mem.indexOf(u8, present.detail, "C:\\Users\\you\\.claude.json instead") != null);
+}
+
+test "doctor: user and local emetgate registrations are read from claude's config for this project only" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const config =
+        \\{"mcpServers": {"emetgate": {"type": "stdio", "command": "C:\\tools\\emetgate.exe", "args": ["mcp"]}, "other": {"command": "node", "args": ["x.js"]}},
+        \\ "projects": {"C:/Users/You/Proje": {"mcpServers": {"gate": {"command": "emetgate", "args": ["mcp", "--test", "npm test"]}}},
+        \\              "C:/Users/You/Other": {"mcpServers": {"emetgate": {"command": "emetgate", "args": ["mcp"]}}}}}
+    ;
+    const found = try doctor.registrations(a, config, &.{"c:\\users\\you\\proje\\"});
+    try testing.expectEqual(@as(usize, 2), found.len);
+    try testing.expectEqualStrings("user", found[0].scope);
+    try testing.expectEqualStrings("C:\\tools\\emetgate.exe", found[0].command);
+    try testing.expectEqualStrings("local", found[1].scope);
+    try testing.expectEqualStrings("gate", found[1].name);
+    try testing.expectEqual(@as(usize, 0), (try doctor.registrations(a, "{}", &.{"C:\\x"})).len);
+    try testing.expectError(error.McpConfigInvalid, doctor.registrations(a, "not json", &.{"C:\\x"}));
+}
+
+test "doctor: a registration whose exe is gone or is another copy warns, and one only in the other config folder is named" {
+    var place = try Place.make("registered");
+    defer place.deinit();
+    const a = place.arena.allocator();
+    const self = try touch(place.dir, "emetgate.exe", "x");
+    defer testing.allocator.free(self);
+    const config: doctor.ClaudeConfig = .{ .dir = "D:\\cfg", .json = "D:\\cfg\\.claude.json", .from_env = true, .default_json = "C:\\Users\\you\\.claude.json" };
+
+    const lines = try doctor.registrationChecks(a, testing.io, self, config, &.{
+        .{ .scope = "user", .name = "emetgate", .command = self },
+        .{ .scope = "local", .name = "gate", .command = "C:\\no\\such\\emetgate.exe" },
+    }, &.{});
+    try testing.expectEqual(@as(usize, 2), lines.len);
+    try testing.expectEqual(doctor.Status.ok, lines[0].status);
+    try testing.expectEqualStrings("mcp user", lines[0].name);
+    try testing.expectEqual(doctor.Status.warn, lines[1].status);
+    try testing.expectEqualStrings("mcp local", lines[1].name);
+    try testing.expect(std.mem.indexOf(u8, lines[1].detail, "C:\\no\\such\\emetgate.exe, which is not there") != null);
+    try testing.expect(std.mem.indexOf(u8, lines[1].fix, "claude mcp remove gate -s local") != null);
+
+    const split = try doctor.registrationChecks(a, testing.io, self, config, &.{}, &.{.{ .scope = "user", .name = "emetgate", .command = self }});
+    try testing.expectEqual(doctor.Status.warn, split[0].status);
+    try testing.expect(std.mem.indexOf(u8, split[0].detail, "registered in C:\\Users\\you\\.claude.json, but CLAUDE_CONFIG_DIR makes claude read D:\\cfg\\.claude.json") != null);
+
+    const nowhere = try doctor.registrationChecks(a, testing.io, self, .{ .dir = "C:\\h\\.claude", .json = "C:\\h\\.claude.json", .from_env = false }, &.{}, &.{});
+    try testing.expectEqual(doctor.Status.ok, nowhere[0].status);
+}
+
+test "doctor: the data line gives emetgate's data folder and its size" {
+    var place = try Place.make("data");
+    defer place.deinit();
+    const a = place.arena.allocator();
+    const empty = try doctor.dataCheck(a, testing.io, place.dir);
+    try testing.expect(std.mem.endsWith(u8, empty.detail, "emetgate (not created yet)"));
+
+    const data = try std.fs.path.join(a, &.{ place.dir, "emetgate" });
+    testing.allocator.free(try touch(data, "a", "0123456789"));
+    testing.allocator.free(try touch(try std.fs.path.join(a, &.{ data, "deep", "er" }), "b", "01234"));
+    const measured = try doctor.dataCheck(a, testing.io, place.dir);
+    try testing.expectEqual(doctor.Status.ok, measured.status);
+    try testing.expect(std.mem.endsWith(u8, measured.detail, "emetgate: 15 B in 2 files"));
+
+    var buf: [32]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try doctor.install_probe.writeBytes(&w, 3 * 1024 * 1024 + 512 * 1024);
+    try testing.expectEqualStrings("3.5 MiB", w.buffered());
+}
+
+test "doctor: --json gives every line as an object with name, status, detail and fix, plus ready" {
+    var place = try Place.make("json");
+    defer place.deinit();
+    try git_fixture.initRepo(place.dir);
+    const a = place.arena.allocator();
+    const local = try std.fs.path.join(a, &.{ place.dir, "local" });
+    try std.Io.Dir.cwd().createDirPath(testing.io, local);
+    const bin = try std.fs.path.join(a, &.{ place.dir, "bin" });
+    testing.allocator.free(try touch(bin, "emetgate.exe", "not an exe"));
+    var env = std.process.Environ.Map.init(testing.allocator);
+    defer env.deinit();
+    try env.put("PATH", bin);
+    try env.put("USERPROFILE", place.dir);
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    const code = try doctor.run(testing.allocator, testing.io, .{
+        .cwd = place.dir,
+        .claude = "emetgate-doctor-no-such-claude",
+        .self_exe = "C:\\nowhere\\emetgate.exe",
+        .local_app_data = local,
+        .version = "0.0.0",
+        .env = &env,
+        .release = .{ .latest = "0.0.1", .newer = true, .checked_ago_s = 60 },
+        .json = true,
+    }, &out.writer);
+    try testing.expectEqual(@as(u8, 1), code);
+    const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, out.written(), .{});
+    defer parsed.deinit();
+    try testing.expectEqual(false, parsed.value.object.get("ready").?.bool);
+    try testing.expectEqualStrings("0.0.0", parsed.value.object.get("version").?.string);
+    var seen: usize = 0;
+    for (parsed.value.object.get("checks").?.array.items) |item| {
+        const name = item.object.get("name").?.string;
+        const status = item.object.get("status").?.string;
+        if (std.mem.eql(u8, name, "path")) {
+            try testing.expectEqualStrings("warn", status);
+            seen += 1;
+        }
+        if (std.mem.eql(u8, name, "release")) {
+            try testing.expectEqualStrings("warn", status);
+            seen += 1;
+        }
+        if (std.mem.eql(u8, name, "config") or std.mem.eql(u8, name, "mcp") or std.mem.eql(u8, name, "data") or std.mem.eql(u8, name, "repo")) {
+            try testing.expectEqualStrings("ok", status);
+            seen += 1;
+        }
+        if (std.mem.eql(u8, name, "claude")) try testing.expectEqualStrings("fail", status);
+        try testing.expect(item.object.get("fix") != null and item.object.get("detail") != null);
+    }
+    try testing.expectEqual(@as(usize, 6), seen);
+}

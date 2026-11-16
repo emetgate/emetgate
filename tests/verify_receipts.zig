@@ -251,6 +251,57 @@ test "verify: a receipt's command never runs, only the trusted one, and a differ
     try testing.expectEqual(checker.Verdict.unverified, skipped.report.verdict);
 }
 
+test "verify: without a trusted test command the change stays unverified and the hint names the recorded command" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    try case.commit("one");
+    _ = try case.attach();
+
+    const bare = try case.verify(.{ .commit = "HEAD" });
+    try testing.expectEqual(checker.Verdict.unverified, bare.report.verdict);
+    try testing.expectEqual(@as(u8, 53), verify_run.exitCode(bare.report.verdict));
+    try testing.expectEqualStrings("pass the trusted test command, e.g. emetgate verify HEAD --test \"cmd /c exit 0\"", bare.hint.?);
+
+    var text: std.Io.Writer.Allocating = .init(case.arena());
+    try verify_run.writeText(&text.writer, bare);
+    try testing.expect(std.mem.endsWith(u8, text.written(), "\nhint: pass the trusted test command, e.g. emetgate verify HEAD --test \"cmd /c exit 0\"\n"));
+
+    var json: std.Io.Writer.Allocating = .init(case.arena());
+    try verify_run.writeJson(&json.writer, bare);
+    const parsed = try std.json.parseFromSlice(std.json.Value, case.arena(), json.written(), .{});
+    try testing.expectEqualStrings("unverified", parsed.value.object.get("verdict").?.string);
+    try testing.expectEqualStrings(bare.hint.?, parsed.value.object.get("hint").?.string);
+
+    const other = try case.verify(.{ .commit = "HEAD", .test_command = "cmd /c exit 1" });
+    try testing.expectEqual(checker.Verdict.unverified, other.report.verdict);
+    try testing.expect(other.hint == null);
+
+    const skipped = try case.verify(.{ .commit = "HEAD", .skip_tests = true });
+    try testing.expect(skipped.hint == null);
+
+    const trusted = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.verified, trusted.report.verdict);
+    try testing.expect(trusted.hint == null);
+    var quiet: std.Io.Writer.Allocating = .init(case.arena());
+    try verify_run.writeText(&quiet.writer, trusted);
+    try testing.expect(std.mem.indexOf(u8, quiet.written(), "hint:") == null);
+}
+
+test "verify: a change without a receipt gets no test command hint" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    try case.repo.write("src/math.ts", "export function add(a: number, b: number): number {\n  return a - b;\n}\n");
+    try case.commit("by hand");
+    const result = try case.verify(.{ .commit = "HEAD" });
+    try testing.expectEqual(checker.Verdict.unverified, result.report.verdict);
+    try testing.expect(result.hint == null);
+}
+
 test "verify: a rule the receipt names with a changed digest is a mismatch" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var case: Case = undefined;

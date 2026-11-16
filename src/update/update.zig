@@ -13,6 +13,7 @@ pub const sig_asset = "emetgate.exe.sig";
 pub const old_name = "emetgate.old.exe";
 pub const new_name = "emetgate.new.exe";
 pub const stamp_path = "update\\last-check";
+pub const latest_path = "update\\latest";
 pub const no_update_variable = "EMETGATE_NO_UPDATE";
 pub const ci_variable = "CI";
 pub const check_interval_s: i64 = 24 * 60 * 60;
@@ -388,7 +389,42 @@ pub fn autoCheck(updater: Updater, env: *const std.process.Environ.Map, build_al
     var buf: [24]u8 = undefined;
     const text = std.fmt.bufPrint(&buf, "{d}", .{now}) catch return null;
     updater.system.write(stamp, text) catch return null;
-    return updater.run();
+    const outcome = updater.run();
+    recordLatest(updater.gpa, updater.system, data_dir, outcome);
+    return outcome;
+}
+
+pub fn recordLatest(gpa: Allocator, system: System, data_dir: []const u8, outcome: Outcome) void {
+    const version = switch (outcome) {
+        .up_to_date, .updated => |found| found,
+        else => return,
+    };
+    const path = std.fs.path.join(gpa, &.{ data_dir, latest_path }) catch return;
+    defer gpa.free(path);
+    var buf: [64]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "{f}", .{version}) catch return;
+    system.write(path, text) catch {};
+}
+
+pub const Known = struct {
+    latest: ?Version = null,
+    checked_at: ?i64 = null,
+};
+
+pub fn known(gpa: Allocator, system: System, data_dir: []const u8) Known {
+    var found: Known = .{};
+    if (std.fs.path.join(gpa, &.{ data_dir, stamp_path })) |stamp| {
+        defer gpa.free(stamp);
+        found.checked_at = readStamp(gpa, system, stamp);
+    } else |_| {}
+    if (std.fs.path.join(gpa, &.{ data_dir, latest_path })) |path| {
+        defer gpa.free(path);
+        if (system.read(gpa, path, 64)) |text| {
+            defer gpa.free(text);
+            found.latest = Version.parse(std.mem.trim(u8, text, " \t\r\n"));
+        } else |_| {}
+    } else |_| {}
+    return found;
 }
 
 fn readStamp(gpa: Allocator, system: System, path: []const u8) ?i64 {

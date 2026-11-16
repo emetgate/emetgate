@@ -356,7 +356,7 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
                     continue;
                 }
                 const passed = c.source.check(c.source.context, one.kind, one.command_digest) orelse {
-                    outcome.raise(.unverified, "the check was not rerun with the same trusted command");
+                    outcome.raise(.unverified, not_rerun);
                     continue;
                 };
                 if (!passed) outcome.raise(.mismatch, "the check fails at this commit");
@@ -416,6 +416,8 @@ fn checkSymmetry(c: *Checker, r: Receipt, known: []const Known, outcome: *Outcom
         },
     }
 }
+
+pub const not_rerun = "the check was not rerun with the same trusted command";
 
 pub const run_not_rerun = "the files a command wrote are recorded, not reproduced";
 

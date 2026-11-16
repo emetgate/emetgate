@@ -76,6 +76,14 @@ Claude Code'un hook'larıyla ve ESLint'le bunun bir kısmını kendin kurabilirs
 
 <img src="../assets/readme/term-verify-tr.svg" alt="emetgate verify çıktısı" width="100%">
 
+Bir commit'i güvendiğin test komutuyla kontrol et; makbuzda kayıtlı komut asla yeniden çalıştırılmaz, bu yüzden `--test` olmadan commit `unverified` kalır:
+
+```
+emetgate verify HEAD --test "npm test"
+```
+
+**Bir oturumun maliyetini gör.** `emetgate report`, projede emetgate araçlarını çağıran son oturumu özetler: süre, model turları, input, output ve cache tokenları, USD cinsinden tahmini maliyet, isme göre araç çağrıları ve kapının yaptıkları (kabul ve red edilen yazmalar, kural ihlalleri, test çalıştırmaları, makbuzlar, commit'ler). `--session <id>` tek bir oturumu seçer, `--all` bütün oturumları tablo halinde listeler, `--json` aynı sayıları JSON olarak yazar. Tokenlar Claude Code'un kendi oturum kaydından gelir (`CLAUDE_CONFIG_DIR` ya da `~/.claude` altındaki `projects/`); maliyet model başına yerleşik liste fiyatlarıyla hesaplanır, yani faturan değil bir tahmindir.
+
 ## 2 dakikada başla
 
 PowerShell'de çalıştır, sonra yeni bir terminal aç:
@@ -92,7 +100,31 @@ emetgate rule pick 1 19 26
 emetgate lockdown
 ```
 
-`emetgate lockdown` Claude Code'u yalnızca emetgate araçlarıyla başlatır. Adım adım: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+`emetgate doctor` tek ekranlık bir kurulum kontrolüdür; her satır `ok`, `warn` ya da `FAIL` ve yanında çözümü: PATH'in hangi emetgate'i çalıştırdığı ve gölgede kalan kopyalar, yeni sürüm olup olmadığı, claude ve okuduğu config klasörü (`CLAUDE_CONFIG_DIR` ya da `~/.claude`), emetgate'in MCP sunucusu olarak nerede kayıtlı olduğu, çalışan diğer emetgate süreçleri, veri klasörünün boyutu ve bu klasörün bir git deposu olup olmadığı. `--json` aynısını JSON olarak yazar.
+
+`emetgate lockdown` Claude Code'u yalnızca emetgate araçlarıyla başlatır. Ev klasöründen ya da sürücü kökünden değil, proje klasörünün (bir git deposu) içinden çalıştır. Adım adım: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+
+## Kaldırma
+
+```
+emetgate uninstall
+emetgate uninstall --yes
+```
+
+İlk komut hiçbir şey silmez: program klasörünü (`%LOCALAPPDATA%\Programs\emetgate`), kullanıcı PATH'indeki kaydını ve veri klasörünü (`%LOCALAPPDATA%\emetgate`, birkaç GB'a çıkabilen cache'ler) boyutuyla listeler. `--yes` bunları siler; veri klasörünü tutmak için `--keep-cache` ekle. Çalışan bir emetgate.exe kendini silemediği için program klasörü komut bittikten birkaç saniye sonra gider. Başka emetgate süreçleri çalışıyorsa PID'lerini listeler ve sen onları kapatana kadar hiçbir şey silmez. Her projedeki `.emetgate` klasörü ve `.mcp.json` kaydı kalır; onları elle sil.
+
+### Disk kullanımı
+
+emetgate proje başına cache'leri (arama indeksi, olgular, testlerin çalıştığı kopya) `%LOCALAPPDATA%\emetgate` altında tutar. Sunucu günde bir kez 30 gündür kullanılmayan cache'leri siler. Kendin görmek ve azaltmak için:
+
+```
+emetgate cache size                  # total, per folder and per project (--json for scripts)
+emetgate cache prune --dry-run       # what would go, nothing deleted
+emetgate cache prune                 # remove caches unused for 14 days (--older-than <days>)
+emetgate cache prune --all           # remove every cache no running emetgate is using
+```
+
+Çalışan bir emetgate'in kiraladığı cache asla silinmez. Ortak `cache` ve `run-tmp` klasörleri (paket cache'leri ve sandbox komutlarının TEMP'i) yalnızca `--all` ile ve yalnızca başka emetgate süreci çalışmıyorken temizlenir.
 
 ## Sınırlar
 
@@ -123,7 +155,7 @@ Kural kontrolleri sözdizimi ağacı sorguları (`no_comment`, `require_comment`
 <details>
 <summary>Arama ve doğrulama: kullanılan teknikler</summary>
 
-Arama bir suffix array indeksi ve trigram listeleri kullanır; cevabın tam mı kısmi mi olduğunu okunan her dosyanın SHA-256'sı üzerinde bir RFC 9162 Merkle köküyle gösterir ve ripgrep ile satır satır karşılaştırılır. Commit kayıtları in-toto biçimindedir ve `emetgate verify --branch main..HEAD` bütün bir aralığı kontrol eder; makbuzu olmayan commit `partial` sayılır. Ayrıntılar: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
+Arama bir suffix array indeksi ve trigram listeleri kullanır; cevabın tam mı kısmi mi olduğunu okunan her dosyanın SHA-256'sı üzerinde bir RFC 9162 Merkle köküyle gösterir ve ripgrep ile satır satır karşılaştırılır. Commit kayıtları in-toto biçimindedir ve `emetgate verify --branch main..HEAD --test "<cmd>"` bütün bir aralığı kontrol eder; makbuzu olmayan commit `partial` sayılır. Ayrıntılar: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
 
 </details>
 
