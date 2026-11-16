@@ -76,6 +76,14 @@ Claude Code의 hook과 ESLint로 일부는 직접 만들 수 있습니다. 차�
 
 <img src="../assets/readme/term-verify-en.svg" alt="emetgate verify 출력" width="100%">
 
+신뢰하는 테스트 명령으로 커밋을 확인하세요. 영수증에 기록된 명령은 절대 다시 실행되지 않으므로 `--test` 없이는 커밋이 `unverified`로 남습니다:
+
+```
+emetgate verify HEAD --test "npm test"
+```
+
+**세션 비용 보기.** `emetgate report`는 프로젝트에서 emetgate 도구를 호출한 최근 세션을 요약합니다: 소요 시간, 모델 턴, input·output·cache 토큰, USD 기준 예상 비용, 이름별 도구 호출, 그리고 게이트가 한 일(적용·거부된 쓰기, 규칙 위반, 테스트 실행, 영수증, 커밋). `--session <id>`는 세션 하나를 고르고, `--all`은 모든 세션을 표로 보여 주며, `--json`은 같은 숫자를 JSON으로 출력합니다. 토큰은 Claude Code 자체 기록(`CLAUDE_CONFIG_DIR` 또는 `~/.claude` 아래 `projects/`)에서 가져오며, 비용은 모델별 내장 정가로 계산하므로 청구액이 아니라 추정치입니다.
+
 ## 2분 만에 시작하기
 
 PowerShell에서 실행한 뒤 새 터미널을 엽니다:
@@ -92,7 +100,31 @@ emetgate rule pick 1 19 26
 emetgate lockdown
 ```
 
-`emetgate lockdown`은 emetgate 도구만으로 Claude Code를 시작합니다. 단계별 안내: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+`emetgate doctor`는 한 화면짜리 설치 점검입니다. 각 줄은 `ok`, `warn` 또는 `FAIL`과 해결 방법을 보여 줍니다: PATH가 실행하는 emetgate와 가려진 사본, 새 릴리스 여부, claude와 그것이 읽는 설정 폴더(`CLAUDE_CONFIG_DIR` 또는 `~/.claude`), emetgate가 MCP 서버로 등록된 위치, 실행 중인 다른 emetgate 프로세스, 데이터 폴더 크기, 그리고 이 폴더가 git 저장소인지. `--json`은 같은 내용을 JSON으로 출력합니다.
+
+`emetgate lockdown`은 emetgate 도구만으로 Claude Code를 시작합니다. 홈 폴더나 드라이브 루트가 아니라 프로젝트 폴더(git 저장소) 안에서 실행하세요. 단계별 안내: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+
+## 제거
+
+```
+emetgate uninstall
+emetgate uninstall --yes
+```
+
+첫 번째 명령은 아무것도 지우지 않습니다: 프로그램 폴더(`%LOCALAPPDATA%\Programs\emetgate`), 사용자 PATH의 항목, 데이터 폴더(`%LOCALAPPDATA%\emetgate`, 몇 GB까지 커질 수 있는 캐시)를 크기와 함께 보여 줍니다. `--yes`는 이것들을 지우고, 데이터 폴더를 남기려면 `--keep-cache`를 붙이세요. 실행 중인 emetgate.exe는 자신을 지울 수 없으므로 프로그램 폴더는 명령이 끝나고 몇 초 뒤에 사라집니다. 다른 emetgate 프로세스가 실행 중이면 PID를 보여 주고, 그것들을 닫을 때까지 아무것도 지우지 않습니다. 각 프로젝트의 `.emetgate` 폴더와 `.mcp.json` 항목은 남으니 직접 지우세요.
+
+### 디스크 사용량
+
+emetgate는 프로젝트별 캐시(검색 인덱스, 사실 정보, 테스트가 실행되는 사본)를 `%LOCALAPPDATA%\emetgate` 아래에 둡니다. 서버는 하루에 한 번 30일 동안 쓰이지 않은 캐시를 지웁니다. 직접 확인하고 줄이려면:
+
+```
+emetgate cache size                  # total, per folder and per project (--json for scripts)
+emetgate cache prune --dry-run       # what would go, nothing deleted
+emetgate cache prune                 # remove caches unused for 14 days (--older-than <days>)
+emetgate cache prune --all           # remove every cache no running emetgate is using
+```
+
+실행 중인 emetgate가 임대한 캐시는 절대 지워지지 않습니다. 공유 `cache`와 `run-tmp` 폴더(패키지 캐시와 샌드박스 명령의 TEMP)는 `--all`로만, 그리고 다른 emetgate 프로세스가 실행 중이지 않을 때만 비워집니다.
 
 ## 한계
 
@@ -123,7 +155,7 @@ emetgate lockdown
 <details>
 <summary>검색과 검증: 사용하는 기법</summary>
 
-검색은 suffix array 인덱스와 trigram 목록을 사용합니다. 읽은 모든 파일의 SHA-256 위에 RFC 9162 Merkle 루트를 계산해 응답이 완전한지 부분적인지 보여 주며, ripgrep과 줄 단위로 비교됩니다. 커밋 기록은 in-toto 형식이고, `emetgate verify --branch main..HEAD`는 범위 전체를 검사합니다. 영수증이 없는 커밋은 `partial`로 처리됩니다. 자세한 내용: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
+검색은 suffix array 인덱스와 trigram 목록을 사용합니다. 읽은 모든 파일의 SHA-256 위에 RFC 9162 Merkle 루트를 계산해 응답이 완전한지 부분적인지 보여 주며, ripgrep과 줄 단위로 비교됩니다. 커밋 기록은 in-toto 형식이고, `emetgate verify --branch main..HEAD --test "<cmd>"`는 범위 전체를 검사합니다. 영수증이 없는 커밋은 `partial`로 처리됩니다. 자세한 내용: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
 
 </details>
 

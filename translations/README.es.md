@@ -76,6 +76,14 @@ Con los hooks de Claude Code y ESLint puedes montar parte de esto tú mismo. La 
 
 <img src="../assets/readme/term-verify-en.svg" alt="Salida de emetgate verify" width="100%">
 
+Comprueba un commit con el comando de pruebas en el que confías; el comando que registra un recibo nunca se vuelve a ejecutar, así que sin `--test` el commit queda `unverified`:
+
+```
+emetgate verify HEAD --test "npm test"
+```
+
+**Mira cuánto costó una sesión.** `emetgate report` resume la última sesión del proyecto que llamó a las herramientas de emetgate: duración, turnos del modelo, tokens de input, output y caché, un coste estimado en USD, llamadas a herramientas por nombre y lo que hizo la puerta (escrituras aplicadas y rechazadas, violaciones de reglas, ejecuciones de pruebas, recibos, commits). `--session <id>` elige una sesión, `--all` lista todas en una tabla y `--json` imprime los mismos números en JSON. Los tokens salen del propio registro de Claude Code (`projects/` bajo `CLAUDE_CONFIG_DIR`, o `~/.claude`); el coste usa precios de lista integrados por modelo, así que es una estimación, no tu factura.
+
 ## Empieza en 2 minutos
 
 En PowerShell, y luego abre una terminal nueva:
@@ -92,7 +100,31 @@ emetgate rule pick 1 19 26
 emetgate lockdown
 ```
 
-`emetgate lockdown` inicia Claude Code solo con las herramientas de emetgate. Paso a paso: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+`emetgate doctor` es una comprobación de instalación en una pantalla, una línea `ok`, `warn` o `FAIL` cada una con su solución: qué emetgate ejecuta el PATH y las copias ocultas, si hay una versión nueva, claude y la carpeta de configuración que lee (`CLAUDE_CONFIG_DIR` o `~/.claude`), dónde está registrado emetgate como servidor MCP, otros procesos de emetgate en ejecución, el tamaño de la carpeta de datos y si esta carpeta es un repositorio git. `--json` imprime lo mismo en JSON.
+
+`emetgate lockdown` inicia Claude Code solo con las herramientas de emetgate. Ejecútalo dentro de la carpeta de tu proyecto (un repositorio git), no desde tu carpeta personal ni desde la raíz de una unidad. Paso a paso: [docs/QUICKSTART.md](../docs/QUICKSTART.md).
+
+## Desinstalar
+
+```
+emetgate uninstall
+emetgate uninstall --yes
+```
+
+El primer comando no borra nada: lista la carpeta del programa (`%LOCALAPPDATA%\Programs\emetgate`), su entrada en tu PATH de usuario y la carpeta de datos (`%LOCALAPPDATA%\emetgate`, cachés que pueden llegar a varios GB) con su tamaño. `--yes` los borra; añade `--keep-cache` para conservar la carpeta de datos. La carpeta del programa desaparece unos segundos después de que el comando termina, porque un emetgate.exe en ejecución no puede borrarse a sí mismo. Si hay otros procesos de emetgate en ejecución, lista sus PID y no borra nada hasta que los cierres. La carpeta `.emetgate` y la entrada de `.mcp.json` de cada proyecto se quedan; bórralas a mano.
+
+### Uso de disco
+
+emetgate guarda cachés por proyecto (índice de búsqueda, hechos, la copia sobre la que corren las pruebas) en `%LOCALAPPDATA%\emetgate`. El servidor borra una vez al día las cachés sin usar durante 30 días. Para verlas y recortarlas tú mismo:
+
+```
+emetgate cache size                  # total, per folder and per project (--json for scripts)
+emetgate cache prune --dry-run       # what would go, nothing deleted
+emetgate cache prune                 # remove caches unused for 14 days (--older-than <days>)
+emetgate cache prune --all           # remove every cache no running emetgate is using
+```
+
+Una caché que un emetgate en ejecución tiene arrendada nunca se borra. Las carpetas compartidas `cache` y `run-tmp` (cachés de paquetes y TEMP de los comandos aislados) solo se vacían con `--all`, y solo mientras no corra ningún otro proceso de emetgate.
 
 ## Límites
 
@@ -123,7 +155,7 @@ Las comprobaciones de reglas son consultas sobre el árbol sintáctico (`no_comm
 <details>
 <summary>Búsqueda y verificación: las técnicas</summary>
 
-La búsqueda usa un índice de suffix array y listas de trigramas; muestra si una respuesta es completa o parcial con una raíz Merkle RFC 9162 sobre el SHA-256 de cada archivo leído, y se compara línea por línea con ripgrep. Los registros de commit son declaraciones in-toto, y `emetgate verify --branch main..HEAD` revisa un rango entero; un commit sin recibo cuenta como `partial`. Detalles: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
+La búsqueda usa un índice de suffix array y listas de trigramas; muestra si una respuesta es completa o parcial con una raíz Merkle RFC 9162 sobre el SHA-256 de cada archivo leído, y se compara línea por línea con ripgrep. Los registros de commit son declaraciones in-toto, y `emetgate verify --branch main..HEAD --test "<cmd>"` revisa un rango entero; un commit sin recibo cuenta como `partial`. Detalles: [REFERENCE.md](../REFERENCE.md), [VERIFICATION.md](../VERIFICATION.md).
 
 </details>
 

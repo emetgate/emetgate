@@ -5919,8 +5919,8 @@
     {
       "id": "VR5-trusted-command-not-matched",
       "file": "src/platform/verify_run.zig",
-      "from": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) return null;\n",
-      "to": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest) and false) return null;\n",
+      "from": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest)) {\n",
+      "to": "        if (!std.mem.eql(u8, &receipt.blake3(trusted), &digest) and false) {\n",
       "kills": [
         "verify: a receipt's command never runs, only the trusted one, and a different command leaves the change unverified"
       ]
@@ -14129,7 +14129,7 @@
     {
       "id": "DR8-doctor-tests-looked-up-outside-repo",
       "file": "src/platform/doctor.zig",
-      "from": "    if (root == null) return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: needs a git repository\" };\n",
+      "from": "        return .{ .name = \"tests\", .status = .fail, .detail = \"skipped: needs a git repository\" };\n",
       "to": "",
       "kills": [
         "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
@@ -14138,8 +14138,8 @@
     {
       "id": "DR9-doctor-not-in-repo-only-warns",
       "file": "src/platform/doctor.zig",
-      "from": "        try checks.append(arena, .{ .name = \"repo\", .status = .fail,",
-      "to": "        try checks.append(arena, .{ .name = \"repo\", .status = .warn,",
+      "from": "    const plain: Check = .{ .name = \"repo\", .status = .fail,",
+      "to": "    const plain: Check = .{ .name = \"repo\", .status = .warn,",
       "kills": [
         "doctor: outside a git repository the repo check fails and doctor exits 1 with the fix"
       ]
@@ -16816,8 +16816,8 @@
     {
       "id": "GC3-age-ignored",
       "file": "src/platform/cache_gc.zig",
-      "from": "const aged = now - last_used > policy.maxAgeNs();",
-      "to": "const aged = now - last_used > policy.maxAgeNs() * 1000;",
+      "from": "const aged = policy.max_age_days == 0 or now - last_used > policy.maxAgeNs();",
+      "to": "const aged = policy.max_age_days == 0 or now - last_used > policy.maxAgeNs() * 1000;",
       "kills": [
         "an entry unused for longer than the age limit is removed, and the limit can be raised"
       ]
@@ -16870,8 +16870,8 @@
     {
       "id": "GC9-failure-not-counted",
       "file": "src/platform/cache_gc.zig",
-      "from": "        self.failed += 1;\n",
-      "to": "",
+      "from": "    fn fail(self: *Report, err: anyerror) void {\n        self.failed += 1;\n",
+      "to": "    fn fail(self: *Report, err: anyerror) void {\n",
       "kills": [
         "an entry the sweep could not remove is reported, not swallowed, and a link target outside the data directory survives"
       ]
