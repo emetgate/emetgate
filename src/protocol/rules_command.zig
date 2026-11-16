@@ -95,7 +95,7 @@ fn applySave(gpa: Allocator, io: std.Io, root_abs: []const u8, ed: *rules_tui.Ed
 
     var applied_forgets: usize = 0;
     for (forgets.items) |f| {
-        rule_command.runAs(.spoken, gpa, io, root_abs, .{ .forget = f.id }, out, err_out) catch |err| switch (err) {
+        rule_command.runAs(.spoken, gpa, io, root_abs, .{ .forget = .{ .id = f.id } }, out, err_out) catch |err| switch (err) {
             error.OutOfMemory, error.WriteFailed => return err,
             else => {
                 try out.print("skip forget {s}: {t}\n", .{ f.id, err });

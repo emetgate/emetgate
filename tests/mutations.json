@@ -3493,8 +3493,8 @@
     {
       "id": "CMD8-command-not-found-called-a-violation",
       "file": "src/platform/rules.zig",
-      "from": "    if (!try resolvable(gpa, io, options.shadow_abs, head))",
-      "to": "    if (false and !try resolvable(gpa, io, options.shadow_abs, head))",
+      "from": "    if (!found) return failedGate(gpa, rule, file, \"command_not_found\", head);",
+      "to": "    if (false and !found) return failedGate(gpa, rule, file, \"command_not_found\", head);",
       "kills": [
         "cmd rule: a command that does not exist is not a verdict either"
       ]
@@ -8678,7 +8678,7 @@
     {
       "id": "SL11-rule-unknown-id-lists-nothing",
       "file": "src/protocol/rule_command.zig",
-      "from": "            error.DecisionNotActive => try list(voice, gpa, io, root_abs, .{}, err_out),",
+      "from": "            error.DecisionNotActive => try list(voice, gpa, io, root_abs, .{ .global = request.global() }, err_out),",
       "to": "            error.DecisionNotActive => {},",
       "kills": [
         "prompt hook: a refused rule answers with the error name and the names that exist, and writes nothing"
@@ -10829,8 +10829,8 @@
     {
       "id": "KT14-held-directory-opened-with-delete-child",
       "file": "src/platform/own_dir.zig",
-      "from": "        win.generic_read | win.generic_write | win.file_traverse,",
-      "to": "        win.generic_read | win.generic_write | win.file_traverse | 0x00000040,",
+      "from": ".read_write => win.generic_read | win.generic_write | win.file_traverse,",
+      "to": ".read_write => win.generic_read | win.generic_write | win.file_traverse | 0x00000040,",
       "kills": [
         "gate tree rights: a doc write and a batch are committed in a repository the user may modify but not fully control"
       ]
@@ -11007,8 +11007,8 @@
     {
       "id": "RA1-hook-answers-in-the-terse-voice",
       "file": "src/protocol/prompt_hook.zig",
-      "from": "    try rule_command.runAs(.spoken, gpa, io, try root, request, reason, reason);",
-      "to": "    try rule_command.runAs(.terse, gpa, io, try root, request, reason, reason);",
+      "from": "    try rule_command.runAs(.spoken, gpa, io, root, request, reason, reason);",
+      "to": "    try rule_command.runAs(.terse, gpa, io, root, request, reason, reason);",
       "kills": [
         "prompt hook: /rule add adopts the rule and answers with its id",
         "prompt hook: /rule list answers with the rows emetgate rule list prints"
@@ -11026,8 +11026,8 @@
     {
       "id": "RA3-empty-list-says-nothing",
       "file": "src/protocol/rule_command.zig",
-      "from": "    if (decisions.len == 0) return out.writeAll(nothing_kept);",
-      "to": "    if (false and decisions.len == 0) return out.writeAll(nothing_kept);",
+      "from": "    if (rows.len == 0) return out.writeAll(nothing_kept);",
+      "to": "    if (false and rows.len == 0) return out.writeAll(nothing_kept);",
       "kills": [
         "prompt hook: /rule forget removes the rule, and a command that prints nothing still answers"
       ]
@@ -19519,6 +19519,194 @@
       "to": "",
       "kills": [
         "doctor: an .mcp.json whose emetgate server is not on disk fails the server check and is not ready"
+      ]
+    },
+    {
+      "id": "GR1-repo-ledger-takes-a-global-id",
+      "file": "src/platform/rules.zig",
+      "from": "            if (std.mem.eql(u8, decision.id, held.id)) return error.GlobalRuleIdInRepo;",
+      "to": "            if (false and std.mem.eql(u8, decision.id, held.id)) return error.GlobalRuleIdInRepo;",
+      "kills": [
+        "global rules: a repository cannot forget or supersede a global rule, from the command line or from its ledger"
+      ],
+      "note": "a repository ledger could hold a row with a global rule's id, and receipts and verify could no longer tell the two apart"
+    },
+    {
+      "id": "GR2-repo-forget-of-a-global-id-not-named",
+      "file": "src/protocol/rule_command.zig",
+      "from": "    if (err == error.DecisionNotActive and user_rules.holds(gpa, io, id)) return error.RuleIsGlobal;",
+      "to": "    if (false and err == error.DecisionNotActive and user_rules.holds(gpa, io, id)) return error.RuleIsGlobal;",
+      "kills": [
+        "global rules: a repository cannot forget or supersede a global rule, from the command line or from its ledger"
+      ]
+    },
+    {
+      "id": "GR3-global-query-waits-for-repo-memory",
+      "file": "src/platform/rules.zig",
+      "from": "        if (!isQuery(rule) or rule.origin == .global) continue;",
+      "to": "        if (!isQuery(rule)) continue;",
+      "kills": [
+        "global rules: a global q: rule judges a write without --allow-repo-memory beside a committed ledger"
+      ],
+      "note": "the user's own q: rule would refuse every write in a repository that commits its ledger"
+    },
+    {
+      "id": "GR4-global-command-waits-for-repo-memory",
+      "file": "src/platform/rules.zig",
+      "from": "        if (!trusted and rule.origin != .global) {",
+      "to": "        if (!trusted) {",
+      "kills": [
+        "global rules: a global cmd: rule runs without --allow-repo-memory beside a committed ledger, a repository one does not"
+      ]
+    },
+    {
+      "id": "GR5-global-command-resolved-in-the-repository",
+      "file": "src/platform/rules.zig",
+      "from": "    const found = if (global) try resolvableOutsideRepo(gpa, io, head) else try resolvable(gpa, io, options.shadow_abs, head);",
+      "to": "    const found = try resolvable(gpa, io, options.shadow_abs, head);",
+      "kills": [
+        "global rules: a global cmd: rule never runs a program the repository planted next to it"
+      ],
+      "note": "a repository could plant a program named like the user's global command and have it run as the user's rule"
+    },
+    {
+      "id": "GR6-scan-calls-a-global-query-untrusted",
+      "file": "src/protocol/scan_command.zig",
+      "from": "    return rules.isQuery(rule) and rule.origin != .global;",
+      "to": "    return rules.isQuery(rule);",
+      "kills": [
+        "global rules: a repository rule with the same check never replaces the global one"
+      ]
+    },
+    {
+      "id": "GR7-global-rules-never-loaded",
+      "file": "src/platform/rules.zig",
+      "from": "    const recall = try user_rules.peek(gpa, io);\n    result.global = recall;",
+      "to": "    const recall = try memory.emptyRecall(gpa);\n    _ = io;\n    result.global = recall;",
+      "kills": [
+        "global rules: an enforced global rule is enforced in every repository",
+        "global rules: a global q: rule judges a write without --allow-repo-memory beside a committed ledger"
+      ]
+    },
+    {
+      "id": "GR8-global-folder-followed-through-a-junction",
+      "file": "src/platform/user_rules.zig",
+      "from": "pub fn peekIn(gpa: Allocator, io: std.Io, dir_abs: []const u8) !memory.Recall {\n    const held = (try holdToRead(io, dir_abs)) orelse return memory.emptyRecall(gpa);\n    defer held.close();\n",
+      "to": "pub fn peekIn(gpa: Allocator, io: std.Io, dir_abs: []const u8) !memory.Recall {\n",
+      "kills": [
+        "global rules: a junction in place of the global rule folder is refused, never followed"
+      ]
+    },
+    {
+      "id": "GR9-damaged-global-row-skipped",
+      "file": "src/platform/memory.zig",
+      "from": "    const rows = try parseLedger(arena.allocator(), settledRows(bytes));",
+      "to": "    const rows = parseLedger(arena.allocator(), settledRows(bytes)) catch return .{ .arena = arena, .decisions = &.{}, .conflicts = &.{} };",
+      "kills": [
+        "global rules: a malformed global ledger fails every gate closed and names the global ledger"
+      ],
+      "note": "a damaged global ledger would silently drop every global rule instead of refusing"
+    },
+    {
+      "id": "GR10-row-being-appended-fails-the-gate",
+      "file": "src/platform/memory.zig",
+      "from": "parseLedger(arena.allocator(), settledRows(bytes));",
+      "to": "parseLedger(arena.allocator(), bytes);",
+      "kills": [
+        "global rules: a row still being appended is not read, and the rows before it still apply"
+      ]
+    },
+    {
+      "id": "GR11-verify-names-a-missing-global-rule-like-a-repository-one",
+      "file": "src/verify/checker.zig",
+      "from": "if (receipt.isGlobalRuleId(rule.id)) global_rule_unseen else ",
+      "to": "if (false) global_rule_unseen else ",
+      "kills": [
+        "verify: a global rule the receipt names verifies where the global rules are and is unverified, never passed or failed, where they are not"
+      ]
+    },
+    {
+      "id": "GR12-global-scope-elsewhere-refuses-the-scan",
+      "file": "src/platform/scan.zig",
+      "from": "                    else => continue,\n                };\n            }\n        }\n        try kept.append(gpa, rule);",
+      "to": "                    else => {},\n                };\n            }\n        }\n        try kept.append(gpa, rule);",
+      "kills": [
+        "global rules: a scope in a global rule is relative to each repository root, and a repository without it is not refused"
+      ]
+    },
+    {
+      "id": "GR13-uninstall-hides-the-global-rules",
+      "file": "src/platform/uninstall.zig",
+      "from": "            if (p.global_rules) |rules| try writeGlobalRules(out, rules, true);\n",
+      "to": "",
+      "kills": [
+        "global rules: uninstall says whether the global rules go with the data folder or stay"
+      ]
+    },
+    {
+      "id": "GR14-doctor-only-warns-on-an-unreadable-global-ledger",
+      "file": "src/platform/doctor.zig",
+      "from": "        return .{ .name = \"rules\", .status = .fail, .detail = try std.fmt.allocPrint(arena, \"global rules in",
+      "to": "        return .{ .name = \"rules\", .status = .warn, .detail = try std.fmt.allocPrint(arena, \"global rules in",
+      "kills": [
+        "global rules: doctor names the global ledger and how many rules it holds, and fails on one it cannot read"
+      ]
+    },
+    {
+      "id": "GR15-list-drops-the-origin",
+      "file": "src/protocol/rule_command.zig",
+      "from": "            try js.objectField(\"origin\");\n            try js.write(@tagName(row.origin));\n",
+      "to": "",
+      "kills": [
+        "global rules: rule list shows each rule's origin in text, in the table and in json",
+        "rule: list --json parses back into a Decision with the stored fields"
+      ]
+    },
+    {
+      "id": "GR16-global-add-written-to-the-repository",
+      "file": "src/protocol/rule_command.zig",
+      "from": "            const id = if (decided.global)\n                try user_rules.remember(",
+      "to": "            const id = if (false)\n                try user_rules.remember(",
+      "kills": [
+        "global rules: rule add --global writes the global ledger with a g id and leaves the repository ledger alone"
+      ]
+    },
+    {
+      "id": "GR17-pick-ignores-global",
+      "file": "src/protocol/rule_catalog.zig",
+      "from": "            decided.global = global;",
+      "to": "            decided.global = false;",
+      "kills": [
+        "global rules: rule add, pick and list with --global need no repository"
+      ]
+    },
+    {
+      "id": "GR19-reading-the-global-rules-asks-for-write-access",
+      "file": "src/platform/own_dir.zig",
+      "from": ".read_only => win.generic_read | win.file_traverse,",
+      "to": ".read_only => win.generic_read | win.generic_write | win.file_traverse,",
+      "kills": [
+        "global rules: reading the global rules asks for no write access, so a session that may only read them still applies them"
+      ],
+      "note": "a commit hook run at low integrity could no longer read the global rules, and every commit would be refused"
+    },
+    {
+      "id": "GR20-global-folder-taken-from-the-environment",
+      "file": "src/platform/user_rules.zig",
+      "from": "    const local = try profileLocalAppData(gpa);",
+      "to": "    const local = (try sandbox.environmentValue(gpa, std.unicode.utf8ToUtf16LeStringLiteral(\"LOCALAPPDATA\"))) orelse return error.LocalAppDataUnavailable;",
+      "kills": [
+        "global rules: the global rules folder comes from the user profile, so an environment a repository sets cannot move it"
+      ],
+      "note": "an env entry in a repository's .mcp.json could point the server at an empty global ledger and drop every global rule"
+    },
+    {
+      "id": "GR18-skeleton-hides-the-origin",
+      "file": "src/protocol/wire.zig",
+      "from": "            if (rule.origin == .global) {",
+      "to": "            if (false) {",
+      "kills": [
+        "global rules: the rules a file reads name a global rule by its origin"
       ]
     }
   ]

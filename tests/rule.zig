@@ -188,10 +188,11 @@ test "rule: a rule added from the command line is listed and enforced by the ver
     const row = it.next().?;
     try testing.expectEqualStrings(id, fieldOf(row, 0));
     try testing.expectEqualStrings("active", fieldOf(row, 1));
-    try testing.expectEqualStrings("enforce", fieldOf(row, 2));
-    try testing.expectEqualStrings("forbid:networkidle", fieldOf(row, 3));
-    try testing.expectEqualStrings("-", fieldOf(row, 4));
-    try testing.expectEqualStrings("no networkidle", fieldOf(row, 5));
+    try testing.expectEqualStrings("repo", fieldOf(row, 2));
+    try testing.expectEqualStrings("enforce", fieldOf(row, 3));
+    try testing.expectEqualStrings("forbid:networkidle", fieldOf(row, 4));
+    try testing.expectEqualStrings("-", fieldOf(row, 5));
+    try testing.expectEqualStrings("no networkidle", fieldOf(row, 6));
     try testing.expect(it.next() == null);
 
     const outcome = try runScan(&repo);
@@ -392,7 +393,7 @@ test "rule: list --json parses back into a Decision with the stored fields" {
     const line = it.next().?;
     try testing.expect(it.next() == null);
 
-    const parsed = try std.json.parseFromSlice(memory.Decision, testing.allocator, line, .{});
+    const parsed = try std.json.parseFromSlice(memory.Decision, testing.allocator, line, .{ .ignore_unknown_fields = true });
     defer parsed.deinit();
     const decision = parsed.value;
     try testing.expectEqualStrings(id, decision.id);
@@ -403,6 +404,7 @@ test "rule: list --json parses back into a Decision with the stored fields" {
     try testing.expectEqualStrings("src/", decision.where.?);
     try testing.expectEqual(memory.Status.active, decision.status);
     try testing.expect(decision.supersedes == null);
+    try testing.expect(std.mem.endsWith(u8, line, ",\"origin\":\"repo\"}"));
 }
 
 test "rule: supersede and forget on an unknown id keep the memory error" {
@@ -452,8 +454,8 @@ test "rule: a cmd: check is accepted, stored verbatim and never run while the ru
     defer testing.allocator.free(listed);
     var listed_it = lines(listed);
     const row = listed_it.next().?;
-    try testing.expectEqualStrings("enforce", fieldOf(row, 2));
-    try testing.expectEqualStrings(spec, fieldOf(row, 3));
+    try testing.expectEqualStrings("enforce", fieldOf(row, 3));
+    try testing.expectEqualStrings(spec, fieldOf(row, 4));
 
     try testing.expectError(error.FileNotFound, repo.tmp.dir.access(testing.io, "repo/" ++ marker, .{}));
 }

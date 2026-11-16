@@ -30,6 +30,7 @@ pub const Text = union(enum) {
 };
 
 pub const not_checked_out = "the checked-out form of a filtered file is not available";
+pub const global_rule_unseen = "a global rule the receipt names is not in this machine's global rules, so it was not checked";
 
 pub const Source = struct {
     context: *anyopaque,
@@ -336,7 +337,7 @@ fn checkReceipt(c: *Checker, r: Receipt, last: *const std.StringHashMapUnmanaged
 
     for (r.rules) |rule| {
         const now = c.source.rule(c.source.context, rule.id) orelse {
-            outcome.raise(.unverified, "a rule the receipt names is not in the ledger");
+            outcome.raise(.unverified, if (receipt.isGlobalRuleId(rule.id)) global_rule_unseen else "a rule the receipt names is not in the ledger");
             continue;
         };
         if (!std.mem.eql(u8, &now, &rule.digest)) outcome.raise(.mismatch, "a rule the receipt names has changed");

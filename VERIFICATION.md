@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3195**
-- Mutations declared in `tests/mutations.json`: **2034**
-  - killed: **1985**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3218**
+- Mutations declared in `tests/mutations.json`: **2054**
+  - killed: **2005**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **3**
@@ -470,7 +470,7 @@ python tools/verification_page.py --check
 
 ### Rules and the q: query engine
 
-154 mutation(s).
+162 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -523,7 +523,7 @@ python tools/verification_page.py --check
 | `EX17-symbol-where-ignores-exclusions` | `src/platform/where.zig` | `if (!self.coversFile(rel)) return false;` -> `if (!self.base.coversFile(rel)) return false;` | exclusions apply to the file part of a symbol where | killed |
 | `CMD4-command-scope-ignored` | `src/platform/rules.zig` | `if (w.coversFile(path)) return path;     }     return null;` -> `if (w.coversFile(path) or true) return path;     }     return n...` | cmd rule: a scope that excludes the file keeps the command from running at all | killed |
 | `CMD6-crash-counted-as-a-violation` | `src/platform/rules.zig` | `.crashed, .timed_out, .output_limit => .crashed,     }; }  pub ...` -> `.crashed => .violated,         .timed_out, .output_limit => .cr...` | a command verdict has three outcomes: pass, violation, and no verdict at all; cmd rule: a... | killed |
-| `CMD8-command-not-found-called-a-violation` | `src/platform/rules.zig` | `if (!try resolvable(gpa, io, options.shadow_abs, head))` -> `if (false and !try resolvable(gpa, io, options.shadow_abs, head...` | cmd rule: a command that does not exist is not a verdict either | killed |
+| `CMD8-command-not-found-called-a-violation` | `src/platform/rules.zig` | `if (!found) return failedGate(gpa, rule, file, "command_not_fou...` -> `if (false and !found) return failedGate(gpa, rule, file, "comma...` | cmd rule: a command that does not exist is not a verdict either | killed |
 | `RO4-skeleton-shows-rules-scoped-elsewhere` | `src/platform/rules.zig` | `if (!scope.coversFile(rel)) continue;` -> `if (!scope.coversFile(rel) and false) continue;` | rule: the skeleton the model reads carries every adopted rule that covers the f... | killed |
 | `RO5-skeleton-shows-forgotten-rules` | `src/platform/rules.zig` | `if (decision.status != .active) continue;         if (isMessage...` -> `if (isMessageCheck(decision.check)) continue;` | memory.peek already folds the ledger down to active decisions, so the status guard in ado... | defense in depth |
 | `RM1-gate-skips-the-ledger-trust-check` | `src/platform/rules.zig` | `if (try ledgerTracked(gpa, io, root_abs)) return error.Untruste...` -> `if (try ledgerTracked(gpa, io, root_abs) and false) return erro...` | redteam ledger: a cmd rule in a committed ledger never runs without --allow-rep...; redte... | killed |
@@ -598,7 +598,7 @@ python tools/verification_page.py --check
 | `FZ2-frozen-scope-not-read` | `src/platform/rules.zig` | `if (!w.coversFile(path)) continue;             }             co...` -> `if (false and !w.coversFile(path)) continue;             }     ...` | frozen: a symbol edit of a frozen file is refused with and without commits, and...; froze... | killed |
 | `FZ7-frozen-rule-run-as-a-tree-check` | `src/platform/rules.zig` | `if (isMessage(rule) or isFrozen(rule) or !rule.lang.covers(prof...` -> `if (isMessage(rule) or !rule.lang.covers(profile.name)) continu...` | frozen: the code rules that read a tree take a frozen rule as nothing to check | killed |
 | `RA2-command-line-answers-in-the-spoken-voice` | `src/protocol/rule_command.zig` | `return runAs(.terse, gpa, io, root_abs, request, out, err_out);` -> `return runAs(.spoken, gpa, io, root_abs, request, out, err_out);` | prompt hook: /rule add adopts the rule and answers with its id | killed |
-| `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (decisions.len == 0) return out.writeAll(nothing_kept);` -> `if (false and decisions.len == 0) return out.writeAll(nothing_k...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
+| `RA3-empty-list-says-nothing` | `src/protocol/rule_command.zig` | `if (rows.len == 0) return out.writeAll(nothing_kept);` -> `if (false and rows.len == 0) return out.writeAll(nothing_kept);` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA4-forget-says-nothing` | `src/protocol/rule_command.zig` | `if (voice == .spoken) try out.print("rule forgotten: {s}\n", .{...` -> `if (false and voice == .spoken) try out.print("rule forgotten: ...` | prompt hook: /rule forget removes the rule, and a command that prints nothing s... | killed |
 | `RA5-list-columns-not-padded` | `src/protocol/rule_command.zig` | `try out.splatByteAll(' ', width - cell.len + 2);` -> `try out.splatByteAll(' ', (width - cell.len) * 0 + 2);` | prompt hook: /rule list answers with the rows emetgate rule list prints | killed |
 | `EW1-write-without-a-claim-is-let-through` | `src/platform/rules.zig` | `const holes: []const Hole = change.holes orelse &everything;` -> `const holes: []const Hole = change.holes orelse if (change.base...` | a write that hands over no claim is judged in full, and one whose claim holds k... | killed |
@@ -628,10 +628,18 @@ python tools/verification_page.py --check
 | `NT1-no-typecheck-ignored` | `src/protocol/policy.zig` | `if (policy.no_typecheck) return "";` -> `` | typecheck detection: --no-typecheck turns the detected type checker off and ref... | killed |
 | `SCP4-model-may-name-the-scoped-command` | `src/protocol/policy.zig` | `or tool_result.getField(a, "test_scoped_cmd") != null` -> `` | a scoped test command comes only from the operator, next to a full one, once an... | killed |
 | `SCP5-scoped-command-without-a-full-one` | `src/protocol/policy.zig` | `if (policy.test_scoped_command != null and policy.test_command ...` -> `` | a scoped test command comes only from the operator, next to a full one, once an... | killed |
+| `GR1-repo-ledger-takes-a-global-id` | `src/platform/rules.zig` | `if (std.mem.eql(u8, decision.id, held.id)) return error.GlobalR...` -> `if (false and std.mem.eql(u8, decision.id, held.id)) return err...` | global rules: a repository cannot forget or supersede a global rule, from the c... | killed |
+| `GR2-repo-forget-of-a-global-id-not-named` | `src/protocol/rule_command.zig` | `if (err == error.DecisionNotActive and user_rules.holds(gpa, io...` -> `if (false and err == error.DecisionNotActive and user_rules.hol...` | global rules: a repository cannot forget or supersede a global rule, from the c... | killed |
+| `GR3-global-query-waits-for-repo-memory` | `src/platform/rules.zig` | `if (!isQuery(rule) or rule.origin == .global) continue;` -> `if (!isQuery(rule)) continue;` | global rules: a global q: rule judges a write without --allow-repo-memory besid... | killed |
+| `GR4-global-command-waits-for-repo-memory` | `src/platform/rules.zig` | `if (!trusted and rule.origin != .global) {` -> `if (!trusted) {` | global rules: a global cmd: rule runs without --allow-repo-memory beside a comm... | killed |
+| `GR5-global-command-resolved-in-the-repository` | `src/platform/rules.zig` | `const found = if (global) try resolvableOutsideRepo(gpa, io, he...` -> `const found = try resolvable(gpa, io, options.shadow_abs, head);` | global rules: a global cmd: rule never runs a program the repository planted ne... | killed |
+| `GR7-global-rules-never-loaded` | `src/platform/rules.zig` | `const recall = try user_rules.peek(gpa, io);     result.global ...` -> `const recall = try memory.emptyRecall(gpa);     _ = io;     res...` | global rules: an enforced global rule is enforced in every repository; global rules: a gl... | killed |
+| `GR15-list-drops-the-origin` | `src/protocol/rule_command.zig` | `try js.objectField("origin");             try js.write(@tagName...` -> `` | global rules: rule list shows each rule's origin in text, in the table and in j...; rule:... | killed |
+| `GR16-global-add-written-to-the-repository` | `src/protocol/rule_command.zig` | `const id = if (decided.global)                 try user_rules.r...` -> `const id = if (false)                 try user_rules.remember(` | global rules: rule add --global writes the global ledger with a g id and leaves... | killed |
 
 ### Scan
 
-38 mutation(s).
+40 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -673,10 +681,12 @@ python tools/verification_page.py --check
 | `SCT4-scan-skips-untrusted-silently` | `src/protocol/scan_command.zig` | `for (untrusted) \|rule\| try out.print("warning: rule {s} ({s})...` -> `for (untrusted) \|rule\| if (false) try out.print("warning: rul...` | scan trust: a committed ledger's q: rules do not run without --allow-repo-memor... | killed |
 | `SCT5-scan-distrusts-operator-check` | `src/protocol/scan_command.zig` | `if (options.source != .ledger or options.allow_repo_memory) ret...` -> `if (options.allow_repo_memory) return unsplit;` | scan trust: an operator's own --check query runs next to a committed ledger wit... | killed |
 | `SCT6-scan-flag-not-parsed` | `src/protocol/scan_command.zig` | `options.allow_repo_memory = true;` -> `options.allow_repo_memory = false;` | scan trust: --allow-repo-memory runs a committed ledger's q: rules, and an untr...; scan ... | killed |
+| `GR6-scan-calls-a-global-query-untrusted` | `src/protocol/scan_command.zig` | `return rules.isQuery(rule) and rule.origin != .global;` -> `return rules.isQuery(rule);` | global rules: a repository rule with the same check never replaces the global o... | killed |
+| `GR12-global-scope-elsewhere-refuses-the-scan` | `src/platform/scan.zig` | `else => continue,                 };             }         }   ...` -> `else => {},                 };             }         }         ...` | global rules: a scope in a global rule is relative to each repository root, and... | killed |
 
 ### Memory and the decision ledger
 
-31 mutation(s).
+33 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -711,6 +721,8 @@ python tools/verification_page.py --check
 | `SP31-ledger-row-where-unvalidated` | `src/platform/memory.zig` | `where_mod.validate(d.where) catch return error.LedgerCorrupt;` -> `` | where: a ledger row carrying an invalid where is corrupt | killed |
 | `SP32-ledger-duplicate-ignores-where` | `src/platform/memory.zig` | `and sameOptional(a.where, b.where);` -> `;` | where: two rows for one id that differ only in where are corrupt | killed |
 | `SP33-ledger-writes-null-where` | `src/platform/memory.zig` | `if (comptime std.mem.eql(u8, field.name, "where")) {` -> `if (comptime false) {` | where: remember and supersede store where, and an unscoped row carries no where...; memor... | killed |
+| `GR9-damaged-global-row-skipped` | `src/platform/memory.zig` | `const rows = try parseLedger(arena.allocator(), settledRows(byt...` -> `const rows = parseLedger(arena.allocator(), settledRows(bytes))...` | global rules: a malformed global ledger fails every gate closed and names the g... | killed |
+| `GR10-row-being-appended-fails-the-gate` | `src/platform/memory.zig` | `parseLedger(arena.allocator(), settledRows(bytes));` -> `parseLedger(arena.allocator(), bytes);` | global rules: a row still being appended is not read, and the rows before it st... | killed |
 
 ### Mutation testing tool itself
 
@@ -762,7 +774,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1371 mutation(s).
+1379 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1341,7 +1353,7 @@ python tools/verification_page.py --check
 | `CT21-reply-hides-where-tracked-files-came-from` | `src/protocol/wire.zig` | `if (tree.source == .head) {` -> `if (false and tree.source == .head) {` | commit tree: the reply says the tracked files came from HEAD, and a call that d...; commi... | killed |
 | `CT23-verify-reruns-the-test-in-a-sparse-worktree` | `src/platform/verify_run.zig` | `if (std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n"), "true"))...` -> `if (false and std.mem.eql(u8, std.mem.trim(u8, sparse, " \r\n")...` | redteam2 commit: in a cone sparse checkout with a sparse index the gate sees th... | killed |
 | `KT13-working-directory-opened-with-delete-child` | `src/platform/dir_scan.zig` | `const dir_access: u32 = win.file_list_directory \| win.file_rea...` -> `const dir_access: u32 = win.file_list_directory \| win.file_del...` | gate tree rights: a repository the user may modify but not fully control gets t...; gate ... | killed |
-| `KT14-held-directory-opened-with-delete-child` | `src/platform/own_dir.zig` | `win.generic_read \| win.generic_write \| win.file_traverse,` -> `win.generic_read \| win.generic_write \| win.file_traverse \| 0...` | gate tree rights: a doc write and a batch are committed in a repository the use... | killed |
+| `KT14-held-directory-opened-with-delete-child` | `src/platform/own_dir.zig` | `.read_write => win.generic_read \| win.generic_write \| win.fil...` -> `.read_write => win.generic_read \| win.generic_write \| win.fil...` | gate tree rights: a doc write and a batch are committed in a repository the use... | killed |
 | `KT15-denied-working-directory-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.ctx.sourceRefused(e, key[1..]),` -> `else => \|e\| return e,` | gate tree rights: a working directory that cannot be listed is named in the rep... | killed |
 | `KT16-denied-linked-directory-not-named` | `src/platform/gate_tree.zig` | `if (found.report) \|report\| report.note(.working_tree, reasonO...` -> `` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
 | `KT17-denied-directory-inside-a-linked-one-not-named` | `src/platform/gate_tree.zig` | `else => \|e\| return self.refused(e, at.rel, entry.name),` -> `else => \|e\| return e,` | gate tree rights: a linked directory or a directory inside it that cannot be li... | killed |
@@ -1353,7 +1365,7 @@ python tools/verification_page.py --check
 | `BD1-source-doc-edit-not-refused` | `src/engine/docnode.zig` | `if (registry.forPath(path) != null) return error.UseSymbolTools...` -> `if (false and registry.forPath(path) != null) return error.UseS...` | planDoc refuses a file of a registered language before it reads it | killed |
 | `BD2-write-doc-skips-the-source-refusal` | `src/platform/doc_writer.zig` | `try docnode.refuseSource(options.file_abs);` -> `` | the doc writer refuses a source file before it looks for the repository | killed |
 | `BD5-doc-only-batch-writes-an-empty-receipt` | `src/protocol/handlers.zig` | `if (edits.len == 0) return;` -> `if (false and edits.len == 0) return;` | batch doc on a document: a batch of one Markdown edit commits, answers, is logg... | killed |
-| `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, try root, request, rea...` -> `try rule_command.runAs(.terse, gpa, io, try root, request, reas...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
+| `RA1-hook-answers-in-the-terse-voice` | `src/protocol/prompt_hook.zig` | `try rule_command.runAs(.spoken, gpa, io, root, request, reason,...` -> `try rule_command.runAs(.terse, gpa, io, root, request, reason, ...` | prompt hook: /rule add adopts the rule and answers with its id; prompt hook: /rule list a... | killed |
 | `CD1-case-only-names-not-looked-for` | `src/platform/git_commit.zig` | `return commit_names.clash(arena, names);` -> `return if (false) commit_names.clash(arena, names) else null;` | commit derive: two tracked names that differ only in case are refused with both...; commi... | killed |
 | `CD2-two-files-in-two-cases-not-a-clash` | `src/platform/commit_names.zig` | `} else if (!(entry.value_ptr.directory and name.directory)) {` -> `} else if (false and !(entry.value_ptr.directory and name.direc...` | commit names: two files whose names differ only in letter case are named, in tr...; commi... | killed |
 | `CD3-file-and-directory-in-two-cases-not-a-clash` | `src/platform/commit_names.zig` | `} else if (!entry.value_ptr.directory) {` -> `} else if (false and !entry.value_ptr.directory) {` | commit names: a file and a directory that differ only in letter case are named | killed |
@@ -2137,6 +2149,14 @@ python tools/verification_page.py --check
 | `DSV2-doctor-takes-any-server-reply` | `src/platform/doctor.zig` | `if (name != .string or !std.mem.eql(u8, name.string, "emetgate"...` -> `if (name != .string) continue;` | doctor: the server's initialize reply is read for its name and version, and any... | killed |
 | `DSV3-doctor-ignores-an-older-server` | `src/platform/doctor.zig` | `if (!std.mem.eql(u8, answered, version)) {` -> `if (false) {` | doctor: a server that is missing, does not start or does not answer blocks lock... | killed |
 | `DSV4-doctor-never-starts-the-server` | `src/platform/doctor.zig` | `try checks.append(arena, serverStart(arena, io, probe, server));` -> `` | doctor: an .mcp.json whose emetgate server is not on disk fails the server chec... | killed |
+| `GR8-global-folder-followed-through-a-junction` | `src/platform/user_rules.zig` | `pub fn peekIn(gpa: Allocator, io: std.Io, dir_abs: []const u8) ...` -> `pub fn peekIn(gpa: Allocator, io: std.Io, dir_abs: []const u8) ...` | global rules: a junction in place of the global rule folder is refused, never f... | killed |
+| `GR11-verify-names-a-missing-global-rule-like-a-repository-one` | `src/verify/checker.zig` | `if (receipt.isGlobalRuleId(rule.id)) global_rule_unseen else` -> `if (false) global_rule_unseen else` | verify: a global rule the receipt names verifies where the global rules are and... | killed |
+| `GR13-uninstall-hides-the-global-rules` | `src/platform/uninstall.zig` | `if (p.global_rules) \|rules\| try writeGlobalRules(out, rules, ...` -> `` | global rules: uninstall says whether the global rules go with the data folder o... | killed |
+| `GR14-doctor-only-warns-on-an-unreadable-global-ledger` | `src/platform/doctor.zig` | `return .{ .name = "rules", .status = .fail, .detail = try std.f...` -> `return .{ .name = "rules", .status = .warn, .detail = try std.f...` | global rules: doctor names the global ledger and how many rules it holds, and f... | killed |
+| `GR17-pick-ignores-global` | `src/protocol/rule_catalog.zig` | `decided.global = global;` -> `decided.global = false;` | global rules: rule add, pick and list with --global need no repository | killed |
+| `GR19-reading-the-global-rules-asks-for-write-access` | `src/platform/own_dir.zig` | `.read_only => win.generic_read \| win.file_traverse,` -> `.read_only => win.generic_read \| win.generic_write \| win.file...` | global rules: reading the global rules asks for no write access, so a session t... | killed |
+| `GR20-global-folder-taken-from-the-environment` | `src/platform/user_rules.zig` | `const local = try profileLocalAppData(gpa);` -> `const local = (try sandbox.environmentValue(gpa, std.unicode.ut...` | global rules: the global rules folder comes from the user profile, so an enviro... | killed |
+| `GR18-skeleton-hides-the-origin` | `src/protocol/wire.zig` | `if (rule.origin == .global) {` -> `if (false) {` | global rules: the rules a file reads name a global rule by its origin | killed |
 
 ## What this system does not prove
 

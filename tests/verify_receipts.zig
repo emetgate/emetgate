@@ -8,6 +8,8 @@ const verify_run = @import("emetgate").verify_run;
 const checker = @import("emetgate").checker;
 const jcs = @import("emetgate").jcs;
 const rule_command = @import("emetgate").rule_command;
+const user_rules = @import("emetgate").user_rules;
+const checker_receipt = @import("emetgate").receipt;
 const Runtime = @import("emetgate").runtime.Runtime;
 const fixture = @import("ts_fixture.zig");
 const support = @import("runner_support.zig");
@@ -323,6 +325,43 @@ test "verify: a rule the receipt names with a changed digest is a mismatch" {
     forged[at] = if (forged[at] == '0') '1' else '0';
     try case.replaceNote(forged);
     try testing.expectEqual(checker.Verdict.mismatch, (try case.verify(.{ .commit = "HEAD", .test_command = green })).report.verdict);
+}
+
+test "verify: a global rule the receipt names verifies where the global rules are and is unverified, never passed or failed, where they are not" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var case: Case = undefined;
+    try case.init();
+    defer case.deinit();
+    var homes = testing.tmpDir(.{});
+    defer homes.cleanup();
+    try homes.dir.createDirPath(testing.io, "mine");
+    try homes.dir.createDirPath(testing.io, "other");
+    const mine = try homes.dir.realPathFileAlloc(testing.io, "mine", case.arena());
+    const other = try homes.dir.realPathFileAlloc(testing.io, "other", case.arena());
+    const saved = user_rules.dir_override;
+    defer user_rules.dir_override = saved;
+    user_rules.dir_override = try std.fmt.allocPrint(case.arena(), "{s}\\rules", .{mine});
+
+    const request = rule_command.parse(&.{ "add", "prefer strict equality", "--check", "forbid:==", "--global" }) orelse return error.UsageRefused;
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    var err_out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer err_out.deinit();
+    try rule_command.run(testing.allocator, testing.io, case.repo.root_abs, request, &out.writer, &err_out.writer);
+    const id = std.mem.trimEnd(u8, out.written(), "\n");
+    try testing.expect(checker_receipt.isGlobalRuleId(id));
+    _ = try case.tryBody("{\n  return b + a;\n}", green);
+    try case.commit("under a global rule");
+    _ = try case.attach();
+    const note = try case.note();
+    try testing.expect(std.mem.indexOf(u8, note, id) != null);
+    try testing.expectEqual(checker.Verdict.verified, (try case.verify(.{ .commit = "HEAD", .test_command = green })).report.verdict);
+
+    user_rules.dir_override = try std.fmt.allocPrint(case.arena(), "{s}\\rules", .{other});
+    const elsewhere = try case.verify(.{ .commit = "HEAD", .test_command = green });
+    try testing.expectEqual(checker.Verdict.unverified, elsewhere.report.verdict);
+    try testing.expectEqual(@as(usize, 1), elsewhere.report.receipts.len);
+    try testing.expectEqualStrings(checker.global_rule_unseen, elsewhere.report.receipts[0].outcome.reason);
 }
 
 test "verify: a rename's symmetry receipt verifies by alpha hash without running any test" {

@@ -29,22 +29,32 @@ pub const Held = struct {
     }
 };
 
+pub const Access = enum { read_write, read_only };
+
 pub fn hold(io: std.Io, dir_abs: []const u8, mode: Mode) Error!?Held {
+    return holdAs(io, dir_abs, mode, .read_write);
+}
+
+pub fn holdToRead(io: std.Io, dir_abs: []const u8) Error!?Held {
+    return holdAs(io, dir_abs, .existing, .read_only);
+}
+
+fn holdAs(io: std.Io, dir_abs: []const u8, mode: Mode, access: Access) Error!?Held {
     if (builtin.os.tag != .windows) return error.Unsupported;
     const parent_abs = std.fs.path.dirname(dir_abs) orelse return error.WorkspaceOpenFailed;
-    const parent = (try frozen(parent_abs)) orelse made: {
+    const parent = (try frozen(parent_abs, access)) orelse made: {
         if (mode == .existing) return null;
         make(io, parent_abs);
-        break :made (try frozen(parent_abs)) orelse return error.WorkspaceOpenFailed;
+        break :made (try frozen(parent_abs, access)) orelse return error.WorkspaceOpenFailed;
     };
     errdefer windows.CloseHandle(parent);
-    const handle = (try frozen(dir_abs)) orelse made: {
+    const handle = (try frozen(dir_abs, access)) orelse made: {
         if (mode == .existing) {
             windows.CloseHandle(parent);
             return null;
         }
         make(io, dir_abs);
-        break :made (try frozen(dir_abs)) orelse return error.WorkspaceOpenFailed;
+        break :made (try frozen(dir_abs, access)) orelse return error.WorkspaceOpenFailed;
     };
     return .{ .parent = parent, .dir = .{ .handle = handle } };
 }
@@ -53,7 +63,14 @@ fn make(io: std.Io, dir_abs: []const u8) void {
     Dir.cwd().createDir(io, dir_abs, .default_dir) catch {};
 }
 
-fn frozen(dir_abs: []const u8) Error!?windows.HANDLE {
+fn rightsOf(access: Access) windows.DWORD {
+    return switch (access) {
+        .read_write => win.generic_read | win.generic_write | win.file_traverse,
+        .read_only => win.generic_read | win.file_traverse,
+    };
+}
+
+fn frozen(dir_abs: []const u8, access: Access) Error!?windows.HANDLE {
     var wide: WidePath = undefined;
     const name = commit_record.toWide(&wide, dir_abs) catch |err| switch (err) {
         error.InvalidWtf8 => return error.InvalidWtf8,
@@ -61,7 +78,7 @@ fn frozen(dir_abs: []const u8) Error!?windows.HANDLE {
     };
     const handle = win.CreateFileW(
         name,
-        win.generic_read | win.generic_write | win.file_traverse,
+        rightsOf(access),
         win.file_share_read | win.file_share_write,
         null,
         win.open_existing,

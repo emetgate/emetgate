@@ -44,6 +44,8 @@ emetgate rule add "no lint suppression" --check forbid_regex:eslint-disable --en
 
 规则存放在 `.emetgate/` 下的账本中。无论会话多长、压缩之后、还是明天的新会话，同一条规则都作用于每一次写入。
 
+想在每个项目里都生效的规则，写进全局账本：给 `emetgate rule add` 或 `emetgate rule pick` 加上 `--global`。它存放在 `%LOCALAPPDATA%\emetgate\rules`，不在任何仓库里，并与每个仓库自己的规则一起生效；仓库无法修改或删除它。
+
 在 `emetgate lockdown` 下，Claude Code 自带的编辑和写入工具被关闭；智能体通过 emetgate 的工具修改文件，每次修改都经过同样的规则。智能体没有添加、修改或删除规则的工具；试图这样做的命令会先询问你。
 
 给旧仓库添加规则不会破坏任何东西：只有新的违规会被拒绝。

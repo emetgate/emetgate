@@ -3,6 +3,7 @@ const symbol = @import("../engine/symbol.zig");
 const shadow = @import("shadow.zig");
 const disk = @import("disk.zig");
 const where_mod = @import("where.zig");
+const receipt = @import("../verify/receipt.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -14,6 +15,8 @@ pub const max_ledger_bytes = 64 * 1024 * 1024;
 pub const max_text_bytes = 16 * 1024;
 pub const max_check_bytes = 4 * 1024;
 pub const max_id_bytes = 64;
+pub const repo_id_prefix = "m";
+pub const user_id_prefix = receipt.global_rule_prefix;
 
 pub const Scope = enum { global, project, file, symbol };
 pub const Status = enum { active, superseded };
@@ -31,6 +34,11 @@ pub const Decision = struct {
 
     pub fn jsonStringify(self: Decision, js: anytype) !void {
         try js.beginObject();
+        try self.writeFields(js);
+        try js.endObject();
+    }
+
+    pub fn writeFields(self: Decision, js: anytype) !void {
         inline for (std.meta.fields(Decision)) |field| {
             const value = @field(self, field.name);
             if (comptime std.mem.eql(u8, field.name, "where")) {
@@ -43,7 +51,6 @@ pub const Decision = struct {
                 try js.write(value);
             }
         }
-        try js.endObject();
     }
 };
 
@@ -75,14 +82,33 @@ pub const Recall = struct {
     }
 };
 
+pub const Place = union(enum) {
+    repo: []const u8,
+    user: []const u8,
+
+    fn idPrefix(self: Place) []const u8 {
+        return switch (self) {
+            .repo => repo_id_prefix,
+            .user => user_id_prefix,
+        };
+    }
+};
+
+pub const isUserId = receipt.isGlobalRuleId;
+
 const Paths = struct {
     workspace: []const u8,
     ledger: []const u8,
     lock: []const u8,
+    id_prefix: []const u8,
 
-    fn init(arena: Allocator, root_abs: []const u8) !Paths {
-        const workspace = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_abs, shadow.workspace_dir });
+    fn init(arena: Allocator, place: Place) !Paths {
+        const workspace = switch (place) {
+            .repo => |root_abs| try std.fmt.allocPrint(arena, "{s}\\{s}", .{ root_abs, shadow.workspace_dir }),
+            .user => |dir_abs| try arena.dupe(u8, dir_abs),
+        };
         return .{
+            .id_prefix = place.idPrefix(),
             .workspace = workspace,
             .ledger = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ workspace, ledger_name }),
             .lock = try std.fmt.allocPrint(arena, "{s}\\{s}", .{ workspace, lock_name }),
@@ -97,17 +123,21 @@ const Loaded = struct {
 };
 
 pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
+    return rememberAt(gpa, io, .{ .repo = root_abs }, scope, text, enforce, check, where);
+}
+
+pub fn rememberAt(gpa: Allocator, io: std.Io, place: Place, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
     try validateInput(text, check);
     try where_mod.validate(where);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const paths = try Paths.init(arena, root_abs);
+    const paths = try Paths.init(arena, place);
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
     const ledger = try loadLedger(arena, io, paths);
-    const id = try newId(arena, io, ledger.bytes.len, text);
+    const id = try newId(arena, io, paths.id_prefix, ledger.bytes.len, text);
     try appendRow(arena, io, paths, .{
         .id = id,
         .scope = scope,
@@ -122,18 +152,22 @@ pub fn remember(gpa: Allocator, io: std.Io, root_abs: []const u8, scope: Scope, 
 }
 
 pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
+    return supersedeAt(gpa, io, .{ .repo = root_abs }, id, scope, text, enforce, check, where);
+}
+
+pub fn supersedeAt(gpa: Allocator, io: std.Io, place: Place, id: []const u8, scope: Scope, text: []const u8, enforce: bool, check: ?[]const u8, where: ?[]const u8) ![]u8 {
     try validateInput(text, check);
     try where_mod.validate(where);
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const paths = try Paths.init(arena, root_abs);
+    const paths = try Paths.init(arena, place);
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
     const ledger = try loadLedger(arena, io, paths);
     const prior = try findActive(ledger.folded.active, id);
-    const successor_id = try newId(arena, io, ledger.bytes.len, text);
+    const successor_id = try newId(arena, io, paths.id_prefix, ledger.bytes.len, text);
     try appendRow(arena, io, paths, .{
         .id = successor_id,
         .scope = scope,
@@ -149,10 +183,14 @@ pub fn supersede(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u
 }
 
 pub fn forget(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8) !void {
+    return forgetAt(gpa, io, .{ .repo = root_abs }, id);
+}
+
+pub fn forgetAt(gpa: Allocator, io: std.Io, place: Place, id: []const u8) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const paths = try Paths.init(arena, root_abs);
+    const paths = try Paths.init(arena, place);
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
@@ -165,11 +203,15 @@ pub fn forget(gpa: Allocator, io: std.Io, root_abs: []const u8, id: []const u8) 
 }
 
 pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
+    return recallAt(gpa, io, .{ .repo = root_abs });
+}
+
+pub fn recallAt(gpa: Allocator, io: std.Io, place: Place) !Recall {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
-    const paths = try Paths.init(arena.allocator(), root_abs);
+    const paths = try Paths.init(arena.allocator(), place);
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
@@ -178,11 +220,15 @@ pub fn recall(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
 }
 
 pub fn recallAll(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
+    return recallAllAt(gpa, io, .{ .repo = root_abs });
+}
+
+pub fn recallAllAt(gpa: Allocator, io: std.Io, place: Place) !Recall {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
-    const paths = try Paths.init(arena.allocator(), root_abs);
+    const paths = try Paths.init(arena.allocator(), place);
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
@@ -208,7 +254,7 @@ pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     errdefer gpa.destroy(arena);
     arena.* = .init(gpa);
     errdefer arena.deinit();
-    const paths = try Paths.init(arena.allocator(), root_abs);
+    const paths = try Paths.init(arena.allocator(), .{ .repo = root_abs });
     const bytes = try readLedger(arena.allocator(), io, paths);
     if (tornTailStart(arena.allocator(), bytes) != null) return error.LedgerNeedsRepair;
     const rows = try parseLedger(arena.allocator(), bytes);
@@ -216,11 +262,35 @@ pub fn peek(gpa: Allocator, io: std.Io, root_abs: []const u8) !Recall {
     return .{ .arena = arena, .decisions = folded.active, .conflicts = folded.conflicts };
 }
 
+pub fn peekUser(gpa: Allocator, io: std.Io, dir_abs: []const u8, all: bool) !Recall {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    errdefer gpa.destroy(arena);
+    arena.* = .init(gpa);
+    errdefer arena.deinit();
+    const paths = try Paths.init(arena.allocator(), .{ .user = dir_abs });
+    const bytes = try readLedger(arena.allocator(), io, paths);
+    const rows = try parseLedger(arena.allocator(), settledRows(bytes));
+    const folded = try foldRows(arena.allocator(), rows);
+    const decisions = if (all) try everyDecision(arena.allocator(), folded) else folded.active;
+    return .{ .arena = arena, .decisions = decisions, .conflicts = folded.conflicts };
+}
+
+pub fn settledRows(bytes: []const u8) []const u8 {
+    const end = std.mem.lastIndexOfScalar(u8, bytes, '\n') orelse return bytes[0..0];
+    return bytes[0 .. end + 1];
+}
+
+pub fn emptyRecall(gpa: Allocator) !Recall {
+    const arena = try gpa.create(std.heap.ArenaAllocator);
+    arena.* = .init(gpa);
+    return .{ .arena = arena, .decisions = &.{}, .conflicts = &.{} };
+}
+
 pub fn compact(gpa: Allocator, io: std.Io, root_abs: []const u8) !void {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    const paths = try Paths.init(arena, root_abs);
+    const paths = try Paths.init(arena, .{ .repo = root_abs });
     const lock = try acquireMemoryLock(io, paths);
     defer lock.release();
 
@@ -260,13 +330,13 @@ fn now(io: std.Io) i64 {
     return std.Io.Timestamp.now(io, .real).toMilliseconds();
 }
 
-fn newId(arena: Allocator, io: std.Io, ledger_len: usize, text: []const u8) ![]const u8 {
+fn newId(arena: Allocator, io: std.Io, prefix: []const u8, ledger_len: usize, text: []const u8) ![]const u8 {
     var random: [8]u8 = undefined;
     io.random(&random);
     const seed = try std.fmt.allocPrint(arena, "{d}\x00{s}\x00{s}", .{ ledger_len, &random, text });
     const digest = symbol.hashOf(seed);
     const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
-    return std.fmt.allocPrint(arena, "m{s}", .{&hex});
+    return std.fmt.allocPrint(arena, "{s}{s}", .{ prefix, &hex });
 }
 
 fn loadLedger(arena: Allocator, io: std.Io, paths: Paths) !Loaded {

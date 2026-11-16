@@ -77,7 +77,8 @@ pub fn run(gpa: Allocator, io: std.Io, runtime: *Runtime, root_abs: []const u8, 
 
     const split = splitUntrusted(gpa, io, root_abs, options, enforced.rules) catch |err| return report(err, options, out, err_out);
     defer split.deinit(gpa);
-    const runnable = split.runnable;
+    const runnable = scan.applicable(gpa, io, runtime, root_abs, split.runnable) catch |err| return report(err, options, out, err_out);
+    defer gpa.free(runnable);
 
     if (try scan.firstMalformed(gpa, runnable)) |bad| {
         refuse(options, bad.reason);
@@ -138,7 +139,7 @@ fn splitUntrusted(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Opt
     const unsplit: Split = .{ .runnable = all, .untrusted = &.{}, .owned = false };
     if (options.source != .ledger or options.allow_repo_memory) return unsplit;
     for (all) |rule| {
-        if (rules.isQuery(rule)) break;
+        if (fromRepoQuery(rule)) break;
     } else return unsplit;
     if (!try rules.ledgerTracked(gpa, io, root_abs)) return unsplit;
 
@@ -146,10 +147,14 @@ fn splitUntrusted(gpa: Allocator, io: std.Io, root_abs: []const u8, options: Opt
     defer runnable.deinit(gpa);
     var untrusted: std.ArrayList(rules.Rule) = .empty;
     defer untrusted.deinit(gpa);
-    for (all) |rule| try (if (rules.isQuery(rule)) &untrusted else &runnable).append(gpa, rule);
+    for (all) |rule| try (if (fromRepoQuery(rule)) &untrusted else &runnable).append(gpa, rule);
     const runnable_owned = try runnable.toOwnedSlice(gpa);
     errdefer gpa.free(runnable_owned);
     return .{ .runnable = runnable_owned, .untrusted = try untrusted.toOwnedSlice(gpa), .owned = true };
+}
+
+fn fromRepoQuery(rule: rules.Rule) bool {
+    return rules.isQuery(rule) and rule.origin != .global;
 }
 
 fn refuse(options: Options, err: anyerror) void {

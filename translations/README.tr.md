@@ -44,6 +44,8 @@ Ya da sık rastlanan kuralların bulunduğu hazır katalogdan seçersin: `consol
 
 Kural `.emetgate/` altındaki defterde durur. Konuşma ne kadar uzarsa uzasın, bağlam sıkıştırılsa da, yarın yeni oturum açılsa da aynı kural her yazmada uygulanır.
 
+Her projede geçerli olmasını istediğin kural genel deftere yazılır: `emetgate rule add` ya da `emetgate rule pick` komutuna `--global` ekle. Bu defter hiçbir reponun içinde değil, `%LOCALAPPDATA%\emetgate\rules` altında durur ve her reponun kendi kurallarıyla birlikte uygulanır; bir repo onu değiştiremez, silemez.
+
 `emetgate lockdown` altında Claude Code'un kendi düzenleme ve yazma araçları kapalıdır; ajan dosyaları emetgate'in araçlarıyla değiştirir ve her değişiklik aynı kurallardan geçer. Ajanın kural ekleyecek, değiştirecek ya da silecek bir aracı yoktur; bunu deneyen bir komut önce sana sorulur.
 
 Eski bir repoya kural eklemek bir şey kırmaz: yalnızca yeni ihlaller reddedilir.
