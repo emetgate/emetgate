@@ -3,11 +3,12 @@ const memory = @import("memory.zig");
 const shadow = @import("shadow.zig");
 
 pub const rule_id = "gate-config";
-pub const rule_text = "under lockdown emetgate's own configuration (.mcp.json, the project Claude settings and agents, the rules ledger, the git hooks and git config) is changed by hand by the user";
+pub const rule_text = "under lockdown emetgate's own configuration (.mcp.json, the project Claude settings and agents, the rules ledger, the database config, the git hooks and git config) is changed by hand by the user";
 
 pub const ledger_dir = shadow.workspace_dir;
 pub const ledger_name = memory.ledger_name;
 pub const ledger = ledger_dir ++ "/" ++ ledger_name;
+pub const db_config = ledger_dir ++ "/db.json";
 pub const git_dir = ".git";
 pub const git_config = git_dir ++ "/config";
 pub const git_hooks = git_dir ++ "/hooks";
@@ -15,7 +16,7 @@ pub const agents = ".claude/agents";
 
 pub const tracked_files = [_][]const u8{ ".mcp.json", ".claude/settings.json" };
 pub const tracked_dirs = [_][]const u8{agents};
-pub const files = tracked_files ++ [_][]const u8{git_config};
+pub const files = tracked_files ++ [_][]const u8{ git_config, db_config };
 pub const dirs = tracked_dirs ++ [_][]const u8{git_hooks};
 
 const any_key_sections = [_][]const u8{ "branch", "user", "init" };
@@ -104,7 +105,7 @@ fn samePath(a: []const u8, b: []const u8) bool {
 }
 
 test "gate config: the gate's own files and folders are covered, case and slashes aside, and nothing else is" {
-    for ([_][]const u8{ ".mcp.json", ".MCP.JSON", ".claude/settings.json", ".claude\\Settings.json", ".claude/agents/a.md", ".claude/agents/deep/b.md", ".emetgate/ledger.ndjson", ".emetgate/LEDGER.ndjson.emetgate-0123.bak", ".git/config", ".git/hooks/pre-commit" }) |path| {
+    for ([_][]const u8{ ".mcp.json", ".MCP.JSON", ".claude/settings.json", ".claude\\Settings.json", ".claude/agents/a.md", ".claude/agents/deep/b.md", ".emetgate/ledger.ndjson", ".emetgate/LEDGER.ndjson.emetgate-0123.bak", ".git/config", ".git/hooks/pre-commit", ".emetgate/db.json", ".emetgate\\DB.json" }) |path| {
         try std.testing.expect(covers(path));
     }
     for ([_][]const u8{ "a.mcp.json", ".claude/settings.local.json", ".claude/agents", ".claude/commands/rule.md", ".claude/settings.json.bak", ".git/index", ".emetgate/journal", ".emetgate/frozen-hold/1/0", ".emetgate/ledger.ndjson/x", "src/.mcp.json" }) |path| {

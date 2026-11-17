@@ -88,6 +88,22 @@ emetgate verify HEAD --test "npm test"
 
 **看清代理碰了什么。** 在 `emetgate lockdown` 下，emetgate 调用在记录里的样子和 Claude Code 自带的工具一样，调用被合并时也是如此：`Read(文件)` 附上读到的行，`Search("…")` 附上前几个命中，`Update(文件)` 附上改动的行及其上下文，`Write(文件)`，`Bash(命令)` 附上输出。读取或修改旁边有一条细条带，显示代理目前看过文件的哪些部分；改动代理从未读过的部分会被标为 `edited without reading`。读取进行时有一条条带扫过文件；一轮结束时，一行文字总结这一轮，并列出碰过的每个文件以及各读了多少。它只负责绘制：模型收到的回复不变。机密文件（`.env`、密钥、凭据）只显示名字，从不显示内容。`emetgate lockdown --no-marks` 可将其关闭。
 
+## 数据库
+
+智能体可以读取项目的数据库，却看不到你要保密的内容。在终端里设置一次：
+
+```
+emetgate db add main data/app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db block main api_keys
+emetgate db protect main
+```
+
+智能体用 `emetgate_db` 读取：列出表、描述表结构、抽样行，每次调用执行一条 `SELECT`，结果为 JSON、CSV 或 Markdown，行数、单元格大小、回复大小和时间都有上限。文件以只读方式打开，每条语句在运行前都要经过 SQLite 的授权器。隐藏的列无论出现在哪里（`SELECT *`、视图、子查询、`WHERE`）都读作 NULL；被屏蔽的表即使通过视图也会被拒绝；脱敏的列无论用什么别名选出都以脱敏形式返回，把它放进表达式的查询会被拒绝。规则看的是值来自哪一列，而不是值被起了什么名字。
+
+**写入需要你点头。** 智能体只读。要让它修改数据，请把 `/db write` 作为提示输入：由 hook 直接回答，模型看不到。只有在你下一条提示的那一轮里，`emetgate_db_write` 才能执行 `INSERT`、`UPDATE`、`DELETE` 或 DDL，每条语句都连同影响的行数一起记录。删除表、清空表或修改每一行，除非你输入了 `/db write --destructive`，否则仍会被拒绝；`/db read` 立即关闭写入模式。
+
 ## 2 分钟上手
 
 在 PowerShell 中运行，然后打开一个新终端：
@@ -133,6 +149,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## 限制
 
 - 目前仅支持 Windows。
+- 数据库：目前仅支持 SQLite，PostgreSQL 和 MySQL 之后提供。含有隐藏或脱敏列的数据库请放在仓库之外，并运行 `emetgate db protect`，这样任何文件工具或命令都读不到文件本身。
 - 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。在 lockdown 下，非递归删除仓库内文件的命令会被拒绝；智能体改用经过门的 `emetgate_delete` 删除它们。
 - 规则账本是 `.emetgate/` 下的一个文件。智能体没有写它的工具，但通过命令编辑它不会被监视规则命令的 hook 捕获。
 - 在 lockdown 之外、用智能体自带工具打开的会话中没有门。在其他支持 MCP 的智能体中，只要智能体使用 emetgate 的工具，门就会生效。

@@ -9,6 +9,7 @@ const test_command = @import("test_command.zig");
 const runner = @import("runner.zig");
 const appcontainer = @import("appcontainer.zig");
 const user_rules = @import("user_rules.zig");
+const db_health = @import("../db/health.zig");
 pub const install_probe = @import("install_probe.zig");
 
 const Allocator = std.mem.Allocator;
@@ -217,6 +218,7 @@ pub fn run(gpa: Allocator, io: std.Io, probe: Probe, out: *std.Io.Writer) !u8 {
     try checks.append(arena, stateCheck(arena, io, probe));
     if (probe.local_app_data) |local| try checks.append(arena, try dataCheck(arena, io, local));
     try checks.append(arena, try rulesCheck(arena, io));
+    try db_health.append(arena, io, root, &checks);
     try checks.append(arena, sandboxCheck(arena, io, root orelse probe.cwd));
     try checks.append(arena, appContainerCheck());
     try checks.append(arena, codePageCheck(probe.code_page));

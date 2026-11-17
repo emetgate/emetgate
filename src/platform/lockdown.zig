@@ -43,6 +43,7 @@ pub const read_only_tools = [_][]const u8{
     "emetgate_scan",
     "emetgate_git",
     "emetgate_expand",
+    "emetgate_db",
     "emetgate_mutate",
 };
 

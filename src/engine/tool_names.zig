@@ -27,6 +27,8 @@ pub const all = [_][]const u8{
     "emetgate_mutate",
     "emetgate_try_batch",
     "emetgate_expand",
+    "emetgate_db",
+    "emetgate_db_write",
 };
 
 pub const max_prefix = 96;

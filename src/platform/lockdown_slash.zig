@@ -25,6 +25,10 @@ pub const command_file =
     "description: add, list, supersede or forget an emetgate rule\n" ++
     "disable-model-invocation: true\n" ++
     "---\n";
+pub const db_command_file_name = "db.md";
+pub const db_command_file = "---\n" ++
+    "description: let the model write to a database for your next prompt (/db write), or turn it off (/db read)\n" ++
+    command_file[std.mem.indexOf(u8, command_file, "disable-model-invocation").?..];
 
 pub const Entry = struct {
     dir: []u8,
@@ -99,6 +103,9 @@ pub fn install(gpa: Allocator, io: std.Io, local_app_data: []const u8, exe_abs: 
     const command_abs = try std.fs.path.join(gpa, &.{ commands, command_file_name });
     defer gpa.free(command_abs);
     try place(gpa, io, command_abs, command_file);
+    const db_command_abs = try std.fs.path.join(gpa, &.{ commands, db_command_file_name });
+    defer gpa.free(db_command_abs);
+    try place(gpa, io, db_command_abs, db_command_file);
 
     const settings = try std.fs.path.join(gpa, &.{ dir, settings_name });
     errdefer gpa.free(settings);

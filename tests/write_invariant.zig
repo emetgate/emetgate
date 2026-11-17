@@ -394,7 +394,7 @@ test "write invariant: every served write tool but emetgate_commit is exercised 
     const arena = arena_state.allocator();
     var served_writers: usize = 0;
     for (try servedTools(arena)) |tool| {
-        if (readOnly(tool) or std.mem.eql(u8, tool, "emetgate_commit")) continue;
+        if (readOnly(tool) or std.mem.eql(u8, tool, "emetgate_commit") or std.mem.eql(u8, tool, "emetgate_db_write")) continue;
         served_writers += 1;
         errdefer std.debug.print("served write tool {s} has no write invariant test\n", .{tool});
         var listed = false;

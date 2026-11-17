@@ -88,6 +88,22 @@ emetgate verify HEAD --test "npm test"
 
 **Watch what the agent touches.** Under `emetgate lockdown`, emetgate calls show in the transcript the way Claude Code's own tools do, also when calls fold together: `Read(file)` with the lines it read, `Search("…")` with the first hits, `Update(file)` with the changed lines and their context, `Write(file)`, `Bash(command)` with its output. Next to a read or an edit, a thin strip shows which parts of the file the agent has seen so far, and an edit to a part it never read is marked `edited without reading`. While a read runs, a strip scans the file; when the turn ends, one line sums up the turn and lists every file it touched with how much of each was read. It only draws: the model gets the same replies. A secret file (`.env`, keys, credentials) shows its name, never its content. `emetgate lockdown --no-marks` turns it off.
 
+## Databases
+
+The agent can read your project's database without seeing what you keep private. Set it up once in a terminal:
+
+```
+emetgate db add main data/app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db block main api_keys
+emetgate db protect main
+```
+
+The agent reads with `emetgate_db`: it lists tables, describes them, samples rows and runs one `SELECT` per call, as JSON, CSV or Markdown, with caps on rows, cell size, reply size and time. The file is opened read-only and every statement passes SQLite's authorizer before it runs. A hidden column reads as NULL wherever it appears (`SELECT *`, a view, a subquery, a `WHERE`); a blocked table is refused even through a view; a masked column comes back masked under any alias, and a query that puts it inside an expression is refused. The rules follow the column a value comes from, not the name it is given.
+
+**Writing needs you.** The agent only reads. To let it change data, type `/db write` as a prompt: the hook answers it and the model never sees it. Only during the turn of your next prompt may `emetgate_db_write` run `INSERT`, `UPDATE`, `DELETE` or DDL, each statement logged with its row count. Dropping a table, emptying one or changing every row is still refused unless you typed `/db write --destructive`; `/db read` ends write mode at once.
+
 ## Start in 2 minutes
 
 In PowerShell, then open a new terminal:
@@ -133,6 +149,7 @@ A cache that a running emetgate holds a lease on is never removed. The shared `c
 ## Limits
 
 - Windows only, for now.
+- Databases: SQLite only, for now; PostgreSQL and MySQL come later. Keep a database with hidden or masked columns outside the repository and run `emetgate db protect`, so no file tool or command reads the file itself.
 - Rules apply to changes made through emetgate's write tools. A command the agent runs does not pass the gate: the files it changes are reported and frozen paths are put back, but the other rules do not apply to commands. A command that deletes files in the repository without recursion is refused under lockdown; the agent deletes them with `emetgate_delete`, which passes the gate.
 - The rule ledger is a file under `.emetgate/`. The agent has no tool to write it, but an edit made by a command is not caught by the hook that watches rule commands.
 - Outside lockdown, in a session opened with the agent's own tools, there is no gate. In other agents that speak MCP, the gate works as long as the agent uses emetgate's tools.

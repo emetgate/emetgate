@@ -41,6 +41,7 @@ pub const Tool = enum {
     git,
     scan,
     mutate,
+    db,
 };
 
 /// The one budget table, in chars (bytes of UTF-8) per reply.
@@ -59,6 +60,7 @@ pub const table = std.enums.EnumArray(Tool, usize).init(.{
     .git = 24_000,
     .scan = 16_000,
     .mutate = 24_000,
+    .db = 24_000,
 });
 
 pub const default_budget: usize = 24_000;

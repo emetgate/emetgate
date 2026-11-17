@@ -38,6 +38,7 @@ const receipt_note = @import("receipt_note.zig");
 const receipts = @import("../platform/receipts.zig");
 const disk = @import("../platform/disk.zig");
 const scan_command = @import("scan_command.zig");
+const db_tool = @import("db_tool.zig");
 const tool_result = @import("tool_result.zig");
 const recovery = @import("recovery.zig");
 const batch_stage = @import("batch_stage.zig");
@@ -126,6 +127,7 @@ const read_only_tools = [_][]const u8{
     "emetgate_find",
     "emetgate_scan",
     "emetgate_git",
+    db_tool.read_tool,
 };
 
 pub fn readOnly(name: []const u8) bool {
@@ -161,6 +163,8 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_search")) return search_v1.callSearchAs(gpa, io, runtime, args, event, policy.root, policy.tree_cache, policy.search_session, .{ .format = if (policy.search_text) .text else .json, .internals = policy.search_internals });
     if (std.mem.eql(u8, name, "emetgate_find")) return find_tools.callFind(gpa, args, event, policy.find_session);
     if (std.mem.eql(u8, name, "emetgate_scan")) return callScan(gpa, io, runtime, args, event, policy.root, policy.tree_cache);
+    if (std.mem.eql(u8, name, db_tool.read_tool)) return db_tool.callRead(gpa, io, args, event, .{ .root = policy.root, .session = policy.db_session });
+    if (std.mem.eql(u8, name, db_tool.write_tool)) return db_tool.callWrite(gpa, io, args, event, .{ .root = policy.root, .session = policy.db_session });
     if (std.mem.eql(u8, name, "emetgate_git")) return git_tools.callGit(gpa, io, runtime, args, event, policy.root, policy.read_budget);
     if (std.mem.eql(u8, name, "emetgate_git_write")) {
         if (try gatedGitCommit(gpa, io, runtime, args, event, policy)) |made| return made;

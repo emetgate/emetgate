@@ -53,6 +53,12 @@ pub const delete_aliases = [_]Alias{
     .{ "file_hash", &.{ "hash", "expected_hash" } },
 };
 
+pub const db_aliases = [_]Alias{
+    .{ "sql", &.{ "query", "statement", "stmt" } },
+    .{ "table", &.{ "table_name", "name" } },
+    .{ "db", &.{ "database", "db_name", "connection" } },
+};
+
 const code_kinds = [_][]const u8{ "code", "source", "symbol" };
 const doc_kinds = [_][]const u8{ "doc", "docs", "document", "text", "file" };
 const write_ops = [_][]const u8{ "write", "create", "replace", "update", "overwrite", "edit", "insert", "add" };
@@ -73,6 +79,7 @@ pub fn normalize(arena: Allocator, name: []const u8, args: ?Value) !Call {
     if (eql(name, "emetgate_move")) return .{ .name = name, .args = try aliased(arena, given, &move_aliases) };
     if (eql(name, "emetgate_move_file")) return .{ .name = name, .args = try aliased(arena, given, &move_file_aliases) };
     if (eql(name, "emetgate_delete")) return .{ .name = name, .args = try normalizeDelete(arena, given) };
+    if (eql(name, "emetgate_db") or eql(name, "emetgate_db_write")) return .{ .name = name, .args = try aliased(arena, given, &db_aliases) };
     if (eql(name, "emetgate_write_doc")) {
         var item = try normalizeItem(arena, given);
         if (!needsBatch(item)) return .{ .name = name, .args = item };

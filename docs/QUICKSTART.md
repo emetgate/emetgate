@@ -106,6 +106,24 @@ What to expect:
 - Arguments after `lockdown` go to `claude` (e.g. `emetgate lockdown -p "fix the failing test"`). Flags that would lift the lock (`--tools`, `--mcp-config`, `--dangerously-skip-permissions`, ...) are refused.
 - The lock is per launch: a plain `claude` in the same folder is not locked.
 
+## 6. Optional: let the agent read a database
+
+If the project has a SQLite database, add it once, in a terminal:
+
+```powershell
+emetgate db add main data\app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db protect main
+emetgate db list
+```
+
+- The agent reads it with `emetgate_db`: tables, columns, sample rows and one `SELECT` per call. It cannot write: the file is opened read-only and every statement is checked by SQLite before it runs.
+- A hidden column reads as NULL in every query; a masked one comes back masked (`a***@example.com`) and may only be selected directly. `emetgate db block main <table>` keeps a table out entirely.
+- To let the agent change data, type `/db write` in the session. It applies to your next prompt only; anything that drops or empties a table needs `/db write --destructive`. `/db read` turns it off, `/db` shows the state.
+- `emetgate doctor` shows one line per database, with a fix when something is wrong.
+- Only SQLite is served for now.
+
 ## When something goes wrong
 
 Run `emetgate doctor` first; most startup errors print the fix on the same line, for example:
