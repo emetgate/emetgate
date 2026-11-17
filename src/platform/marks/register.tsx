@@ -244,6 +244,7 @@ const groupSummary = (entries: readonly Observed[]): string => {
   const edits = new Set<string>()
   let searches = 0
   let commands = 0
+  let queries = 0
   let other = 0
   for (const entry of entries) {
     const title = entry.native?.title ?? ''
@@ -252,6 +253,7 @@ const groupSummary = (entries: readonly Observed[]): string => {
     else if (title === 'Search' || title === 'Scan') searches += 1
     else if (title === 'Update' || title === 'Write' || title === 'Rename' || title === 'Move' || title === 'Delete') edits.add(file)
     else if (title === 'Bash') commands += 1
+    else if (title === 'Query' || title.startsWith('DB') || title === 'Explain') queries += 1
     else other += 1
   }
   const n = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
@@ -260,6 +262,7 @@ const groupSummary = (entries: readonly Observed[]): string => {
     searches > 0 ? `searched for ${n(searches, 'pattern')}` : '',
     edits.size > 0 ? `edited ${n(edits.size, 'file')}` : '',
     commands > 0 ? `ran ${n(commands, 'command')}` : '',
+    queries > 0 ? `queried the database ${queries === 1 ? 'once' : `${queries} times`}` : '',
     other > 0 ? n(other, 'other call') : '',
   ].filter(part => part !== '')
   const text = parts.join(', ')

@@ -222,6 +222,16 @@ pub const python_indent = @import("engine/lang/python/indent.zig");
 pub const source_check = @import("engine/source_check.zig");
 pub const self_update = @import("update/update.zig");
 pub const uninstall = @import("platform/uninstall.zig");
+pub const db_access = @import("db/access.zig");
+pub const db_engine = @import("db/engine.zig");
+pub const db_sqlite = @import("db/sqlite.zig");
+pub const db_render = @import("db/render.zig");
+pub const db_config = @import("db/config.zig");
+pub const db_credentials = @import("db/credentials.zig");
+pub const db_grant = @import("db/grant.zig");
+pub const db_tool = @import("protocol/db_tool.zig");
+pub const db_command = @import("protocol/db_command.zig");
+pub const db_health = @import("db/health.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

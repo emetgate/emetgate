@@ -267,7 +267,7 @@ test "recovery hints: with a tool prefix every tool named in instructions and de
     const list = try rpcResult("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
     defer list.deinit();
     const tools = list.value.object.get("result").?.object.get("tools").?.array.items;
-    try testing.expectEqual(tool_names.all.len - server.legacy_tools.len, tools.len);
+    try testing.expectEqual(tool_names.all.len - server.legacy_tools.len - 2, tools.len);
     for (tools) |tool| {
         const name = tool.object.get("name").?.string;
         var listed = false;

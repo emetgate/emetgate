@@ -88,6 +88,22 @@ emetgate verify HEAD --test "npm test"
 
 **Ajanın neye dokunduğunu gör.** `emetgate lockdown` altında emetgate çağrıları dökümde Claude Code'un kendi araçları gibi görünür, çağrılar bir araya toplandığında da: `Read(dosya)` okunan satırlarla, `Search("…")` ilk sonuçlarla, `Update(dosya)` değişen satırlar ve çevreleriyle, `Write(dosya)`, `Bash(komut)` çıktısıyla. Bir okumanın ya da düzenlemenin yanında ince bir şerit, ajanın dosyanın şimdiye kadar hangi kısımlarını gördüğünü gösterir; ajanın hiç okumadığı bir kısmı düzenlemesi `edited without reading` diye işaretlenir. Bir okuma sürerken bir şerit dosyayı tarar; tur bitince tek bir satır turu özetler ve dokunulan her dosyayı, her birinin ne kadarının okunduğuyla listeler. Yalnızca çizer: model aynı cevapları alır. Gizli bir dosya (`.env`, anahtarlar, kimlik bilgileri) adıyla görünür, içeriğiyle asla. `emetgate lockdown --no-marks` bunu kapatır.
 
+## Veritabanları
+
+Ajan, gizli tuttuğun verileri görmeden projenin veritabanını okuyabilir. Bir terminalde bir kez kurarsın:
+
+```
+emetgate db add main data/app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db block main api_keys
+emetgate db protect main
+```
+
+Ajan `emetgate_db` ile okur: tabloları listeler, tarif eder, örnek satır alır ve her çağrıda tek bir `SELECT` çalıştırır; sonuç JSON, CSV ya da Markdown olur, satır, hücre boyu, yanıt boyu ve süre sınırlıdır. Dosya salt okunur açılır ve her ifade çalışmadan önce SQLite'ın yetkilendiricisinden geçer. Gizli bir sütun nerede geçerse geçsin NULL okunur (`SELECT *`, bir view, bir alt sorgu, bir `WHERE`); engellenmiş bir tablo bir view üzerinden bile reddedilir; maskeli bir sütun hangi takma adla seçilirse seçilsin maskeli döner, onu bir ifadenin içine koyan sorgu reddedilir. Kurallar değere verilen ada değil, değerin geldiği sütuna bakar.
+
+**Yazmak senin iznine bağlı.** Ajan yalnızca okur. Veriyi değiştirmesine izin vermek için istem olarak `/db write` yaz: hook bunu kendisi yanıtlar, model görmez. Yalnızca bir sonraki isteminin turunda `emetgate_db_write` `INSERT`, `UPDATE`, `DELETE` ya da DDL çalıştırabilir; her ifade etkilediği satır sayısıyla kayda geçer. Bir tabloyu silmek, boşaltmak ya da her satırını değiştirmek, `/db write --destructive` yazmadıysan yine reddedilir; `/db read` yazma kipini hemen kapatır.
+
 ## 2 dakikada başla
 
 PowerShell'de çalıştır, sonra yeni bir terminal aç:
@@ -133,6 +149,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## Sınırlar
 
 - Şimdilik yalnızca Windows.
+- Veritabanları: şimdilik yalnızca SQLite; PostgreSQL ve MySQL sonra gelecek. Gizli ya da maskeli sütunu olan bir veritabanını reponun dışında tut ve `emetgate db protect` çalıştır; böylece hiçbir dosya aracı ya da komut dosyanın kendisini okuyamaz.
 - Kurallar emetgate'in yazma araçlarından geçen değişikliklere uygulanır. Ajanın çalıştırdığı bir komut kapıdan geçmez: değiştirdiği dosyalar raporlanır ve dondurulmuş yollar geri alınır, ama diğer kurallar komutlara uygulanmaz. Depodaki dosyaları özyinelemesiz silen bir komut lockdown altında reddedilir; ajan onları kapıdan geçen `emetgate_delete` ile siler.
 - Kural defteri `.emetgate/` altında bir dosyadır. Ajanın onu yazacak bir aracı yok, ama bir komutla düzenlenmesi kural komutlarını izleyen kancaya takılmaz.
 - lockdown dışında, ajanın kendi araçlarıyla açılan bir oturumda kapı yoktur. MCP konuşan başka ajanlarda kapı, ajan emetgate'in araçlarını kullandığı sürece çalışır.

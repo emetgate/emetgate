@@ -36,6 +36,9 @@ GROUPS = [
     ("Memory and the decision ledger", (
         "src/platform/memory.zig",
     )),
+    ("Database access", (
+        "src/db/sqlite.zig", "src/db/grant.zig", "src/protocol/db_tool.zig",
+    )),
     ("Mutation testing tool itself", (
         "tools/mutate/core.zig", "tools/mutate/changes.zig", "tools/mutate/schema.zig",
         "tools/test_runner.zig",

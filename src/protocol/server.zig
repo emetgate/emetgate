@@ -34,6 +34,7 @@ const search_session_mod = @import("../platform/search_session.zig");
 const tsserver = @import("../platform/tsserver.zig");
 const map_tools = @import("map_tools.zig");
 const find_tools = @import("find_tools.zig");
+const db_tool = @import("db_tool.zig");
 const arg_check = @import("arg_check.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
@@ -331,6 +332,27 @@ pub const tool_defs = [_]Tool{
         },
     },
     .{
+        .name = db_tool.read_tool,
+        .read_only = true,
+        .description = db_tool.read_description,
+        .props = &.{
+            .{ .name = "op", .desc = "", .optional = true },
+            .{ .name = "db", .desc = "", .optional = true },
+            .{ .name = "table", .desc = "", .optional = true },
+            .{ .name = "sql", .desc = "one statement", .optional = true },
+            .{ .name = "format", .desc = db_tool.format_desc, .optional = true },
+            .{ .name = "rows", .desc = "", .optional = true, .ty = "integer" },
+        },
+    },
+    .{
+        .name = db_tool.write_tool,
+        .description = db_tool.write_description,
+        .props = &.{
+            .{ .name = "sql", .desc = "one statement" },
+            .{ .name = "db", .desc = "", .optional = true },
+        },
+    },
+    .{
         .name = "emetgate_expand",
         .read_only = true,
         .description = "Returns the full body behind a collapsed #handle (only with --compact), flagged stale if its files changed. file narrows it to one file's section.",
@@ -368,6 +390,7 @@ pub const Served = struct {
     language_service: tsserver.Session,
     map_session: ?*map_tools.Session,
     find_session: ?*find_tools.Session,
+    db_session: db_tool.Session,
     batch_stage: batch_stage_mod.Store,
     policy: Policy,
     cache_sweep: cache_gc.Background,
@@ -398,6 +421,7 @@ pub const Served = struct {
             .language_service = .{ .gpa = gpa, .io = io, .root = root },
             .map_session = if (root) |r| map_tools.Session.create(gpa, io, runtime, r) catch null else null,
             .find_session = if (root) |r| find_tools.Session.create(gpa, io, r) catch null else null,
+            .db_session = .init(gpa, options.environ),
             .batch_stage = .init(gpa),
             .policy = policy,
             .cache_sweep = .{},
@@ -413,6 +437,7 @@ pub const Served = struct {
         self.policy.language_service = &self.language_service;
         self.policy.map_session = self.map_session;
         self.policy.find_session = self.find_session;
+        self.policy.db_session = &self.db_session;
         self.policy.batch_stage = &self.batch_stage;
         self.search.start();
         if (self.map_session) |ms| {
@@ -437,6 +462,7 @@ pub const Served = struct {
     pub fn close(self: *Served) void {
         self.cache_sweep.stop();
         if (self.find_session) |fs| fs.destroy();
+        self.db_session.deinit();
         if (self.map_session) |ms| ms.destroy();
         self.batch_stage.deinit();
         self.language_service.deinit();
@@ -526,7 +552,7 @@ pub fn handleMessageObserved(gpa: Allocator, io: std.Io, runtime: *Runtime, line
         return true;
     }
     if (std.mem.eql(u8, method, "tools/list")) {
-        try writeToolsList(out, request_id, policy.commit, policy.open_run, policy.nested_roots.len != 0, policy.legacy_tools);
+        try writeToolsList(out, request_id, policy.commit, policy.open_run, policy.nested_roots.len != 0, policy.legacy_tools, db_tool.configured(io, policy.root));
         return true;
     }
     if (std.mem.eql(u8, method, "tools/call")) {
@@ -755,7 +781,7 @@ pub fn isLegacy(name: []const u8) bool {
     return false;
 }
 
-fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: bool, legacy: bool) !void {
+fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: bool, legacy: bool, databases: bool) !void {
     var js: std.json.Stringify = .{ .writer = out };
     try js.beginObject();
     try envelope(&js, id);
@@ -765,6 +791,7 @@ fn writeToolsList(out: *Writer, id: Value, commit: bool, open: bool, nested: boo
     try js.beginArray();
     for (tool_defs) |listed| {
         if (!legacy and isLegacy(listed.name)) continue;
+        if (!databases and db_tool.isDbTool(listed.name)) continue;
         const tool = servedDef(listed, open);
         try js.beginObject();
         try js.objectField("name");

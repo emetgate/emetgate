@@ -69,6 +69,7 @@ const cases = [_]Case{
     .{ .tool = "emetgate_scan", .args = "{}", .budget = .scan, .cut = true, .enforced = false },
     .{ .tool = "emetgate_git", .args = "{\"subcommand\":\"show\"}", .budget = .git, .cut = true, .enforced = false },
     .{ .tool = "emetgate_mutate", .args = "{}", .budget = .mutate, .cut = false, .enforced = false },
+    .{ .tool = "emetgate_db", .args = "{\"op\":\"limits\"}", .budget = .db, .cut = false, .enforced = false },
 };
 
 fn symbolList(comptime n: usize) []const u8 {

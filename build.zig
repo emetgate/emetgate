@@ -3,6 +3,7 @@ const manifest = @import("build.zig.zon");
 
 const ts_core_root = "vendor/tree-sitter/lib";
 const pcre2_root = "vendor/pcre2";
+const sqlite_root = "vendor/sqlite";
 
 const Grammar = struct {
     root: []const u8,
@@ -29,6 +30,7 @@ pub fn build(b: *std.Build) void {
 
     const tree_sitter = buildTreeSitter(b, target, optimize);
     const pcre2 = buildPcre2(b, target, optimize);
+    const sqlite = buildSqlite(b, target, optimize);
 
     const c_api = b.addTranslateC(.{
         .root_source_file = b.path("src/c.h"),
@@ -37,6 +39,7 @@ pub fn build(b: *std.Build) void {
     });
     c_api.addIncludePath(b.path(ts_core_root ++ "/include"));
     c_api.addIncludePath(pcre2.header_dir);
+    c_api.addIncludePath(b.path(sqlite_root));
 
     const c_module = c_api.createModule();
     const version_values = b.addOptions();
@@ -54,6 +57,7 @@ pub fn build(b: *std.Build) void {
     });
     emetgate.linkLibrary(tree_sitter);
     emetgate.linkLibrary(pcre2.library);
+    emetgate.linkLibrary(sqlite);
 
     const probe = b.addExecutable(.{
         .name = "sandbox-probe",
@@ -64,7 +68,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const test_strip = b.option(bool, "test-strip", "Build the test binary without debug information: faster to build, failures show addresses instead of source lines");
-    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .pcre2 = pcre2.library, .strip = test_strip };
+    const common: TestModuleOptions = .{ .target = target, .optimize = optimize, .c_module = c_module, .version_module = version_module, .tree_sitter = tree_sitter, .pcre2 = pcre2.library, .sqlite = sqlite, .strip = test_strip };
     const src_bench = srcModule(b, common, true);
 
     const exe = b.addExecutable(.{
@@ -195,6 +199,7 @@ const TestModuleOptions = struct {
     version_module: *std.Build.Module,
     tree_sitter: *std.Build.Step.Compile,
     pcre2: *std.Build.Step.Compile,
+    sqlite: *std.Build.Step.Compile,
     strip: ?bool = null,
 };
 
@@ -218,6 +223,7 @@ fn srcModule(b: *std.Build, options: TestModuleOptions, bench: bool) *std.Build.
     });
     module.linkLibrary(options.tree_sitter);
     module.linkLibrary(options.pcre2);
+    module.linkLibrary(options.sqlite);
     return module;
 }
 
@@ -237,6 +243,7 @@ fn testModule(b: *std.Build, options: TestModuleOptions) *std.Build.Module {
     module.addImport("emetgate", module);
     module.linkLibrary(options.tree_sitter);
     module.linkLibrary(options.pcre2);
+    module.linkLibrary(options.sqlite);
     return module;
 }
 
@@ -507,6 +514,12 @@ const hook_cases = [_]HookCase{
         .stdout = "{\"decision\":\"block\",\"reason\":\"/rule add <text> [--check <spec>] [--in <where>] [--enforce] [--global]\\n/rule list [--all] [--json] [--global]\\n/rule supersede <id> <text> [--check <spec>] [--in <where>] [--enforce] [--global]\\n/rule forget <id> [--global]\\n/rule pick [<numbers> [in <path>]] [--global]   (pick rules from a catalog; pick alone lists it)\\n/rule show <number>   (what a catalog rule checks)\"}\n",
     },
     .{
+        .name = "hook prompt answers a /db prompt itself, so it never reaches the model",
+        .stdin = "{\"hook_event_name\":\"UserPromptSubmit\",\"prompt\":\"/db frobnicate\"}",
+        .exit_code = 0,
+        .stdout = "{\"decision\":\"block\",\"reason\":\"/db write [<name>] [--destructive]   (lets the model write to the database during your next prompt's turn only)\\n/db read   (turns write mode off now)\\n/db status   (the configured databases and whether write mode is on)\"}\n",
+    },
+    .{
         .name = "hook prompt stops every prompt with exit code 2 when its input is not the hook JSON",
         .stdin = "not json",
         .exit_code = 2,
@@ -671,4 +684,35 @@ fn buildPcre2(
         .library = b.addLibrary(.{ .name = "pcre2-8", .root_module = module }),
         .header_dir = headers.getDirectory(),
     };
+}
+
+const sqlite_flags: []const []const u8 = &.{
+    "-std=c11",
+    "-fno-sanitize=undefined",
+    "-DSQLITE_ENABLE_COLUMN_METADATA=1",
+    "-DSQLITE_OMIT_LOAD_EXTENSION=1",
+    "-DSQLITE_OMIT_SHARED_CACHE=1",
+    "-DSQLITE_OMIT_DEPRECATED=1",
+    "-DSQLITE_USE_URI=0",
+    "-DSQLITE_DQS=0",
+    "-DSQLITE_DEFAULT_MEMSTATUS=0",
+    "-DSQLITE_TEMP_STORE=3",
+    "-DSQLITE_THREADSAFE=1",
+    "-DSQLITE_ENABLE_MATH_FUNCTIONS=1",
+    "-DSQLITE_MAX_ATTACHED=0",
+};
+
+fn buildSqlite(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
+    const module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    module.addIncludePath(b.path(sqlite_root));
+    module.addCSourceFile(.{ .file = b.path(sqlite_root ++ "/sqlite3.c"), .flags = sqlite_flags });
+    return b.addLibrary(.{ .name = "sqlite3", .root_module = module });
 }

@@ -88,6 +88,22 @@ emetgate verify HEAD --test "npm test"
 
 **Mira lo que toca el agente.** Con `emetgate lockdown`, las llamadas de emetgate aparecen en la transcripción como las herramientas propias de Claude Code, también cuando las llamadas se agrupan: `Read(archivo)` con las líneas que leyó, `Search("…")` con los primeros resultados, `Update(archivo)` con las líneas cambiadas y su contexto, `Write(archivo)`, `Bash(comando)` con su salida. Junto a una lectura o una edición, una franja fina muestra qué partes del archivo ha visto el agente hasta ahora, y una edición de una parte que nunca leyó se marca como `edited without reading`. Mientras corre una lectura, una franja recorre el archivo; al terminar el turno, una línea resume el turno y lista cada archivo tocado con cuánto se leyó de cada uno. Solo dibuja: el modelo recibe las mismas respuestas. Un archivo secreto (`.env`, claves, credenciales) muestra su nombre, nunca su contenido. `emetgate lockdown --no-marks` lo desactiva.
 
+## Bases de datos
+
+El agente puede leer la base de datos del proyecto sin ver lo que guardas en privado. Se configura una vez en una terminal:
+
+```
+emetgate db add main data/app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db block main api_keys
+emetgate db protect main
+```
+
+El agente lee con `emetgate_db`: lista tablas, las describe, toma filas de muestra y ejecuta un `SELECT` por llamada, en JSON, CSV o Markdown, con límites de filas, tamaño de celda, tamaño de respuesta y tiempo. El archivo se abre en solo lectura y cada sentencia pasa por el autorizador de SQLite antes de ejecutarse. Una columna oculta se lee como NULL dondequiera que aparezca (`SELECT *`, una vista, una subconsulta, un `WHERE`); una tabla bloqueada se rechaza incluso a través de una vista; una columna enmascarada vuelve enmascarada con cualquier alias, y una consulta que la mete dentro de una expresión se rechaza. Las reglas siguen la columna de la que viene un valor, no el nombre que se le da.
+
+**Escribir requiere tu permiso.** El agente solo lee. Para dejar que cambie datos, escribe `/db write` como prompt: el hook lo responde y el modelo nunca lo ve. Solo durante el turno de tu siguiente prompt puede `emetgate_db_write` ejecutar `INSERT`, `UPDATE`, `DELETE` o DDL, y cada sentencia queda registrada con su número de filas. Borrar una tabla, vaciarla o cambiar todas sus filas sigue rechazado salvo que hayas escrito `/db write --destructive`; `/db read` termina el modo de escritura al instante.
+
 ## Empieza en 2 minutos
 
 En PowerShell, y luego abre una terminal nueva:
@@ -133,6 +149,7 @@ Una caché que un emetgate en ejecución tiene arrendada nunca se borra. Las car
 ## Límites
 
 - Por ahora solo en Windows.
+- Bases de datos: por ahora solo SQLite; PostgreSQL y MySQL llegarán después. Guarda una base de datos con columnas ocultas o enmascaradas fuera del repositorio y ejecuta `emetgate db protect`, para que ninguna herramienta de archivos ni ningún comando lea el archivo en sí.
 - Las reglas se aplican a los cambios hechos con las herramientas de escritura de emetgate. Un comando que ejecuta el agente no pasa por la puerta: los archivos que cambia se informan y las rutas congeladas se restauran, pero las demás reglas no se aplican a comandos. Con lockdown se rechaza un comando que borra archivos del repositorio sin recursión; el agente los borra con `emetgate_delete`, que pasa por la puerta.
 - El registro de reglas es un archivo bajo `.emetgate/`. El agente no tiene herramienta para escribirlo, pero una edición hecha con un comando no la detecta el hook que vigila los comandos de reglas.
 - Fuera de lockdown, en una sesión abierta con las herramientas propias del agente, no hay puerta. En otros agentes que hablan MCP, la puerta funciona mientras el agente use las herramientas de emetgate.

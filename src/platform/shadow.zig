@@ -864,6 +864,16 @@ pub fn labelWithoutPropagation(dir_abs: []const u8) LabelError!void {
     if (win.SetKernelObjectSecurity(handle, win.label_security_information, descriptor.?) == .FALSE) return error.LabelFailed;
 }
 
+pub fn labelWith(path_abs: []const u8, sddl: [*:0]const u16) LabelError!void {
+    if (builtin.os.tag != .windows) return;
+    const handle = try openForLabel(path_abs);
+    defer std.os.windows.CloseHandle(handle);
+    var descriptor: ?*anyopaque = null;
+    if (win.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, win.sddl_revision_1, &descriptor, null) == .FALSE) return error.LabelFailed;
+    defer _ = win.LocalFree(descriptor);
+    if (win.SetKernelObjectSecurity(handle, win.label_security_information, descriptor.?) == .FALSE) return error.LabelFailed;
+}
+
 pub fn isReparsePoint(path: []const u8) error{ AttributeCheckFailed, NameTooLong, InvalidWtf8 }!bool {
     var path_w: [std.fs.max_path_bytes:0]u16 = undefined;
     const wide = try toExtendedWide(&path_w, path);

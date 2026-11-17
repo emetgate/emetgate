@@ -88,6 +88,22 @@ emetgate verify HEAD --test "npm test"
 
 **에이전트가 무엇을 건드리는지 보기.** `emetgate lockdown` 아래에서 emetgate 호출은 기록에 Claude Code 자체 도구처럼 보이며, 호출이 묶여도 마찬가지입니다: 읽은 줄과 함께 `Read(파일)`, 첫 결과와 함께 `Search("…")`, 바뀐 줄과 주변 줄과 함께 `Update(파일)`, `Write(파일)`, 출력과 함께 `Bash(명령)`. 읽기나 수정 옆의 얇은 띠는 에이전트가 지금까지 파일의 어느 부분을 봤는지 보여 주고, 읽지 않은 부분을 고치면 `edited without reading`으로 표시됩니다. 읽는 동안에는 띠가 파일을 훑고, 턴이 끝나면 한 줄이 턴을 요약하고 건드린 파일마다 얼마나 읽었는지를 나열합니다. 그리기만 합니다: 모델은 같은 응답을 받습니다. 비밀 파일(`.env`, 키, 자격 증명)은 이름만 보이고 내용은 절대 보이지 않습니다. `emetgate lockdown --no-marks`로 끕니다.
 
+## 데이터베이스
+
+에이전트는 비공개로 둔 값을 보지 않고도 프로젝트의 데이터베이스를 읽을 수 있습니다. 터미널에서 한 번만 설정합니다:
+
+```
+emetgate db add main data/app.db
+emetgate db hide main users.password_hash
+emetgate db mask main users.email --mode email
+emetgate db block main api_keys
+emetgate db protect main
+```
+
+에이전트는 `emetgate_db`로 읽습니다. 테이블을 나열하고, 구조를 설명하고, 행을 샘플링하고, 호출마다 `SELECT` 하나를 실행하며, 결과는 JSON, CSV 또는 Markdown으로 받고 행 수, 셀 크기, 응답 크기, 시간에 상한이 있습니다. 파일은 읽기 전용으로 열리고 모든 문장은 실행 전에 SQLite의 authorizer를 거칩니다. 숨긴 열은 어디에 나오든(`SELECT *`, 뷰, 서브쿼리, `WHERE`) NULL로 읽히고, 차단한 테이블은 뷰를 거쳐도 거부되며, 마스킹한 열은 어떤 별칭으로 고르든 마스킹되어 돌아오고 그 열을 식 안에 넣은 쿼리는 거부됩니다. 규칙은 값에 붙은 이름이 아니라 값이 나온 열을 따릅니다.
+
+**쓰기에는 당신이 필요합니다.** 에이전트는 읽기만 합니다. 데이터를 바꾸게 하려면 프롬프트로 `/db write`를 입력하세요. hook이 직접 답하고 모델은 보지 못합니다. 다음 프롬프트의 턴 동안에만 `emetgate_db_write`가 `INSERT`, `UPDATE`, `DELETE` 또는 DDL을 실행할 수 있고, 각 문장은 영향받은 행 수와 함께 기록됩니다. 테이블 삭제, 테이블 비우기, 모든 행 변경은 `/db write --destructive`를 입력하지 않았다면 여전히 거부되며, `/db read`는 쓰기 모드를 즉시 끕니다.
+
 ## 2분 만에 시작하기
 
 PowerShell에서 실행한 뒤 새 터미널을 엽니다:
@@ -133,6 +149,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## 한계
 
 - 현재는 Windows 전용입니다.
+- 데이터베이스: 현재는 SQLite만 지원하며 PostgreSQL과 MySQL은 나중에 추가됩니다. 숨기거나 마스킹한 열이 있는 데이터베이스는 저장소 밖에 두고 `emetgate db protect`를 실행하세요. 그러면 어떤 파일 도구나 명령도 파일 자체를 읽지 못합니다.
 - 규칙은 emetgate의 쓰기 도구를 거친 변경에 적용됩니다. 에이전트가 실행한 명령은 게이트를 거치지 않습니다. 바꾼 파일은 보고되고 고정된 경로는 되돌려지지만, 다른 규칙은 명령에 적용되지 않습니다. 저장소의 파일을 재귀 없이 삭제하는 명령은 lockdown에서 거부되며, 에이전트는 게이트를 통과하는 `emetgate_delete`로 파일을 삭제합니다.
 - 규칙 장부는 `.emetgate/` 아래의 파일입니다. 에이전트에게는 그것을 쓸 도구가 없지만, 명령으로 편집하는 경우는 규칙 명령을 감시하는 hook에 걸리지 않습니다.
 - lockdown 밖에서 에이전트 자체 도구로 연 세션에는 게이트가 없습니다. MCP를 쓰는 다른 에이전트에서는 에이전트가 emetgate 도구를 쓰는 동안 게이트가 동작합니다.

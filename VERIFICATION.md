@@ -6,11 +6,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3246**
-- Mutations declared in `tests/mutations.json`: **2077**
-  - killed: **2028**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3293**
+- Mutations declared in `tests/mutations.json`: **2095**
+  - killed: **2044**
   - equivalent: **9**
-  - defense in depth: **11**
+  - defense in depth: **13**
   - open: **3**
   - control: **3**
   - not caught by a test, documented as unbounded cost: **1**
@@ -723,6 +723,31 @@ python tools/verification_page.py --check
 | `SP33-ledger-writes-null-where` | `src/platform/memory.zig` | `if (comptime std.mem.eql(u8, field.name, "where")) {` -> `if (comptime false) {` | where: remember and supersede store where, and an unscoped row carries no where...; memor... | killed |
 | `GR9-damaged-global-row-skipped` | `src/platform/memory.zig` | `const rows = try parseLedger(arena.allocator(), settledRows(byt...` -> `const rows = parseLedger(arena.allocator(), settledRows(bytes))...` | global rules: a malformed global ledger fails every gate closed and names the g... | killed |
 | `GR10-row-being-appended-fails-the-gate` | `src/platform/memory.zig` | `parseLedger(arena.allocator(), settledRows(bytes));` -> `parseLedger(arena.allocator(), bytes);` | global rules: a row still being appended is not read, and the rows before it st... | killed |
+
+### Database access
+
+18 mutation(s).
+
+| Mutant | File | Change | Proved by | Status |
+|---|---|---|---|---|
+| `DB1-hidden-column-read-as-value` | `src/db/sqlite.zig` | `self.noteNulled(table, column);             return c.SQLITE_IGN...` -> `self.noteNulled(table, column);             return c.SQLITE_OK;` | db security: SELECT * and every path to a hidden column read it as NULL | killed |
+| `DB2-masked-read-not-counted` | `src/db/sqlite.zig` | `self.countRead(table, column);` -> `` | db security: a masked column inside lower(), \\|\\|, CAST, an aggregate, WHERE, O... | killed |
+| `DB3-masked-expression-check-skipped` | `src/db/sqlite.zig` | `if (seen.count > direct) {` -> `if (false) {` | db security: a masked column inside lower(), \\|\\|, CAST, an aggregate, WHERE, O... | killed |
+| `DB4-blocked-table-read` | `src/db/sqlite.zig` | `return self.deny(.table, table);` -> `return null;` | db security: a blocked table is refused directly, by any spelling, through a vi...; db se... | killed |
+| `DB5-any-function-allowed` | `src/db/sqlite.zig` | `if (allowed_functions.has(lower)) return c.SQLITE_OK;` -> `if (allowed_functions.has(lower) or lower.len != 0) return c.SQ...` | db security: load_extension and functions off the allowed list are refused | killed |
+| `DB6-statement-tail-ignored` | `src/db/sqlite.zig` | `if (!self.restIsEmpty(sql[@min(used, sql.len)..])) {` -> `if (!self.restIsEmpty(sql[@min(used, sql.len)..]) and false) {` | db security: only one statement runs; anything after the first is refused befor... | killed |
+| `DB7-unknown-action-allowed` | `src/db/sqlite.zig` | `else => return self.deny(.action, actionName(action)),` -> `else => return c.SQLITE_OK,` | db security: ATTACH, VACUUM INTO, PRAGMA and the pragma table functions are ref...; db se... | killed |
+| `DB8-read-connection-runs-dml` | `src/db/sqlite.zig` | `c.SQLITE_INSERT, c.SQLITE_DELETE => {                 if (!writ...` -> `c.SQLITE_INSERT, c.SQLITE_DELETE => {` | db security: a read connection refuses every write and DDL statement | defense in depth |
+| `DB9-row-cap-ignored` | `src/db/sqlite.zig` | `if (outcome.rows >= max_rows) {` -> `if (outcome.rows >= max_rows and false) {` | db security: the row cap holds even under LIMIT 1000000 and the reply says more... | killed |
+| `DB10-whole-table-delete-unflagged` | `src/db/sqlite.zig` | `if (rows_before >= 2 and after == 0) {` -> `if (rows_before >= 2 and after == 0 and false) {` | db security: with a plain write grant a destructive statement is refused and ro... | killed |
+| `DB11-drop-without-destructive-grant` | `src/db/sqlite.zig` | `if (!self.guard.permit.destructive) return self.deny(.destructi...` -> `` | db security: with a plain write grant a destructive statement is refused and ro... | defense in depth |
+| `DB12-masked-column-read-by-write` | `src/db/sqlite.zig` | `if (writing) return self.deny(.masked_write, column);` -> `` | db security: a write may not read or change hidden or masked columns, nor touch... | killed |
+| `DB13-read-connection-opened-writable` | `src/db/sqlite.zig` | `const access_flag: c_int = if (settings.mode == .write) c.SQLIT...` -> `const access_flag: c_int = c.SQLITE_OPEN_READWRITE;` | db security: a read connection is opened read-only with query_only on, and a wr... | killed |
+| `DB14-query-only-not-set` | `src/db/sqlite.zig` | `if (settings.mode == .read) self.exec("PRAGMA query_only = 1") ...` -> `if (false) self.exec("PRAGMA query_only = 1") catch {` | db security: a read connection is opened read-only with query_only on, and a wr... | killed |
+| `DB15-armed-grant-permits` | `src/db/grant.zig` | `return if (grant.state == .active) grant else null;` -> `return grant;` | db tool: a write is refused until the user's /db write prompt, lasts one turn, ...; db gr... | killed |
+| `DB16-grant-outlives-its-turn` | `src/db/grant.zig` | `if (grant.state == .active or expired(grant, now)) return revok...` -> `if (expired(grant, now)) return revoke(io, file);` | db tool: a write is refused until the user's /db write prompt, lasts one turn, ...; db gr... | killed |
+| `DB17-grant-covers-every-database` | `src/protocol/db_tool.zig` | `if (!given.covers(name)) {` -> `if (false) {` | db tool: /db write --destructive allows a wipe; /db read ends write mode at onc... | killed |
+| `DB18-blocked-table-listed` | `src/db/sqlite.zig` | `if (self.access.tableRefusal(name) != null) {                 w...` -> `if (false) {                 withheld += 1;` | db security: tables and describe leave blocked tables out and label hidden and ... | killed |
 
 ### Mutation testing tool itself
 

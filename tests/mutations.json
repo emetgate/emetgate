@@ -19937,6 +19937,176 @@
         "delete tool: a staged new file leaves the index too, so git does not show it as added and deleted"
       ],
       "note": "path and hash, the names other tools take, would not reach emetgate_delete"
+    },
+    {
+      "id": "DB1-hidden-column-read-as-value",
+      "file": "src/db/sqlite.zig",
+      "from": "            self.noteNulled(table, column);\n            return c.SQLITE_IGNORE;",
+      "to": "            self.noteNulled(table, column);\n            return c.SQLITE_OK;",
+      "kills": [
+        "db security: SELECT * and every path to a hidden column read it as NULL"
+      ]
+    },
+    {
+      "id": "DB2-masked-read-not-counted",
+      "file": "src/db/sqlite.zig",
+      "from": "            self.countRead(table, column);",
+      "to": "",
+      "kills": [
+        "db security: a masked column inside lower(), ||, CAST, an aggregate, WHERE, ORDER BY or a view expression is refused"
+      ]
+    },
+    {
+      "id": "DB3-masked-expression-check-skipped",
+      "file": "src/db/sqlite.zig",
+      "from": "            if (seen.count > direct) {",
+      "to": "            if (false) {",
+      "kills": [
+        "db security: a masked column inside lower(), ||, CAST, an aggregate, WHERE, ORDER BY or a view expression is refused"
+      ]
+    },
+    {
+      "id": "DB4-blocked-table-read",
+      "file": "src/db/sqlite.zig",
+      "from": "            return self.deny(.table, table);",
+      "to": "            return null;",
+      "kills": [
+        "db security: a blocked table is refused directly, by any spelling, through a view and through count(*)",
+        "db security: a write may not read or change hidden or masked columns, nor touch a blocked table"
+      ]
+    },
+    {
+      "id": "DB5-any-function-allowed",
+      "file": "src/db/sqlite.zig",
+      "from": "                if (allowed_functions.has(lower)) return c.SQLITE_OK;",
+      "to": "                if (allowed_functions.has(lower) or lower.len != 0) return c.SQLITE_OK;",
+      "kills": [
+        "db security: load_extension and functions off the allowed list are refused"
+      ]
+    },
+    {
+      "id": "DB6-statement-tail-ignored",
+      "file": "src/db/sqlite.zig",
+      "from": "        if (!self.restIsEmpty(sql[@min(used, sql.len)..])) {",
+      "to": "        if (!self.restIsEmpty(sql[@min(used, sql.len)..]) and false) {",
+      "kills": [
+        "db security: only one statement runs; anything after the first is refused before it runs"
+      ]
+    },
+    {
+      "id": "DB7-unknown-action-allowed",
+      "file": "src/db/sqlite.zig",
+      "from": "            else => return self.deny(.action, actionName(action)),",
+      "to": "            else => return c.SQLITE_OK,",
+      "kills": [
+        "db security: ATTACH, VACUUM INTO, PRAGMA and the pragma table functions are refused on a read connection",
+        "db security: a write may not read or change hidden or masked columns, nor touch a blocked table"
+      ]
+    },
+    {
+      "id": "DB8-read-connection-runs-dml",
+      "expect_status": "survived",
+      "note": "defense in depth: a read connection also requires sqlite3_stmt_readonly and an authorized SELECT before a statement runs, and is opened SQLITE_OPEN_READONLY with query_only, so a DML statement the authorizer let through is still refused as StatementNotRead",
+      "file": "src/db/sqlite.zig",
+      "from": "            c.SQLITE_INSERT, c.SQLITE_DELETE => {\n                if (!writing) return self.deny(.action, actionName(action));",
+      "to": "            c.SQLITE_INSERT, c.SQLITE_DELETE => {",
+      "kills": [
+        "db security: a read connection refuses every write and DDL statement"
+      ]
+    },
+    {
+      "id": "DB9-row-cap-ignored",
+      "file": "src/db/sqlite.zig",
+      "from": "            if (outcome.rows >= max_rows) {",
+      "to": "            if (outcome.rows >= max_rows and false) {",
+      "kills": [
+        "db security: the row cap holds even under LIMIT 1000000 and the reply says more rows exist"
+      ]
+    },
+    {
+      "id": "DB10-whole-table-delete-unflagged",
+      "file": "src/db/sqlite.zig",
+      "from": "                    if (rows_before >= 2 and after == 0) {",
+      "to": "                    if (rows_before >= 2 and after == 0 and false) {",
+      "kills": [
+        "db security: with a plain write grant a destructive statement is refused and rolled back"
+      ]
+    },
+    {
+      "id": "DB11-drop-without-destructive-grant",
+      "expect_status": "survived",
+      "note": "defense in depth: a DROP the authorizer let through is recorded as a drop target, runs inside a savepoint and is rolled back as DestructiveNotGranted after it runs",
+      "file": "src/db/sqlite.zig",
+      "from": "                if (!self.guard.permit.destructive) return self.deny(.destructive, a1);",
+      "to": "",
+      "kills": [
+        "db security: with a plain write grant a destructive statement is refused and rolled back"
+      ]
+    },
+    {
+      "id": "DB12-masked-column-read-by-write",
+      "file": "src/db/sqlite.zig",
+      "from": "            if (writing) return self.deny(.masked_write, column);",
+      "to": "",
+      "kills": [
+        "db security: a write may not read or change hidden or masked columns, nor touch a blocked table"
+      ]
+    },
+    {
+      "id": "DB13-read-connection-opened-writable",
+      "file": "src/db/sqlite.zig",
+      "from": "    const access_flag: c_int = if (settings.mode == .write) c.SQLITE_OPEN_READWRITE else c.SQLITE_OPEN_READONLY;",
+      "to": "    const access_flag: c_int = c.SQLITE_OPEN_READWRITE;",
+      "kills": [
+        "db security: a read connection is opened read-only with query_only on, and a write connection is not"
+      ]
+    },
+    {
+      "id": "DB14-query-only-not-set",
+      "file": "src/db/sqlite.zig",
+      "from": "    if (settings.mode == .read) self.exec(\"PRAGMA query_only = 1\") catch {",
+      "to": "    if (false) self.exec(\"PRAGMA query_only = 1\") catch {",
+      "kills": [
+        "db security: a read connection is opened read-only with query_only on, and a write connection is not"
+      ]
+    },
+    {
+      "id": "DB15-armed-grant-permits",
+      "file": "src/db/grant.zig",
+      "from": "    return if (grant.state == .active) grant else null;",
+      "to": "    return grant;",
+      "kills": [
+        "db tool: a write is refused until the user's /db write prompt, lasts one turn, and is logged with its row count",
+        "db grant: armed by the user, active for exactly the next prompt, then gone"
+      ]
+    },
+    {
+      "id": "DB16-grant-outlives-its-turn",
+      "file": "src/db/grant.zig",
+      "from": "    if (grant.state == .active or expired(grant, now)) return revoke(io, file);",
+      "to": "    if (expired(grant, now)) return revoke(io, file);",
+      "kills": [
+        "db tool: a write is refused until the user's /db write prompt, lasts one turn, and is logged with its row count",
+        "db grant: armed by the user, active for exactly the next prompt, then gone"
+      ]
+    },
+    {
+      "id": "DB17-grant-covers-every-database",
+      "file": "src/protocol/db_tool.zig",
+      "from": "    if (!given.covers(name)) {",
+      "to": "    if (false) {",
+      "kills": [
+        "db tool: /db write --destructive allows a wipe; /db read ends write mode at once; a grant for one database does not cover another"
+      ]
+    },
+    {
+      "id": "DB18-blocked-table-listed",
+      "file": "src/db/sqlite.zig",
+      "from": "            if (self.access.tableRefusal(name) != null) {\n                withheld += 1;",
+      "to": "            if (false) {\n                withheld += 1;",
+      "kills": [
+        "db security: tables and describe leave blocked tables out and label hidden and masked columns"
+      ]
     }
   ]
 }

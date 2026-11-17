@@ -18,6 +18,7 @@ pub const Event = struct {
     symbol: ?[]const u8 = null,
     command: ?[]const u8 = null,
     exit_code: ?i64 = null,
+    rows: ?i64 = null,
     outcome: Outcome = .ok,
     result: ?[]const u8 = null,
     reason: ?[]const u8 = null,
@@ -126,6 +127,10 @@ pub fn writeEvent(w: *Writer, ts_ms: i64, event: Event) !void {
         try js.write(command);
         try js.objectField("exit_code");
         try js.write(event.exit_code);
+    }
+    if (event.rows) |rows| {
+        try js.objectField("rows");
+        try js.write(rows);
     }
     try js.objectField("class");
     try js.write(event.trace.class);

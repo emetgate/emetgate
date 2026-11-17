@@ -10,6 +10,7 @@ const forgive = @import("forgive.zig");
 const wire = @import("wire.zig");
 const tool_result = @import("tool_result.zig");
 const search_v1 = @import("search_v1.zig");
+const db_tool = @import("db_tool.zig");
 
 const Allocator = std.mem.Allocator;
 const Value = std.json.Value;
@@ -97,6 +98,7 @@ fn aliasesOf(name: []const u8) []const Alias {
     if (eql(name, "emetgate_move")) return &forgive.move_aliases;
     if (eql(name, "emetgate_move_file")) return &forgive.move_file_aliases;
     if (eql(name, "emetgate_delete")) return &forgive.delete_aliases;
+    if (eql(name, db_tool.read_tool) or eql(name, db_tool.write_tool)) return &forgive.db_aliases;
     return &.{};
 }
 

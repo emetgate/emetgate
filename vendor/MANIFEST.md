@@ -21,6 +21,7 @@ named in `license`.
 | `pure_python_blake3` | https://github.com/oconnor663/pure_python_blake3 | master | `3fde72eabfc6aa4ea7fa727bdfb852f396f90a17` | CC0-1.0 | U3 Python checker (2026-09-27) |
 | `blake3-test-vectors` | https://github.com/BLAKE3-team/BLAKE3 (`test_vectors/test_vectors.json`, `LICENSE_CC0`) | master | `6aab490a26124663329dfd3961b8469f8fdb158b` | CC0-1.0 | U3 Python checker (2026-09-27) |
 | `pcre2` | https://github.com/PCRE2Project/pcre2 (library sources, `deps/sljit`, `LICENCE.md` kept as `LICENSE`) | 10.49 | `6f9d7c1373262c541324a16a358785b33ef116cf` | BSD-3-Clause WITH PCRE2-exception | the regex engine for `emetgate_search` and `#match?` (2026-10-23) |
+| `sqlite` | https://sqlite.org/download.html (amalgamation `sqlite-amalgamation-3540100.zip`, SHA3-256 `92281c86e2957f9b9305890f9ac04204caa7b677cc868dc326d942689df28e30`; only `sqlite3.c` and `sqlite3.h` kept) | 3.54.1 | `555e07ef33f69a0957d24d8e555b702464a131d6f1607f4c3c1e4551e8e6ca76` | blessing | the SQLite engine for `emetgate_db` (2026-11-17); `sqlite3.c` SHA-256 `0c657666d819f261cc4007526ad57e1669de9949df7a8ea847aa284a2bf0ee52`, `sqlite3.h` SHA-256 `d6c84557261893439b341d2e6c35187ae3ea24fbfd843ad94616f72d89242b8c` |
 
 "Version" and "upstream commit" are filled in only where the commit message
 that first added the directory stated one; nobody pinned an exact upstream
@@ -28,7 +29,7 @@ commit hash at vendoring time for any of these, so that column is honest
 about being unrecorded rather than guessed. `tree-sitter-markdown` and
 `tree-sitter-zig` are grammars published under the community
 `tree-sitter-grammars` GitHub organization, not the official `tree-sitter`
-one; the other four are official. `pcre2` keeps only what the 8-bit library needs: `src/` without the test and POSIX wrapper files, and the `sljit` JIT compiler.
+one; the other four are official. `pcre2` keeps only what the 8-bit library needs: `src/` without the test and POSIX wrapper files, and the `sljit` JIT compiler. `sqlite` keeps the amalgamation unchanged; its `LICENSE` is the public-domain blessing copied from the `sqlite3.h` header, since SQLite ships no license file.
 
 Going forward, vendoring a new or updated grammar should record the exact
 upstream commit hash (`git ls-remote <repo> <tag-or-branch>` at copy time) in

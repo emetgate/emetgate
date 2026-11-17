@@ -224,6 +224,16 @@ pub const test_results = src.test_results;
 pub const test_debt = src.test_debt;
 pub const batch_stage = src.batch_stage;
 pub const batch_merge = src.batch_merge;
+pub const db_access = src.db_access;
+pub const db_engine = src.db_engine;
+pub const db_sqlite = src.db_sqlite;
+pub const db_render = src.db_render;
+pub const db_config = src.db_config;
+pub const db_credentials = src.db_credentials;
+pub const db_grant = src.db_grant;
+pub const db_tool = src.db_tool;
+pub const db_command = src.db_command;
+pub const db_health = src.db_health;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {
@@ -405,4 +415,6 @@ test {
     _ = @import("tests/git_fixture_test.zig");
     _ = @import("tests/test_runner_harness.zig");
     _ = @import("tests/suites.zig");
+    _ = @import("tests/db_security.zig");
+    _ = @import("tests/db_tool.zig");
 }

@@ -122,7 +122,13 @@ test "lockdown slash: a second install repairs a changed file and leaves nothing
     try testing.expectEqual(@as(usize, 2), try countEntries(.cwd(), second.dir));
     const commands = try std.fmt.allocPrint(testing.allocator, "{s}\\.claude\\commands", .{second.dir});
     defer testing.allocator.free(commands);
-    try testing.expectEqual(@as(usize, 1), try countEntries(.cwd(), commands));
+    try testing.expectEqual(@as(usize, 2), try countEntries(.cwd(), commands));
+    const db_abs = try std.fmt.allocPrint(testing.allocator, "{s}\\db.md", .{commands});
+    defer testing.allocator.free(db_abs);
+    const db_command = try fileAt(.cwd(), db_abs);
+    defer testing.allocator.free(db_command);
+    try testing.expectEqualStrings(lockdown_slash.db_command_file, db_command);
+    try testing.expect(std.mem.indexOf(u8, db_command, "disable-model-invocation: true") != null);
 }
 
 test "lockdown slash: two executables do not share a settings file" {

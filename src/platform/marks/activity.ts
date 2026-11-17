@@ -454,6 +454,32 @@ const nativeOf = (tool: string, base: Activity, args: Args, text: string, diffRo
     const body = hits.map(hit => `${slash(hit.file)}:${hit.line}  ${clean(hit.text.trim())}`)
     return { ...empty, title, arg: `"${query}"${where === '' ? '' : ` in ${where}`}`, summary, body: body.slice(0, BODY_ROWS), bodyMore: Math.max(0, body.length - BODY_ROWS) }
   }
+  if (tool === 'db' || tool === 'db_write') {
+    const { head, body } = parse(text)
+    const db = str(args, 'db') || str(head, 'db')
+    const op = tool === 'db_write' ? 'write' : str(args, 'op') || 'query'
+    const sql = clean(str(args, 'sql').replace(/\s+/g, ' ').trim())
+    const target = sql || str(args, 'table')
+    const arg = [db, target].filter(part => part !== '').join(' · ')
+    const list = (value: unknown) => (Array.isArray(value) ? (value as unknown[]).map(String) : [])
+    const guarded = [list(head?.hidden).length > 0 ? `hidden: ${list(head?.hidden).join(', ')}` : '', list(head?.masked).length > 0 ? `masked: ${list(head?.masked).join(', ')}` : ''].filter(part => part !== '')
+    if (tool === 'db_write') {
+      const rows = num(head?.rows_affected)
+      const action = str(head, 'action') || 'write'
+      const summary = rows === undefined ? 'Done' : `${action[0].toUpperCase()}${action.slice(1)}d ${plural(rows, 'row')}${str(head, 'table') === '' ? '' : ` in ${str(head, 'table')}`}${head?.destructive === true ? ' (destructive)' : ''}`
+      return { ...empty, title: 'DB write', arg, summary }
+    }
+    if (op === 'tables') {
+      const tables = list(head?.tables)
+      return { ...empty, title: 'DB tables', arg: db, summary: `${plural(tables.length, 'table')}${num(head?.withheld) ? ` · ${num(head?.withheld)} withheld` : ''}`, body: tables.slice(0, BODY_ROWS), bodyMore: Math.max(0, tables.length - BODY_ROWS) }
+    }
+    const rows = num(head?.row_count)
+    const ms = num(head?.ms)
+    const summary = [rows === undefined ? '' : `${plural(rows, 'row')}${head?.more === true ? '+' : ''}`, ms === undefined ? '' : `${ms}ms`, ...guarded].filter(part => part !== '').join(' · ') || 'Done'
+    const lines = body.map(line => clean(line)).filter(line => line.trim() !== '')
+    const title = op === 'query' ? 'Query' : op === 'describe' ? 'DB describe' : op === 'explain' ? 'Explain' : op === 'sample' ? 'DB sample' : op === 'count' ? 'DB count' : 'DB'
+    return { ...empty, title, arg, summary, body: lines.slice(0, BODY_ROWS), bodyMore: Math.max(0, lines.length - BODY_ROWS) }
+  }
   if (tool === 'delete') {
     const { head } = parse(text)
     const folders = Array.isArray(head?.emptied_folders) ? (head?.emptied_folders as unknown[]).length : 0

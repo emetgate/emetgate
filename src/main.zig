@@ -22,6 +22,7 @@ const scan_command = emetgate.scan_command;
 const rule_command = emetgate.rule_command;
 const rule_catalog = emetgate.rule_catalog;
 const rules_command = emetgate.rules_command;
+const db_command = emetgate.db_command;
 const commit_guard = emetgate.commit_guard;
 const rules = emetgate.rules;
 const repo = emetgate.repo;
@@ -51,6 +52,8 @@ const usage =
     \\
 ++ rule_command.usage("       emetgate rule ") ++
     \\       emetgate rules   (interactive checklist: pick the enforced rules with the keyboard)
+    \\
+++ db_command.usage("       emetgate db ") ++
     \\       emetgate hook prompt
     \\       emetgate hook pretool
     \\       emetgate hook session
@@ -97,6 +100,14 @@ const usage =
     \\repository root. A repository cannot replace, forget or loosen a global rule,
     \\and the global cmd: and q: rules run without --allow-repo-memory. rule list
     \\shows both, each with its origin; --global lists only the global ones.
+    \\db configures the databases the model reads with emetgate_db, in
+    \\.emetgate\db.json (a gate file the model cannot change under lockdown); a
+    \\postgres:// or mysql:// connection string is sealed with DPAPI under
+    \\%LOCALAPPDATA%\emetgate\db\credentials, never written to the repository.
+    \\--global rules live in %LOCALAPPDATA%\emetgate\db\rules.json and apply to every
+    \\database in every repository; a repository cannot loosen them. The model only
+    \\reads; it writes with emetgate_db_write only during the turn after you type
+    \\/db write in a lockdown session.
     \\hook prompt is the UserPromptSubmit hook that lockdown gives claude: it reads
     \\the hook JSON on stdin and answers a prompt that starts with /rule itself, as
     \\emetgate rule would, so that prompt never reaches the model. A short prompt that
@@ -229,6 +240,10 @@ fn dispatch(init: std.process.Init, runtime: *Runtime, args: []const [:0]const u
         if (args.len >= 3) if (rule_catalog.verbOf(args[2])) |verb| return ruleCatalogCmd(init, runtime, verb, args[3..], out);
         const request = rule_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], rule_command.parse);
         return ruleCmd(init, runtime, request, out);
+    }
+    if (std.mem.eql(u8, command, "db")) {
+        const request = db_command.parse(args[2..]) orelse exitWithBadArgs(command, args[2..], db_command.parse);
+        return dbCmd(init, runtime, request, out);
     }
     if (std.mem.eql(u8, command, "rules")) {
         if (args.len != 2) exitWithUsage();
@@ -793,6 +808,16 @@ fn ruleCatalogCmd(init: std.process.Init, runtime: *Runtime, verb: rule_catalog.
     return if (outcome == .refused) 1 else 0;
 }
 
+fn dbCmd(init: std.process.Init, runtime: *Runtime, request: db_command.Request, out: *std.Io.Writer) !u8 {
+    const gpa = runtime.gpa;
+    const root = runner.repoRoot(gpa, init.io);
+    defer if (root) |path| gpa.free(path) else |_| {};
+    var buffer: [4096]u8 = undefined;
+    var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
+    return db_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
+}
+
 fn rulesCmd(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) !u8 {
     const gpa = runtime.gpa;
     const root = try runner.repoRoot(gpa, init.io);
@@ -819,7 +844,15 @@ fn answerPrompt(init: std.process.Init, runtime: *Runtime, out: *std.Io.Writer) 
     const input = try reader.interface.allocRemaining(gpa, .limited(prompt_hook.max_input_bytes));
     defer gpa.free(input);
     const prompt = try prompt_hook.promptOf(init.arena.allocator(), input);
+    if (db_command.slashArguments(prompt)) |words| {
+        const db_root = runner.repoRoot(gpa, init.io);
+        defer if (db_root) |path| gpa.free(path) else |_| {};
+        try db_command.respondSlash(gpa, init.io, init.environ_map, db_root, words, out);
+        try out.flush();
+        return;
+    }
     const text = prompt_hook.argumentsOf(prompt) orelse {
+        db_command.advance(gpa, init.io, init.environ_map);
         if (try prompt_hook.offer(prompt, out)) try out.flush();
         return;
     };
