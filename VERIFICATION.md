@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3221**
-- Mutations declared in `tests/mutations.json`: **2060**
-  - killed: **2011**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3246**
+- Mutations declared in `tests/mutations.json`: **2077**
+  - killed: **2028**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **3**
@@ -774,7 +774,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1385 mutation(s).
+1402 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1582,7 +1582,7 @@ python tools/verification_page.py --check
 | `RH2-symbol-hash-as-node-not-named` | `src/protocol/recovery.zig` | `if (pair.node.len < node_cas.min_address_len or !std.mem.starts...` -> `if (pair.node.len < node_cas.min_address_len or std.mem.startsW...` | recovery hints: a symbol hash sent as a node id is named as such | killed |
 | `RH3-unknown-node-check-inverted` | `src/protocol/recovery.zig` | `if (std.mem.indexOf(u8, annotated, pair.node) != null) continue;` -> `if (std.mem.indexOf(u8, annotated, pair.node) == null) continue;` | recovery hints: a symbol hash sent as a node id is named as such | killed |
 | `RH4-closing-brace-not-counted` | `src/protocol/recovery.zig` | `'}' => balance -= 1,` -> `'}' => {},` | recovery hints: brace balance counts opening minus closing braces; recovery hints: a body... | killed |
-| `RH5-empty-prop-description-written` | `src/protocol/server.zig` | `if (prop.desc.len > 0) {` -> `if (true) {` | recovery hints: tools/list stays under 9000 characters and initialize says whic... | killed |
+| `RH5-empty-prop-description-written` | `src/protocol/server.zig` | `if (prop.desc.len > 0) {` -> `if (true) {` | recovery hints: tools/list stays under 9500 characters and initialize says whic... | killed |
 | `RH6-non-source-batch-item-hint-inverted` | `src/protocol/handlers.zig` | `if (lang_registry.forPath(file) == null) return tool_result.mis...` -> `if (lang_registry.forPath(file) != null) return tool_result.mis...` | recovery hints: a missing argument names the field and its type | killed |
 | `RH7-fix-not-cleared-per-call` | `src/protocol/handlers.zig` | `wire.clearFix();` -> `` | recovery hints: a hint left from an earlier call never reaches the next error | killed |
 | `RH8-batch-item-label-dropped` | `src/protocol/recovery.zig` | `const label = std.fmt.bufPrint(&label_buf, "edits[{d}]: ", .{i}...` -> `const label = std.fmt.bufPrint(&label_buf, "item {d}: ", .{i}) ...` | recovery hints: a stale hash inside a batch names the item and the current hash | killed |
@@ -2163,6 +2163,23 @@ python tools/verification_page.py --check
 | `LC4-symbol-start-line-off-by-one` | `src/protocol/wire.zig` | `const first = std.mem.count(u8, source[0..@min(start, source.le...` -> `const first = std.mem.count(u8, source[0..@min(start, source.le...` | read_symbol names the lines a symbol body spans and the file's total line count | killed |
 | `LC5-symbol-body-without-place` | `src/protocol/handlers.zig` | `if (docs) \|d\| d.spans else &.{}, wire.Place.of(snapshot.sourc...` -> `if (docs) \|d\| d.spans else &.{}, null);` | read_symbol names the lines a symbol body spans and the file's total line count | killed |
 | `LC6-symbol-range-without-total` | `src/protocol/handlers.zig` | `entries[0..shown_count], wire.Place.of(snapshot.source, 0, 0).t...` -> `entries[0..shown_count], null);` | read_symbol over a line range names the file's total line count | killed |
+| `DEL1-recursive-rm-taken-for-a-plain-delete` | `src/platform/command_danger.zig` | `if (hasShort(args, "rRd") or hasLong(args, &.{ "--recursive", "...` -> `if (false) return null;` | plain delete: a recursive delete, a preview, an index-only git rm and words tha...; preto... | killed |
+| `DEL2-target-outside-repo-redirected` | `src/platform/command_danger.zig` | `if (try insideRepo(arena, target, here.*, boundary)) try inside...` -> `try inside.append(arena, target);` | plain delete: a target outside the repository, in its .git or behind a variable...; preto... | killed |
+| `DEL3-git-internals-redirected` | `src/platform/command_danger.zig` | `return !eqlAny(path.parts[boundary.parts.len], &internal_dirs);` -> `return true;` | plain delete: a target outside the repository, in its .git or behind a variable...; preto... | killed |
+| `DEL4-cd-not-followed` | `src/platform/command_danger.zig` | `here.* = try changedDir(arena, here.*, words[1..]);` -> `_ = try changedDir(arena, here.*, words[1..]);` | plain delete: a target outside the repository, in its .git or behind a variable...; preto... | killed |
+| `DEL5-shell-script-not-followed` | `src/platform/command_danger.zig` | `if (is(program, &shells)) return shellScript(args);` -> `` | plain delete: a delete chained, piped, grouped or wrapped in a shell is found | killed |
+| `DEL6-group-and-substitution-not-followed` | `src/platform/command_danger.zig` | `if (try deletionIn(arena, inner, boundary, &inner_here, depth +...` -> `_ = .{ inner, &inner_here };` | plain delete: a delete chained, piped, grouped or wrapped in a shell is found | killed |
+| `DEL7-hook-lets-plain-delete-run` | `src/protocol/pretool_hook.zig` | `\|found\| return .{ .deny = try deleteReason(arena, found, tool...` -> `\|found\| _ = found;` | pretool hook: a plain file delete in the repository is denied with a fix that n...; preto... | killed |
+| `DEL8-hook-ignores-cwd` | `src/protocol/pretool_hook.zig` | `.string => \|text\| if (text.len != 0) text else null,` -> `.string => \|text\| if (text.len == 0) text else null,` | pretool hook: a plain file delete in the repository is denied with a fix that n... | killed |
+| `DEL9-open-run-runs-plain-delete` | `src/protocol/open_run.zig` | `if (try command_danger.plainDelete(arena, request.command, .{ ....` -> `if (@as(?command_danger.Deletion, null)) \|found\| {` | delete tool: an open emetgate_run that deletes a repository file without recurs... | killed |
+| `DEL10-stale-hash-not-named` | `src/protocol/delete_tool.zig` | `if (!std.mem.eql(u8, &expected, &current)) return error.HashMis...` -> `_ = expected;` | delete tool: several files are deleted all or none, whether a check before the ... | killed |
+| `DEL11-delete-without-hash` | `src/protocol/delete_tool.zig` | `} else if (!knownUnchanged(arena, policy, request.file, place.a...` -> `} else if (false) return error.MissingFileHash;` | delete tool: a file without a file_hash that this session did not write is refu... | killed |
+| `DEL12-known-file-changed-since-write` | `src/protocol/delete_tool.zig` | `if (known.get(abs)) \|hash\| return std.mem.eql(u8, &hash, &cur...` -> `if (known.get(abs)) \|hash\| return hash.len != 0;` | delete tool: a file without a file_hash that this session did not write is refu... | killed |
+| `DEL13-full-folder-not-refused` | `src/protocol/delete_tool.zig` | `if (shape == .full_folder) return error.IsDirectory;` -> `` | delete tool: a folder with files is refused, an empty folder is deleted, and a ... | killed |
+| `DEL14-emptied-folder-kept` | `src/protocol/delete_tool.zig` | `std.Io.Dir.cwd().deleteDir(io, dir) catch break;` -> `_ = io;             if (dir.len != 0) break;` | delete tool: a folder with files is refused, an empty folder is deleted, and a ... | killed |
+| `DEL15-duplicate-file-not-named` | `src/protocol/delete_tool.zig` | `if (std.ascii.eqlIgnoreCase(earlier.abs, place.abs)) return err...` -> `_ = earlier;` | delete tool: a file named twice is refused before anything is deleted | killed |
+| `DEL16-files-and-file-together-accepted` | `src/protocol/arg_check.zig` | `if (eql(name, "emetgate_delete")) return &delete_rules;` -> `` | arg check: arguments that select two different things, or a selector the file t... | killed |
+| `DEL17-delete-aliases-dropped` | `src/protocol/forgive.zig` | `if (eql(name, "emetgate_delete")) return .{ .name = name, .args...` -> `` | delete tool: a staged new file leaves the index too, so git does not show it as... | killed |
 
 ## What this system does not prove
 

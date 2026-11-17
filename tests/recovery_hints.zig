@@ -173,7 +173,7 @@ test "recovery hints: a missing argument names the field and its type" {
     }
 }
 
-test "recovery hints: tools/list stays under 9000 characters and initialize says which tool reads, searches and edits" {
+test "recovery hints: tools/list stays under 9500 characters and initialize says which tool reads, searches and edits" {
     var out: std.Io.Writer.Allocating = .init(testing.allocator);
     defer out.deinit();
     _ = try server.handleMessage(testing.allocator, testing.io, undefined, "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}", &out.writer);
@@ -183,7 +183,7 @@ test "recovery hints: tools/list stays under 9000 characters and initialize says
     defer tools.deinit();
     try std.json.Stringify.value(parsed.value.object.get("result").?.object.get("tools").?, .{}, &tools.writer);
     errdefer std.debug.print("tools/list is {d} characters\n", .{tools.written().len});
-    try testing.expect(tools.written().len < 9000);
+    try testing.expect(tools.written().len < 9500);
     try testing.expect(std.mem.indexOf(u8, tools.written(), "\"description\":\"\"") == null);
     try testing.expect(std.mem.indexOf(u8, tools.written(), "another git repository below") == null);
 

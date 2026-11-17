@@ -160,6 +160,8 @@ test "arg check: documented aliases, item shapes, null and policy fields" {
         .{ "emetgate_write", "{\"file_path\":\"a.js\",\"text\":\"a\"}" },
         .{ "emetgate_rename", "{\"file\":\"a.js\",\"old_name\":\"a\",\"hash\":\"h\",\"to\":\"b\"}" },
         .{ "emetgate_move_file", "{\"source\":\"a.js\",\"dest\":\"b.js\",\"file_hash\":\"h\"}" },
+        .{ "emetgate_delete", "{\"path\":\"a.js\",\"hash\":\"h\"}" },
+        .{ "emetgate_delete", "{\"files\":[\"a.md\",{\"file_path\":\"b.js\",\"expected_hash\":\"h\"},{\"file\":\"c.js\",\"file_hash\":null}]}" },
         .{ "emetgate_change", "{\"edits\":[{\"path\":\"a.js\",\"old_str\":\"a\",\"new_str\":\"b\"},{\"file\":\"a.md\",\"hash\":\"h\",\"heading\":\"A\",\"content\":\"x\"},{\"file\":\"a.js\",\"symbol\":\"f\",\"hash\":null,\"body\":\"x\"}]}" },
         .{ "emetgate_try_batch", "{\"file\":\"a.js\",\"content\":\"x\",\"retry\":\"r\",\"detail\":\"full\"}" },
         .{ "emetgate_read_file", "{\"files\":[\"a.md\",{\"file\":\"b.json\",\"pointer\":\"/a\"}],\"raw\":null}" },
@@ -204,6 +206,9 @@ test "arg check: arguments that select two different things, or a selector the f
         .{ "emetgate_change", "{\"edits\":[{\"path\":\"a.js\",\"old_str\":\"a\",\"new_str\":\"b\",\"body\":\"x\"}]}", "ConflictingArguments", "old_str cannot be combined with edits[0].body", "own item of edits" },
         .{ "emetgate_change", "{\"edits\":[{\"file\":\"a.md\",\"hash\":\"h\",\"heading\":\"A\",\"line_start\":1,\"content\":\"x\"}]}", "ConflictingArguments", "heading cannot be combined with edits[0].line_start", "keep pointer" },
         .{ "emetgate_find", "{\"pattern\":\"\"}", "EmptyPattern", "pattern of emetgate_find is empty", "literal text" },
+        .{ "emetgate_delete", "{\"files\":[{\"file\":\"a.txt\"}],\"file\":\"b.txt\"}", "ConflictingArguments", "files cannot be combined with file", "not both" },
+        .{ "emetgate_delete", "{\"files\":[{\"file\":\"a.txt\"}],\"hash\":\"h\"}", "ConflictingArguments", "files cannot be combined with hash", "not both" },
+        .{ "emetgate_delete", "{\"files\":[{\"file\":\"a.txt\",\"content\":\"x\"}]}", "UnknownArgument", "files[0] has no field content", "file, file_hash" },
     }) |case| {
         var args = try std.json.parseFromSlice(Value, gpa, case[1], .{});
         defer args.deinit();

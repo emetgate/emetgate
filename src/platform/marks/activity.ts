@@ -30,7 +30,7 @@ const MAX_LINES = 4000
 const MAX_TURN_FILES = 200
 const READERS = ['read_file', 'read_symbol', 'skeleton', 'symbols', 'list', 'expand', 'explore', 'evidence']
 const SEARCHERS = ['search', 'find', 'scan']
-const WRITERS = ['change', 'try', 'try_batch', 'edit', 'write', 'write_doc', 'mutate', 'rename', 'move', 'move_file']
+const WRITERS = ['change', 'try', 'try_batch', 'edit', 'write', 'write_doc', 'mutate', 'rename', 'move', 'move_file', 'delete']
 
 const str = (args: Args | undefined, key: string): string => (args !== undefined && typeof args[key] === 'string' ? (args[key] as string) : '')
 
@@ -454,6 +454,13 @@ const nativeOf = (tool: string, base: Activity, args: Args, text: string, diffRo
     const body = hits.map(hit => `${slash(hit.file)}:${hit.line}  ${clean(hit.text.trim())}`)
     return { ...empty, title, arg: `"${query}"${where === '' ? '' : ` in ${where}`}`, summary, body: body.slice(0, BODY_ROWS), bodyMore: Math.max(0, body.length - BODY_ROWS) }
   }
+  if (tool === 'delete') {
+    const { head } = parse(text)
+    const folders = Array.isArray(head?.emptied_folders) ? (head?.emptied_folders as unknown[]).length : 0
+    const names = files.map(file => split(file).name)
+    const arg = names.length <= 3 ? files.map(slash).join(', ') : `${files.slice(0, 2).map(slash).join(', ')} +${files.length - 2}`
+    return { ...empty, title: 'Delete', arg, summary: `Deleted ${plural(files.length, 'file')}${folders > 0 ? ` and ${plural(folders, 'empty folder')}` : ''}` }
+  }
   if (WRITERS.includes(tool)) {
     const items: Args[] = Array.isArray(args.edits) ? (args.edits as Args[]) : [args]
     const created = items.length === 1 && str(items[0], 'old_string') === '' && str(items[0], 'content') !== '' && num(items[0].line_start) === undefined
@@ -525,6 +532,10 @@ const observeCore = (fullName: string, args: Args, text: string, isOk: boolean):
       if (strips.length === 3) break
     }
     return { ...base, strips }
+  }
+  if (tool === 'delete') {
+    for (const file of files) known.delete(keyOf(file))
+    return { ...base, strips: [] }
   }
   if (WRITERS.includes(tool)) {
     const strips: Strip[] = []
@@ -623,6 +634,10 @@ export const note = (fullName: string, args: Args, seen: Observed): void => {
     const strip = seen.strips[0]
     const span = strip?.now === undefined ? 0 : strip.now[1] - strip.now[0] + 1
     touch(files[0]).read += span
+    return
+  }
+  if (tool === 'delete') {
+    for (const file of files) touch(file).changes += 1
     return
   }
   if (WRITERS.includes(tool)) {

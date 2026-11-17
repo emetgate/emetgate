@@ -31,6 +31,7 @@ const node_tool = @import("node_tool.zig");
 const node_cas_mod = @import("../engine/node_cas.zig");
 const batch_mod = @import("../platform/batch.zig");
 const move_file_tool = @import("move_file_tool.zig");
+const delete_tool = @import("delete_tool.zig");
 const edit_tool = @import("edit_tool.zig");
 const run_tool = @import("run_tool.zig");
 const receipt_note = @import("receipt_note.zig");
@@ -151,6 +152,7 @@ fn dispatch(gpa: Allocator, io: std.Io, runtime: *Runtime, given_name: []const u
     if (std.mem.eql(u8, name, "emetgate_rename")) return rename_tool.callRename(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move")) return move_tool.callMove(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_move_file")) return move_file_tool.callMoveFile(gpa, io, runtime, args, event, policy);
+    if (std.mem.eql(u8, name, "emetgate_delete")) return delete_tool.callDelete(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write_doc")) return callWriteDoc(gpa, io, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_edit")) return edit_tool.callEdit(gpa, io, runtime, args, event, policy);
     if (std.mem.eql(u8, name, "emetgate_write")) return edit_tool.callWrite(gpa, io, runtime, args, event, policy);
@@ -1351,7 +1353,7 @@ fn jailItem(gpa: Allocator, io: std.Io, root: ?[]const u8, file: []const u8, may
     };
 }
 
-pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new file or for a file this session wrote or a run reported, while it is unchanged ({file, hash, content} with its file_hash overwrites any other existing file); they are written together only if typecheck passes and no test fails that did not fail before, else none is. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them. After a branch or commit, after names the branch checked out and whether the work tree is clean.";
+pub const change_description = "Applies one change in a single gated call. edits are {file, old_string, new_string} (old_string copied exactly and unique, replace_all for every match) or {file, content} for a new file or for a file this session wrote or a run reported, while it is unchanged ({file, hash, content} with its file_hash overwrites any other existing file); they are written together only if typecheck passes and no test fails that did not fail before, else none is. Delete files with emetgate_delete. branch creates that branch and switches to it before the edits; commit then stages every change in the work tree and commits it with that message. Give branch or commit only when the user asks for them. After a branch or commit, after names the branch checked out and whether the work tree is clean.";
 
 pub const change_missing = "edits, commit or branch";
 
@@ -1718,7 +1720,7 @@ fn changeStep(arena: Allocator, js: *std.json.Stringify, field: []const u8, text
     try js.write(value);
 }
 
-fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
+pub fn callTryBatch(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, event: *telemetry.Event, policy: Policy) !ToolResult {
     fuzzy_match.reset();
     const reply = try tryBatchReply(gpa, io, runtime, args, event, policy);
     if (!fuzzy_match.wasUsed()) return reply;

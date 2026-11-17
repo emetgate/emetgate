@@ -330,6 +330,7 @@ test {
     _ = @import("tests/edit_tool.zig");
     _ = @import("tests/change_tool.zig");
     _ = @import("tests/change_atomic.zig");
+    _ = @import("tests/delete_tool.zig");
     _ = @import("tests/python_parse.zig");
     _ = @import("tests/gate_fail_closed.zig");
     _ = @import("tests/fuzzy_match.zig");

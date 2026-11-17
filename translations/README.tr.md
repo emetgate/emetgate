@@ -63,7 +63,7 @@ rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // cl
 
 Claude Code'un hook'larıyla ve ESLint'le bunun bir kısmını kendin kurabilirsin. Fark şurada:
 
-- **Kapı her yazma aracında aynı.** lockdown Claude Code'un kendi düzenleme araçlarını kapatır; düzenleme, yeniden adlandırma ve taşıma aynı kurallardan geçer. Ajan bir kabuk komutuyla dosya değiştirirse bu kayda geçer, dondurulmuş yollar geri alınır ve kapıdan geçmemiş değişiklik emetgate ile commit edilemez.
+- **Kapı her yazma aracında aynı.** lockdown Claude Code'un kendi düzenleme araçlarını kapatır; düzenleme, yeniden adlandırma, taşıma ve silme aynı kurallardan geçer. Ajan bir kabuk komutuyla dosya değiştirirse bu kayda geçer, dondurulmuş yollar geri alınır ve kapıdan geçmemiş değişiklik emetgate ile commit edilemez.
 - **ESLint'i ajan kapatabilir.** `eslint-disable` satırı ve `.eslintrc` ajanın düzenleyebildiği dosyalardadır. emetgate'in kuralları, ajanın değiştirecek aracı olmadığı defterdedir; `eslint-disable` eklemek de bir kurala takılabilir.
 - **Değişiklik bütün olarak denetlenir.** Birden çok dosyaya dokunan bir değişiklik reponun bir kopyasında, tamamı birlikte denetlenir; geçerse hepsi yazılır, geçmezse hiçbiri.
 - **Sohbetten kurala.** Söylediğin kalıcı bir talimat kural olarak önerilir; her kural için ayrı bir betik yazmazsın.
@@ -133,7 +133,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## Sınırlar
 
 - Şimdilik yalnızca Windows.
-- Kurallar emetgate'in yazma araçlarından geçen değişikliklere uygulanır. Ajanın çalıştırdığı bir komut kapıdan geçmez: değiştirdiği dosyalar raporlanır ve dondurulmuş yollar geri alınır, ama diğer kurallar komutlara uygulanmaz.
+- Kurallar emetgate'in yazma araçlarından geçen değişikliklere uygulanır. Ajanın çalıştırdığı bir komut kapıdan geçmez: değiştirdiği dosyalar raporlanır ve dondurulmuş yollar geri alınır, ama diğer kurallar komutlara uygulanmaz. Depodaki dosyaları özyinelemesiz silen bir komut lockdown altında reddedilir; ajan onları kapıdan geçen `emetgate_delete` ile siler.
 - Kural defteri `.emetgate/` altında bir dosyadır. Ajanın onu yazacak bir aracı yok, ama bir komutla düzenlenmesi kural komutlarını izleyen kancaya takılmaz.
 - lockdown dışında, ajanın kendi araçlarıyla açılan bir oturumda kapı yoktur. MCP konuşan başka ajanlarda kapı, ajan emetgate'in araçlarını kullandığı sürece çalışır.
 - Her yazma kapıda yaklaşık 0.2–0.4 sn sürer. Daha az token vaat etmiyoruz.

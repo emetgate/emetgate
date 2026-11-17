@@ -13,6 +13,7 @@ const run_tool = @import("run_tool.zig");
 const open_run = @import("open_run.zig");
 const git_write = @import("git_write.zig");
 const edit_tool = @import("edit_tool.zig");
+const delete_tool = @import("delete_tool.zig");
 const read_budget = @import("read_budget.zig");
 const runner = @import("../platform/runner.zig");
 const baseline = @import("../platform/baseline.zig");
@@ -183,6 +184,15 @@ pub const tool_defs = [_]Tool{
             .{ .name = "to", .desc = "must not exist" },
             .{ .name = "from_hash", .desc = "file_hash of from" },
             .{ .name = "interface_change", .desc = "", .optional = true, .ty = "boolean" },
+        },
+    },
+    .{
+        .name = "emetgate_delete",
+        .description = delete_tool.description,
+        .props = &.{
+            .{ .name = "files", .desc = "", .optional = true, .ty = "array" },
+            .{ .name = "file", .desc = "", .optional = true },
+            .{ .name = "file_hash", .desc = "", .optional = true },
         },
     },
     .{
@@ -714,7 +724,7 @@ fn writeInitialize(out: *Writer, id: Value, msg: Value) !void {
 
 const nested_dir_desc = "a folder in another git repository below this one; omit for this one";
 
-pub const instructions = "Answer a question about the code with one emetgate_explore call: write the question in English with its domain terms and put the identifiers you expect in names. Its reply holds the matching functions whole and ends with a closure of what it did not show; answer from it, call emetgate_evidence once only for a named item that decides the answer, and write that an item is not in the evidence instead of guessing. Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Make every change to files with one emetgate_change call per step: all its edits are written together only if typecheck passes and no test fails that did not fail before. Write files with emetgate_change, not with commands. Give it branch or commit only when the user asks for a branch or a commit; it then does the git work in the same call. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
+pub const instructions = "Answer a question about the code with one emetgate_explore call: write the question in English with its domain terms and put the identifiers you expect in names. Its reply holds the matching functions whole and ends with a closure of what it did not show; answer from it, call emetgate_evidence once only for a named item that decides the answer, and write that an item is not in the evidence instead of guessing. Read code with emetgate_skeleton for the outline and emetgate_read_symbol for bodies and hashes, and other files with emetgate_read_file. Search with emetgate_search (tracked text, regex) or emetgate_find (any literal), or ask emetgate_explore a question. Make every change to files with one emetgate_change call per step: all its edits are written together only if typecheck passes and no test fails that did not fail before. Write files with emetgate_change and delete them with emetgate_delete, not with commands. Give it branch or commit only when the user asks for a branch or a commit; it then does the git work in the same call. Every error reply has a fix field saying how to recover. Source these tools return is already read; do not read it again with another tool.";
 
 fn writeEmptyResult(out: *Writer, id: Value) !void {
     var js: std.json.Stringify = .{ .writer = out };
@@ -726,7 +736,7 @@ fn writeEmptyResult(out: *Writer, id: Value) !void {
     try js.endObject();
 }
 
-pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
+pub const commit_tools = [_][]const u8{ "emetgate_try", "emetgate_rename", "emetgate_move", "emetgate_move_file", "emetgate_delete", "emetgate_write_doc", "emetgate_edit", "emetgate_write" };
 const commit_prop: Prop = .{ .name = "message", .desc = "commit message" };
 
 fn commits(tool: []const u8) bool {
@@ -815,7 +825,7 @@ fn writeCommitProp(js: *std.json.Stringify) !void {
     try js.endObject();
 }
 
-pub const batch_description = "Gated multi-file edits: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file, hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" drops a symbol, or a file by its file_hash. One file's items apply in order. On failure, send retry and only the items of files you change.";
+pub const batch_description = "Gated multi-file edits: {file,symbol,hash,body}, {file,node,text}, {file,nodes}, {file,old_string,new_string,replace_all?} or {file,hash,content} (whole file, hash \"absent\" creates; pointer, heading or line_start+line_end for a region); op:\"delete\" drops a symbol, or a file by its file_hash (emetgate_delete deletes files). One file's items apply in order. On failure, send retry and only the items of files you change.";
 
 fn writeBatchToolDef(js: *std.json.Stringify, commit: bool) !void {
     try js.beginObject();

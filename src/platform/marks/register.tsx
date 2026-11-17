@@ -29,7 +29,7 @@ const MODE_WORDS = {
   'tool-use': 'Working the clay',
 } as const
 const BEAT_TICKS = 3
-const WRITERS = ['try', 'try_batch', 'write_doc', 'rename', 'move', 'move_file']
+const WRITERS = ['try', 'try_batch', 'write_doc', 'rename', 'move', 'move_file', 'delete']
 
 const running = atom({ plugin: 'emetgate-marks', key: 'running' } as const, null)
 const done = atom({ plugin: 'emetgate-marks', key: 'done' } as const, [])
@@ -250,7 +250,7 @@ const groupSummary = (entries: readonly Observed[]): string => {
     const file = `${entry.dir}${entry.name}`
     if (title === 'Read' || title === 'Outline' || title === 'Symbols') reads.add(file)
     else if (title === 'Search' || title === 'Scan') searches += 1
-    else if (title === 'Update' || title === 'Write' || title === 'Rename' || title === 'Move') edits.add(file)
+    else if (title === 'Update' || title === 'Write' || title === 'Rename' || title === 'Move' || title === 'Delete') edits.add(file)
     else if (title === 'Bash') commands += 1
     else other += 1
   }

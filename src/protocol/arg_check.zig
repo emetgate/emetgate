@@ -64,6 +64,11 @@ pub const file_item_props = [_]Prop{
     .{ .name = "line_end", .desc = "", .optional = true, .ty = "integer" },
 };
 
+pub const delete_item_props = [_]Prop{
+    .{ .name = "file", .desc = "" },
+    .{ .name = "file_hash", .desc = "", .optional = true },
+};
+
 const detail_prop: Prop = .{ .name = "detail", .desc = "", .optional = true };
 const message_prop: Prop = .{ .name = "message", .desc = "", .optional = true };
 /// emetgate_write_doc is one batch item (forgive.normalize sends it through the batch).
@@ -91,6 +96,7 @@ fn aliasesOf(name: []const u8) []const Alias {
     if (eql(name, "emetgate_rename")) return &forgive.rename_aliases;
     if (eql(name, "emetgate_move")) return &forgive.move_aliases;
     if (eql(name, "emetgate_move_file")) return &forgive.move_file_aliases;
+    if (eql(name, "emetgate_delete")) return &forgive.delete_aliases;
     return &.{};
 }
 
@@ -135,6 +141,9 @@ pub fn check(gpa: Allocator, name: []const u8, arguments: ?Value, policy: Policy
             if (try checkItems(gpa, "files", value, &file_item_props, &.{})) |refused| return refused;
             if (try checkItemRules(gpa, "files", value, &read_file_rules, &.{})) |refused| return refused;
         }
+        if (eql(key, "files") and eql(name, "emetgate_delete")) {
+            if (try checkItems(gpa, "files", value, &delete_item_props, &forgive.delete_aliases)) |refused| return refused;
+        }
     }
     return checkRules(gpa, name, "", args, rulesOf(name), aliasesOf(name));
 }
@@ -169,6 +178,10 @@ const read_symbol_rules = [_]Rule{
     .{ .apart = .{ .key = "symbols", .from = &.{ "line_start", "line_end" }, .fix = read_symbol_fix } },
 };
 
+const delete_rules = [_]Rule{
+    .{ .apart = .{ .key = "files", .from = &.{ "file", "file_hash" }, .fix = "name every file in files as {file, file_hash}, or one file with file and file_hash, not both" } },
+};
+
 const find_rules = [_]Rule{
     .{ .non_empty = .{ .key = "pattern", .fix = "pass the literal text to find as pattern, 1 to 4096 bytes" } },
 };
@@ -177,6 +190,7 @@ fn rulesOf(name: []const u8) []const Rule {
     if (eql(name, "emetgate_read_file")) return &read_file_rules;
     if (eql(name, "emetgate_read_symbol")) return &read_symbol_rules;
     if (eql(name, "emetgate_find")) return &find_rules;
+    if (eql(name, "emetgate_delete")) return &delete_rules;
     if (eql(name, "emetgate_write_doc") or eql(name, "emetgate_try") or eql(name, "emetgate_try_batch")) return &edit_item_rules;
     return &.{};
 }

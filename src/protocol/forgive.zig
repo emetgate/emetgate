@@ -48,6 +48,11 @@ pub const move_file_aliases = [_]Alias{
     .{ "from_hash", &.{ "hash", "file_hash" } },
 };
 
+pub const delete_aliases = [_]Alias{
+    .{ "file", &file_aliases },
+    .{ "file_hash", &.{ "hash", "expected_hash" } },
+};
+
 const code_kinds = [_][]const u8{ "code", "source", "symbol" };
 const doc_kinds = [_][]const u8{ "doc", "docs", "document", "text", "file" };
 const write_ops = [_][]const u8{ "write", "create", "replace", "update", "overwrite", "edit", "insert", "add" };
@@ -67,6 +72,7 @@ pub fn normalize(arena: Allocator, name: []const u8, args: ?Value) !Call {
     if (eql(name, "emetgate_rename")) return .{ .name = name, .args = try aliased(arena, given, &rename_aliases) };
     if (eql(name, "emetgate_move")) return .{ .name = name, .args = try aliased(arena, given, &move_aliases) };
     if (eql(name, "emetgate_move_file")) return .{ .name = name, .args = try aliased(arena, given, &move_file_aliases) };
+    if (eql(name, "emetgate_delete")) return .{ .name = name, .args = try normalizeDelete(arena, given) };
     if (eql(name, "emetgate_write_doc")) {
         var item = try normalizeItem(arena, given);
         if (!needsBatch(item)) return .{ .name = name, .args = item };
@@ -74,6 +80,16 @@ pub fn normalize(arena: Allocator, name: []const u8, args: ?Value) !Call {
         return .{ .name = "emetgate_try_batch", .args = try asBatch(arena, item) };
     }
     return .{ .name = name, .args = args };
+}
+
+fn normalizeDelete(arena: Allocator, given: Value) !Value {
+    var args = try aliased(arena, given, &delete_aliases);
+    const files = args.object.get("files") orelse return args;
+    if (files != .array) return args;
+    var out: std.json.Array = .init(arena);
+    for (files.array.items) |item| try out.append(if (item == .object) try aliased(arena, item, &delete_aliases) else item);
+    try args.object.put(arena, "files", .{ .array = out });
+    return args;
 }
 
 pub fn asBatch(arena: Allocator, item: Value) !Value {

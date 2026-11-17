@@ -63,7 +63,7 @@ rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // cl
 
 Con los hooks de Claude Code y ESLint puedes montar parte de esto tú mismo. La diferencia:
 
-- **La puerta es la misma para cada herramienta de escritura.** Lockdown apaga las herramientas de edición propias de Claude Code; ediciones, renombrados y movimientos pasan por las mismas reglas. Si el agente cambia un archivo con un comando de shell, queda registrado, las rutas congeladas se restauran y un cambio que no pasó la puerta no se puede hacer commit con emetgate.
+- **La puerta es la misma para cada herramienta de escritura.** Lockdown apaga las herramientas de edición propias de Claude Code; ediciones, renombrados, movimientos y borrados pasan por las mismas reglas. Si el agente cambia un archivo con un comando de shell, queda registrado, las rutas congeladas se restauran y un cambio que no pasó la puerta no se puede hacer commit con emetgate.
 - **El agente puede apagar ESLint.** Una línea `eslint-disable` y `.eslintrc` están en archivos que el agente puede editar. Las reglas de emetgate están en un registro que el agente no tiene herramienta para cambiar; añadir `eslint-disable` puede chocar con una regla.
 - **El cambio se revisa entero.** Un cambio que toca varios archivos se revisa junto sobre una copia del repositorio; si pasa se escribe todo, si no, nada.
 - **Del chat a la regla.** Una instrucción duradera que das se propone como regla; no escribes un script por regla.
@@ -133,7 +133,7 @@ Una caché que un emetgate en ejecución tiene arrendada nunca se borra. Las car
 ## Límites
 
 - Por ahora solo en Windows.
-- Las reglas se aplican a los cambios hechos con las herramientas de escritura de emetgate. Un comando que ejecuta el agente no pasa por la puerta: los archivos que cambia se informan y las rutas congeladas se restauran, pero las demás reglas no se aplican a comandos.
+- Las reglas se aplican a los cambios hechos con las herramientas de escritura de emetgate. Un comando que ejecuta el agente no pasa por la puerta: los archivos que cambia se informan y las rutas congeladas se restauran, pero las demás reglas no se aplican a comandos. Con lockdown se rechaza un comando que borra archivos del repositorio sin recursión; el agente los borra con `emetgate_delete`, que pasa por la puerta.
 - El registro de reglas es un archivo bajo `.emetgate/`. El agente no tiene herramienta para escribirlo, pero una edición hecha con un comando no la detecta el hook que vigila los comandos de reglas.
 - Fuera de lockdown, en una sesión abierta con las herramientas propias del agente, no hay puerta. En otros agentes que hablan MCP, la puerta funciona mientras el agente use las herramientas de emetgate.
 - Cada escritura tarda unos 0.2–0.4 s en la puerta. No prometemos menos tokens.

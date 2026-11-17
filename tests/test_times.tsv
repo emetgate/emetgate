@@ -1993,7 +1993,7 @@
 368605	pass	tests.recovery_hints.test.recovery hints: an error without a computed hint carries the static fix line
 7	pass	tests.recovery_hints.test.recovery hints: brace balance counts opening minus closing braces
 670713	pass	tests.recovery_hints.test.recovery hints: deleting a file without its hash is answered with its file_hash
-1737	pass	tests.recovery_hints.test.recovery hints: tools/list stays under 9000 characters and initialize says which tool reads, searches and edits
+1737	pass	tests.recovery_hints.test.recovery hints: tools/list stays under 9500 characters and initialize says which tool reads, searches and edits
 443402	pass	tests.recovery_hints.test.recovery hints: with a tool prefix computed and static fix lines name tools by the name the client calls
 1393	pass	tests.recovery_hints.test.recovery hints: with a tool prefix every tool named in instructions and descriptions is the name the client calls
 595718	pass	tests.recovery_hints.test.recovery hints: write_doc with hash absent points at creating the file instead
