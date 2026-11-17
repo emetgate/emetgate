@@ -86,6 +86,8 @@ emetgate verify HEAD --test "npm test"
 
 **Bir oturumun maliyetini gör.** `emetgate report`, projede emetgate araçlarını çağıran son oturumu özetler: süre, model turları, input, output ve cache tokenları, USD cinsinden tahmini maliyet, isme göre araç çağrıları ve kapının yaptıkları (kabul ve red edilen yazmalar, kural ihlalleri, test çalıştırmaları, makbuzlar, commit'ler). `--session <id>` tek bir oturumu seçer, `--all` bütün oturumları tablo halinde listeler, `--json` aynı sayıları JSON olarak yazar. Tokenlar Claude Code'un kendi oturum kaydından gelir (`CLAUDE_CONFIG_DIR` ya da `~/.claude` altındaki `projects/`); maliyet model başına yerleşik liste fiyatlarıyla hesaplanır, yani faturan değil bir tahmindir.
 
+**Ajanın neye dokunduğunu gör.** `emetgate lockdown` altında emetgate çağrıları dökümde Claude Code'un kendi araçları gibi görünür, çağrılar bir araya toplandığında da: `Read(dosya)` okunan satırlarla, `Search("…")` ilk sonuçlarla, `Update(dosya)` değişen satırlar ve çevreleriyle, `Write(dosya)`, `Bash(komut)` çıktısıyla. Bir okumanın ya da düzenlemenin yanında ince bir şerit, ajanın dosyanın şimdiye kadar hangi kısımlarını gördüğünü gösterir; ajanın hiç okumadığı bir kısmı düzenlemesi `edited without reading` diye işaretlenir. Bir okuma sürerken bir şerit dosyayı tarar; tur bitince tek bir satır turu özetler ve dokunulan her dosyayı, her birinin ne kadarının okunduğuyla listeler. Yalnızca çizer: model aynı cevapları alır. Gizli bir dosya (`.env`, anahtarlar, kimlik bilgileri) adıyla görünür, içeriğiyle asla. `emetgate lockdown --no-marks` bunu kapatır.
+
 ## 2 dakikada başla
 
 PowerShell'de çalıştır, sonra yeni bir terminal aç:

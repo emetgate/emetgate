@@ -19708,6 +19708,60 @@
       "kills": [
         "global rules: the rules a file reads name a global rule by its origin"
       ]
+    },
+    {
+      "id": "LC1-range-read-total-is-the-shown-end",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    try js.objectField(\"total_lines\");\n    try js.write(last);",
+      "to": "    try js.objectField(\"total_lines\");\n    try js.write(last_shown);",
+      "kills": [
+        "read_file with a line range names the file's total line count, also when the range is cut at its end"
+      ]
+    },
+    {
+      "id": "LC2-range-read-total-dropped",
+      "file": "src/protocol/read_tools.zig",
+      "from": "    try js.objectField(\"total_lines\");\n    try js.write(last);\n",
+      "to": "",
+      "kills": [
+        "read_file with a line range names the file's total line count, also when the range is cut at its end"
+      ]
+    },
+    {
+      "id": "LC3-total-misses-an-unterminated-last-line",
+      "file": "src/protocol/wire.zig",
+      "from": "        const total = std.mem.count(u8, source, \"\\n\") + @intFromBool(source.len > 0 and source[source.len - 1] != '\\n');",
+      "to": "        const total = std.mem.count(u8, source, \"\\n\");",
+      "kills": [
+        "read_symbol over a line range names the file's total line count"
+      ]
+    },
+    {
+      "id": "LC4-symbol-start-line-off-by-one",
+      "file": "src/protocol/wire.zig",
+      "from": "        const first = std.mem.count(u8, source[0..@min(start, source.len)], \"\\n\") + 1;",
+      "to": "        const first = std.mem.count(u8, source[0..@min(start, source.len)], \"\\n\");",
+      "kills": [
+        "read_symbol names the lines a symbol body spans and the file's total line count"
+      ]
+    },
+    {
+      "id": "LC5-symbol-body-without-place",
+      "file": "src/protocol/handlers.zig",
+      "from": "if (docs) |d| d.spans else &.{}, wire.Place.of(snapshot.source, shown.start, shown.end));",
+      "to": "if (docs) |d| d.spans else &.{}, null);",
+      "kills": [
+        "read_symbol names the lines a symbol body spans and the file's total line count"
+      ]
+    },
+    {
+      "id": "LC6-symbol-range-without-total",
+      "file": "src/protocol/handlers.zig",
+      "from": "entries[0..shown_count], wire.Place.of(snapshot.source, 0, 0).total_lines);",
+      "to": "entries[0..shown_count], null);",
+      "kills": [
+        "read_symbol over a line range names the file's total line count"
+      ]
     }
   ]
 }

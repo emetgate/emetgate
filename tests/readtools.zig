@@ -1772,3 +1772,65 @@ test "read cache: a write through emetgate makes the next read of the file and o
     try testing.expectEqualStrings("", try statusOf(&whole_after));
     try testing.expect(std.mem.indexOf(u8, whole_after.text, "SECOND") != null);
 }
+
+test "read_file with a line range names the file's total line count, also when the range is cut at its end" {
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+    const path = "tests/fixtures/functions.ts";
+    const whole = try std.Io.Dir.cwd().readFileAlloc(testing.io, path, testing.allocator, .unlimited);
+    defer testing.allocator.free(whole);
+    const last: i64 = @intCast(std.mem.count(u8, whole, "\n") + @intFromBool(whole[whole.len - 1] != '\n'));
+
+    var reply = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = 2, .line_end = 4 });
+    defer reply.deinit();
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqual(@as(i64, 2), body.value.object.get("start_line").?.integer);
+    try testing.expectEqual(@as(i64, 4), body.value.object.get("end_line").?.integer);
+    try testing.expectEqual(last, body.value.object.get("total_lines").?.integer);
+
+    var cut = try callTool(runtime, "emetgate_read_file", .{ .file = path, .raw = true, .line_start = last, .line_end = last + 9 });
+    defer cut.deinit();
+    var cut_body = try cut.payload();
+    defer cut_body.deinit();
+    try testing.expectEqual(last, cut_body.value.object.get("end_line").?.integer);
+    try testing.expectEqual(last, cut_body.value.object.get("total_lines").?.integer);
+}
+
+test "read_symbol names the lines a symbol body spans and the file's total line count" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "c.js", .data = "\"use strict\";\nconst a = 1;\n\n\nfunction f() {\n  return 1;\n}\nconst b = 2;\n" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "c.js", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .symbol = "f" });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqualStrings("f", body.value.object.get("symbol").?.string);
+    try testing.expectEqual(@as(i64, 5), body.value.object.get("start_line").?.integer);
+    try testing.expectEqual(@as(i64, 7), body.value.object.get("end_line").?.integer);
+    try testing.expectEqual(@as(i64, 8), body.value.object.get("total_lines").?.integer);
+}
+
+test "read_symbol over a line range names the file's total line count" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "c.js", .data = "\"use strict\";\nconst a = 1;\n\n\nfunction f() {\n  return 1;\n}\nconst b = 2;" });
+    const path = try tmp.dir.realPathFileAlloc(testing.io, "c.js", testing.allocator);
+    defer testing.allocator.free(path);
+    const runtime = try Runtime.create(testing.allocator);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    var reply = try callTool(runtime, "emetgate_read_symbol", .{ .file = path, .line_start = 5, .line_end = 7 });
+    defer reply.deinit();
+    try testing.expect(!reply.is_error);
+    var body = try reply.payload();
+    defer body.deinit();
+    try testing.expectEqual(@as(i64, 5), body.value.object.get("requested_start_line").?.integer);
+    try testing.expectEqual(@as(i64, 8), body.value.object.get("total_lines").?.integer);
+}

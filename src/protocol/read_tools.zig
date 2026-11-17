@@ -633,6 +633,8 @@ pub fn renderRangeFrom(gpa: Allocator, file: []const u8, bytes: []const u8, line
     try js.write(start);
     try js.objectField("end_line");
     try js.write(last_shown);
+    try js.objectField("total_lines");
+    try js.write(last);
     if (from != span.start) {
         try js.objectField("offset");
         try js.write(from - span.start);

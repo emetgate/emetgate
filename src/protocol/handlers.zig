@@ -508,7 +508,7 @@ fn renderSymbolBody(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]cons
     const cut = LinesCut.of(snapshot.source, body, shown.start, shown.end, 0);
     try note.shown(snapshot.source, shown.start, shown.end, if (docs == null) .exact else .dense);
     event.chars_emetgate = cut.c.kept.len;
-    try wire.writeSymbolBody(w, file, sym, found.hash, cut.c.kept, if (docs) |d| d.spans else &.{});
+    try wire.writeSymbolBodyAt(w, file, sym, found.hash, cut.c.kept, if (docs) |d| d.spans else &.{}, wire.Place.of(snapshot.source, shown.start, shown.end));
     return cut.trailer(w, file, if (docs == null) .source else .folded, "");
 }
 
@@ -824,7 +824,7 @@ fn renderSymbolRange(gpa: Allocator, io: std.Io, runtime: *Runtime, root: ?[]con
     }
     event.chars_emetgate = chars;
     event.chars_fullfile = snapshot.source.len;
-    try wire.writeSymbolRange(w, file, @intCast(start), @intCast(end), entries[0..shown_count]);
+    try wire.writeSymbolRangeOf(w, file, @intCast(start), @intCast(end), entries[0..shown_count], wire.Place.of(snapshot.source, 0, 0).total_lines);
     if (first_cut) |cut| {
         if (shown_count < matched.len or cut.last < end) {
             var also_buf: [96]u8 = undefined;

@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3218**
-- Mutations declared in `tests/mutations.json`: **2054**
-  - killed: **2005**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3221**
+- Mutations declared in `tests/mutations.json`: **2060**
+  - killed: **2011**
   - equivalent: **9**
   - defense in depth: **11**
   - open: **3**
@@ -774,7 +774,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1379 mutation(s).
+1385 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2157,6 +2157,12 @@ python tools/verification_page.py --check
 | `GR19-reading-the-global-rules-asks-for-write-access` | `src/platform/own_dir.zig` | `.read_only => win.generic_read \| win.file_traverse,` -> `.read_only => win.generic_read \| win.generic_write \| win.file...` | global rules: reading the global rules asks for no write access, so a session t... | killed |
 | `GR20-global-folder-taken-from-the-environment` | `src/platform/user_rules.zig` | `const local = try profileLocalAppData(gpa);` -> `const local = (try sandbox.environmentValue(gpa, std.unicode.ut...` | global rules: the global rules folder comes from the user profile, so an enviro... | killed |
 | `GR18-skeleton-hides-the-origin` | `src/protocol/wire.zig` | `if (rule.origin == .global) {` -> `if (false) {` | global rules: the rules a file reads name a global rule by its origin | killed |
+| `LC1-range-read-total-is-the-shown-end` | `src/protocol/read_tools.zig` | `try js.objectField("total_lines");     try js.write(last);` -> `try js.objectField("total_lines");     try js.write(last_shown);` | read_file with a line range names the file's total line count, also when the ra... | killed |
+| `LC2-range-read-total-dropped` | `src/protocol/read_tools.zig` | `try js.objectField("total_lines");     try js.write(last);` -> `` | read_file with a line range names the file's total line count, also when the ra... | killed |
+| `LC3-total-misses-an-unterminated-last-line` | `src/protocol/wire.zig` | `const total = std.mem.count(u8, source, "\n") + @intFromBool(so...` -> `const total = std.mem.count(u8, source, "\n");` | read_symbol over a line range names the file's total line count | killed |
+| `LC4-symbol-start-line-off-by-one` | `src/protocol/wire.zig` | `const first = std.mem.count(u8, source[0..@min(start, source.le...` -> `const first = std.mem.count(u8, source[0..@min(start, source.le...` | read_symbol names the lines a symbol body spans and the file's total line count | killed |
+| `LC5-symbol-body-without-place` | `src/protocol/handlers.zig` | `if (docs) \|d\| d.spans else &.{}, wire.Place.of(snapshot.sourc...` -> `if (docs) \|d\| d.spans else &.{}, null);` | read_symbol names the lines a symbol body spans and the file's total line count | killed |
+| `LC6-symbol-range-without-total` | `src/protocol/handlers.zig` | `entries[0..shown_count], wire.Place.of(snapshot.source, 0, 0).t...` -> `entries[0..shown_count], null);` | read_symbol over a line range names the file's total line count | killed |
 
 ## What this system does not prove
 

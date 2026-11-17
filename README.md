@@ -86,6 +86,8 @@ emetgate verify HEAD --test "npm test"
 
 **See what a session cost.** `emetgate report` sums up the latest session in the project that called emetgate's tools: duration, model turns, input, output and cache tokens, an estimated cost in USD, tool calls by name, and what the gate did (writes applied and rejected, rule violations, test runs, receipts, commits). `--session <id>` picks one session, `--all` lists every session in a table, `--json` prints the same numbers as JSON. Tokens come from Claude Code's own transcript (`projects/` under `CLAUDE_CONFIG_DIR`, or `~/.claude`); the cost uses built-in list prices per model, so it is an estimate, not your bill.
 
+**Watch what the agent touches.** Under `emetgate lockdown`, emetgate calls show in the transcript the way Claude Code's own tools do, also when calls fold together: `Read(file)` with the lines it read, `Search("…")` with the first hits, `Update(file)` with the changed lines and their context, `Write(file)`, `Bash(command)` with its output. Next to a read or an edit, a thin strip shows which parts of the file the agent has seen so far, and an edit to a part it never read is marked `edited without reading`. While a read runs, a strip scans the file; when the turn ends, one line sums up the turn and lists every file it touched with how much of each was read. It only draws: the model gets the same replies. A secret file (`.env`, keys, credentials) shows its name, never its content. `emetgate lockdown --no-marks` turns it off.
+
 ## Start in 2 minutes
 
 In PowerShell, then open a new terminal:

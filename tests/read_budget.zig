@@ -97,7 +97,8 @@ test "a symbol body within the read budget comes back exactly as before" {
     var reply = try readSymbol(runtime, .{ .file = fixture, .symbol = "small" }, read_budget.default_budget);
     defer reply.deinit();
     try testing.expect(!reply.is_error);
-    try testing.expectEqual(@as(usize, 4), reply.body.value.object.count());
+    try testing.expectEqual(@as(usize, 7), reply.body.value.object.count());
+    for ([_][]const u8{ "start_line", "end_line", "total_lines" }) |key| try testing.expect(reply.field(key).? == .integer);
     const body = reply.field("body").?.string;
     try testing.expect(std.mem.startsWith(u8, body, "{"));
     try testing.expect(std.mem.indexOf(u8, body, "return a + 1;") != null);

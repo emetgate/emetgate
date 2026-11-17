@@ -101,7 +101,7 @@ What to expect:
 - Claude Code opens as usual, but with **no built-in tools**: no Bash, no Edit, no Write. It can only use the `emetgate_*` tools.
 - Reading and searching run without permission prompts. Writes ask for permission as usual.
 - Each write is reparsed, checked against your rules, and run against your tests in a sandboxed copy. If anything fails, nothing touches your files and the model is told why.
-- Passed and refused writes are marked in the transcript; `/golem off` hides the marks, `/rule` adds a rule without going through the model.
+- Every emetgate call shows in the transcript the way Claude Code's own tools do (`Read`, `Search`, `Update` with a diff, `Bash`), with a strip of how much of the file the agent has seen; an edit to a part it never read is marked `edited without reading`, and each turn ends with a line listing the files it touched. Passed and refused writes are marked too; `/golem off` hides the marks, `/rule` adds a rule without going through the model.
 - Arguments after `lockdown` go to `claude` (e.g. `emetgate lockdown -p "fix the failing test"`). Flags that would lift the lock (`--tools`, `--mcp-config`, `--dangerously-skip-permissions`, ...) are refused.
 - The lock is per launch: a plain `claude` in the same folder is not locked.
 
