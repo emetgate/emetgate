@@ -86,6 +86,8 @@ emetgate verify HEAD --test "npm test"
 
 **查看一次会话的花费。** `emetgate report` 汇总项目中最近一次调用 emetgate 工具的会话：时长、模型轮次、input、output 和 cache token、以美元计的估算费用、按名称统计的工具调用，以及闸门做了什么（应用和拒绝的写入、规则违规、测试运行、收据、提交）。`--session <id>` 选择一个会话，`--all` 以表格列出所有会话，`--json` 以 JSON 输出同样的数字。token 来自 Claude Code 自己的会话记录（`CLAUDE_CONFIG_DIR` 或 `~/.claude` 下的 `projects/`）；费用按内置的各模型标价计算，因此只是估算，不是你的账单。
 
+**看清代理碰了什么。** 在 `emetgate lockdown` 下，emetgate 调用在记录里的样子和 Claude Code 自带的工具一样，调用被合并时也是如此：`Read(文件)` 附上读到的行，`Search("…")` 附上前几个命中，`Update(文件)` 附上改动的行及其上下文，`Write(文件)`，`Bash(命令)` 附上输出。读取或修改旁边有一条细条带，显示代理目前看过文件的哪些部分；改动代理从未读过的部分会被标为 `edited without reading`。读取进行时有一条条带扫过文件；一轮结束时，一行文字总结这一轮，并列出碰过的每个文件以及各读了多少。它只负责绘制：模型收到的回复不变。机密文件（`.env`、密钥、凭据）只显示名字，从不显示内容。`emetgate lockdown --no-marks` 可将其关闭。
+
 ## 2 分钟上手
 
 在 PowerShell 中运行，然后打开一个新终端：

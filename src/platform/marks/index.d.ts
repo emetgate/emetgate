@@ -27,6 +27,7 @@ declare module 'claude-code' {
       isSilent: boolean
       beat: number
       verdicts: Readonly<Record<string, boolean>>
+      activities: Readonly<Record<string, unknown>>
     }
   }
 }

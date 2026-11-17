@@ -86,6 +86,8 @@ emetgate verify HEAD --test "npm test"
 
 **세션 비용 보기.** `emetgate report`는 프로젝트에서 emetgate 도구를 호출한 최근 세션을 요약합니다: 소요 시간, 모델 턴, input·output·cache 토큰, USD 기준 예상 비용, 이름별 도구 호출, 그리고 게이트가 한 일(적용·거부된 쓰기, 규칙 위반, 테스트 실행, 영수증, 커밋). `--session <id>`는 세션 하나를 고르고, `--all`은 모든 세션을 표로 보여 주며, `--json`은 같은 숫자를 JSON으로 출력합니다. 토큰은 Claude Code 자체 기록(`CLAUDE_CONFIG_DIR` 또는 `~/.claude` 아래 `projects/`)에서 가져오며, 비용은 모델별 내장 정가로 계산하므로 청구액이 아니라 추정치입니다.
 
+**에이전트가 무엇을 건드리는지 보기.** `emetgate lockdown` 아래에서 emetgate 호출은 기록에 Claude Code 자체 도구처럼 보이며, 호출이 묶여도 마찬가지입니다: 읽은 줄과 함께 `Read(파일)`, 첫 결과와 함께 `Search("…")`, 바뀐 줄과 주변 줄과 함께 `Update(파일)`, `Write(파일)`, 출력과 함께 `Bash(명령)`. 읽기나 수정 옆의 얇은 띠는 에이전트가 지금까지 파일의 어느 부분을 봤는지 보여 주고, 읽지 않은 부분을 고치면 `edited without reading`으로 표시됩니다. 읽는 동안에는 띠가 파일을 훑고, 턴이 끝나면 한 줄이 턴을 요약하고 건드린 파일마다 얼마나 읽었는지를 나열합니다. 그리기만 합니다: 모델은 같은 응답을 받습니다. 비밀 파일(`.env`, 키, 자격 증명)은 이름만 보이고 내용은 절대 보이지 않습니다. `emetgate lockdown --no-marks`로 끕니다.
+
 ## 2분 만에 시작하기
 
 PowerShell에서 실행한 뒤 새 터미널을 엽니다:

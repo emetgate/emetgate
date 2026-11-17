@@ -52,6 +52,7 @@ test "lockdown marks: the plugin is a manifest, one hooks module and the files t
     var hooks: ?[]const u8 = null;
     var has_register = false;
     var has_scene = false;
+    var has_activity = false;
     var has_types = false;
     for (lockdown_marks.files) |file| {
         try testing.expect(file.data.len > 0);
@@ -60,10 +61,11 @@ test "lockdown marks: the plugin is a manifest, one hooks module and the files t
         if (std.mem.eql(u8, file.path, "hooks\\hooks.json")) hooks = file.data;
         if (std.mem.eql(u8, file.path, "hooks\\register.tsx")) has_register = true;
         if (std.mem.eql(u8, file.path, "hooks\\scene.ts")) has_scene = true;
+        if (std.mem.eql(u8, file.path, "hooks\\activity.ts")) has_activity = true;
         if (std.mem.eql(u8, file.path, "types\\index.d.ts")) has_types = true;
     }
-    try testing.expectEqual(@as(usize, 5), lockdown_marks.files.len);
-    try testing.expect(has_register and has_scene and has_types);
+    try testing.expectEqual(@as(usize, 6), lockdown_marks.files.len);
+    try testing.expect(has_register and has_scene and has_activity and has_types);
 
     const parsed = try std.json.parseFromSlice(std.json.Value, testing.allocator, manifest.?, .{});
     defer parsed.deinit();

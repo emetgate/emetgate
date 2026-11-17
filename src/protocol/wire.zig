@@ -307,7 +307,24 @@ pub fn writeSkeleton(writer: *Writer, file: []const u8, file_hash: symbol.Hash, 
     try writer.writeByte('\n');
 }
 
+pub const Place = struct {
+    start_line: usize,
+    end_line: usize,
+    total_lines: usize,
+
+    pub fn of(source: []const u8, start: usize, end: usize) Place {
+        const first = std.mem.count(u8, source[0..@min(start, source.len)], "\n") + 1;
+        const last = std.mem.count(u8, source[0..@min(end -| 1, source.len)], "\n") + 1;
+        const total = std.mem.count(u8, source, "\n") + @intFromBool(source.len > 0 and source[source.len - 1] != '\n');
+        return .{ .start_line = first, .end_line = @max(first, last), .total_lines = @max(total, 1) };
+    }
+};
+
 pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8, docs: []const doc_fold.LineSpan) !void {
+    return writeSymbolBodyAt(writer, file, ref, hash, body, docs, null);
+}
+
+pub fn writeSymbolBodyAt(writer: *Writer, file: []const u8, ref: []const u8, hash: symbol.Hash, body: []const u8, docs: []const doc_fold.LineSpan, place: ?Place) !void {
     const hex = symbol.formatHash(hash);
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
@@ -315,6 +332,14 @@ pub fn writeSymbolBody(writer: *Writer, file: []const u8, ref: []const u8, hash:
     try js.write(file);
     try js.objectField("symbol");
     try js.write(ref);
+    if (place) |p| {
+        try js.objectField("start_line");
+        try js.write(p.start_line);
+        try js.objectField("end_line");
+        try js.write(p.end_line);
+        try js.objectField("total_lines");
+        try js.write(p.total_lines);
+    }
     try js.objectField("hash");
     try js.write(hex[0..]);
     try writeDocs(&js, docs, symbol_docs_hint);
@@ -524,6 +549,10 @@ pub const RangeEntry = struct {
 };
 
 pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry) !void {
+    return writeSymbolRangeOf(writer, file, requested_start, requested_end, entries, null);
+}
+
+pub fn writeSymbolRangeOf(writer: *Writer, file: []const u8, requested_start: u32, requested_end: u32, entries: []const RangeEntry, total_lines: ?usize) !void {
     var js: std.json.Stringify = .{ .writer = writer };
     try js.beginObject();
     try js.objectField("file");
@@ -532,6 +561,10 @@ pub fn writeSymbolRange(writer: *Writer, file: []const u8, requested_start: u32,
     try js.write(requested_start);
     try js.objectField("requested_end_line");
     try js.write(requested_end);
+    if (total_lines) |total| {
+        try js.objectField("total_lines");
+        try js.write(total);
+    }
     try js.objectField("symbols");
     try js.beginArray();
     for (entries) |entry| {

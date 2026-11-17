@@ -17,6 +17,7 @@ pub const files = [_]File{
     .{ .path = "hooks\\hooks.json", .data = @embedFile("marks/hooks.json") },
     .{ .path = "hooks\\register.tsx", .data = @embedFile("marks/register.tsx") },
     .{ .path = "hooks\\scene.ts", .data = @embedFile("marks/scene.ts") },
+    .{ .path = "hooks\\activity.ts", .data = @embedFile("marks/activity.ts") },
     .{ .path = "types\\index.d.ts", .data = @embedFile("marks/index.d.ts") },
 };
 
