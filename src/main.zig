@@ -107,8 +107,10 @@ const usage =
     \\a shell would, and asks the user before a command that deletes recursively, rewrites
     \\or discards git history or changes, drops a database, formats a disk, shuts down,
     \\changes permissions recursively, pipes a download into a shell or changes an
-    \\emetgate rule. It always asks before an as_user call. It prints nothing for any
-    \\other command.
+    \\emetgate rule. It always asks before an as_user call. It denies a command that
+    \\deletes files in the repository without recursion (del, erase, rm, unlink,
+    \\Remove-Item, rd, rmdir, git rm) and names emetgate_delete and the files instead.
+    \\It prints nothing for any other command.
     \\hook session is the SessionStart hook that lockdown gives claude: it records a
     \\new context epoch, so that after a compaction or /clear emetgate mcp sends every
     \\file again instead of answering unchanged. It prints nothing, and it records the

@@ -13504,7 +13504,7 @@
       "from": "            if (prop.desc.len > 0) {",
       "to": "            if (true) {",
       "kills": [
-        "recovery hints: tools/list stays under 9000 characters and initialize says which tool reads, searches and edits"
+        "recovery hints: tools/list stays under 9500 characters and initialize says which tool reads, searches and edits"
       ]
     },
     {
@@ -19762,6 +19762,181 @@
       "kills": [
         "read_symbol over a line range names the file's total line count"
       ]
+    },
+    {
+      "id": "DEL1-recursive-rm-taken-for-a-plain-delete",
+      "file": "src/platform/command_danger.zig",
+      "from": "        if (hasShort(args, \"rRd\") or hasLong(args, &.{ \"--recursive\", \"--dir\" }) or recursive_switch or preview) return null;\n",
+      "to": "        if (false) return null;\n",
+      "kills": [
+        "plain delete: a recursive delete, a preview, an index-only git rm and words that only mention a delete are not one",
+        "pretool hook: mentions of a delete, recursive deletes and deletes outside the repository are not denied"
+      ],
+      "note": "a recursive rm would be denied as a plain delete instead of asking the user, and emetgate_delete cannot do it"
+    },
+    {
+      "id": "DEL2-target-outside-repo-redirected",
+      "file": "src/platform/command_danger.zig",
+      "from": "                if (try insideRepo(arena, target, here.*, boundary)) try inside.append(arena, target);\n",
+      "to": "                try inside.append(arena, target);\n",
+      "kills": [
+        "plain delete: a target outside the repository, in its .git or behind a variable is not one, and cd is followed",
+        "pretool hook: mentions of a delete, recursive deletes and deletes outside the repository are not denied"
+      ],
+      "note": "a delete outside the repository would be sent to emetgate_delete, which can only refuse it"
+    },
+    {
+      "id": "DEL3-git-internals-redirected",
+      "file": "src/platform/command_danger.zig",
+      "from": "    return !eqlAny(path.parts[boundary.parts.len], &internal_dirs);\n",
+      "to": "    return true;\n",
+      "kills": [
+        "plain delete: a target outside the repository, in its .git or behind a variable is not one, and cd is followed",
+        "pretool hook: mentions of a delete, recursive deletes and deletes outside the repository are not denied"
+      ],
+      "note": "deleting .git/index.lock would be denied with a fix emetgate_delete refuses as InternalPath"
+    },
+    {
+      "id": "DEL4-cd-not-followed",
+      "file": "src/platform/command_danger.zig",
+      "from": "            here.* = try changedDir(arena, here.*, words[1..]);\n",
+      "to": "            _ = try changedDir(arena, here.*, words[1..]);\n",
+      "kills": [
+        "plain delete: a target outside the repository, in its .git or behind a variable is not one, and cd is followed",
+        "pretool hook: mentions of a delete, recursive deletes and deletes outside the repository are not denied"
+      ],
+      "note": "cd out of the repository would be ignored, so a delete there would be taken for one inside it"
+    },
+    {
+      "id": "DEL5-shell-script-not-followed",
+      "file": "src/platform/command_danger.zig",
+      "from": "    if (is(program, &shells)) return shellScript(args);\n",
+      "to": "",
+      "kills": [
+        "plain delete: a delete chained, piped, grouped or wrapped in a shell is found"
+      ],
+      "note": "bash -c 'rm a.txt' would run the delete outside the gate"
+    },
+    {
+      "id": "DEL6-group-and-substitution-not-followed",
+      "file": "src/platform/command_danger.zig",
+      "from": "            if (try deletionIn(arena, inner, boundary, &inner_here, depth + 1)) |found| return found;\n",
+      "to": "            _ = .{ inner, &inner_here };\n",
+      "kills": [
+        "plain delete: a delete chained, piped, grouped or wrapped in a shell is found"
+      ],
+      "note": "(cd src && del a.ts) and $(rm a.txt) would run the delete outside the gate"
+    },
+    {
+      "id": "DEL7-hook-lets-plain-delete-run",
+      "file": "src/protocol/pretool_hook.zig",
+      "from": "|found| return .{ .deny = try deleteReason(arena, found, toolPrefix(tool.string)) };",
+      "to": "|found| _ = found;",
+      "kills": [
+        "pretool hook: a plain file delete in the repository is denied with a fix that names emetgate_delete and the files",
+        "pretool hook: a delete chained with other commands is denied and the fix says to run the rest without it"
+      ],
+      "note": "the observed bypass: del scratch.txt runs, with no rule check, no receipt and the file left staged"
+    },
+    {
+      "id": "DEL8-hook-ignores-cwd",
+      "file": "src/protocol/pretool_hook.zig",
+      "from": "        .string => |text| if (text.len != 0) text else null,\n",
+      "to": "        .string => |text| if (text.len == 0) text else null,\n",
+      "kills": [
+        "pretool hook: a plain file delete in the repository is denied with a fix that names emetgate_delete and the files"
+      ],
+      "note": "an absolute path inside the repository would no longer be known to be inside it"
+    },
+    {
+      "id": "DEL9-open-run-runs-plain-delete",
+      "file": "src/protocol/open_run.zig",
+      "from": "    if (try command_danger.plainDelete(arena, request.command, .{ .cwd = policy.session_dir orelse root_abs, .root = root_abs })) |found| {\n",
+      "to": "    if (@as(?command_danger.Deletion, null)) |found| {\n",
+      "kills": [
+        "delete tool: an open emetgate_run that deletes a repository file without recursion is refused before it runs, with a fix naming emetgate_delete"
+      ],
+      "note": "a client without the hook would delete files through emetgate_run outside the gate"
+    },
+    {
+      "id": "DEL10-stale-hash-not-named",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "            if (!std.mem.eql(u8, &expected, &current)) return error.HashMismatch;\n",
+      "to": "            _ = expected;\n",
+      "kills": [
+        "delete tool: several files are deleted all or none, whether a check before the gate or the gate itself refuses one"
+      ],
+      "note": "the batch still refuses, but the reply would not say which of several files is stale"
+    },
+    {
+      "id": "DEL11-delete-without-hash",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "        } else if (!knownUnchanged(arena, policy, request.file, place.abs, current)) return error.MissingFileHash;\n",
+      "to": "        } else if (false) return error.MissingFileHash;\n",
+      "kills": [
+        "delete tool: a file without a file_hash that this session did not write is refused, and one changed since its write is too"
+      ],
+      "note": "a file the model never read would be deleted with the hash emetgate computes itself"
+    },
+    {
+      "id": "DEL12-known-file-changed-since-write",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "    if (known.get(abs)) |hash| return std.mem.eql(u8, &hash, &current);\n",
+      "to": "    if (known.get(abs)) |hash| return hash.len != 0;\n",
+      "kills": [
+        "delete tool: a file without a file_hash that this session did not write is refused, and one changed since its write is too"
+      ],
+      "note": "a file this session wrote and the user changed after would be deleted without a fresh file_hash"
+    },
+    {
+      "id": "DEL13-full-folder-not-refused",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "        if (shape == .full_folder) return error.IsDirectory;\n",
+      "to": "",
+      "kills": [
+        "delete tool: a folder with files is refused, an empty folder is deleted, and a folder emptied by the call goes with its last file"
+      ],
+      "note": "a folder with files would reach the file path and fail with an error that does not say what to do"
+    },
+    {
+      "id": "DEL14-emptied-folder-kept",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "            std.Io.Dir.cwd().deleteDir(io, dir) catch break;\n",
+      "to": "            _ = io;\n            if (dir.len != 0) break;\n",
+      "kills": [
+        "delete tool: a folder with files is refused, an empty folder is deleted, and a folder emptied by the call goes with its last file"
+      ],
+      "note": "deleting a folder's last file would leave the empty folder behind, unlike git rm"
+    },
+    {
+      "id": "DEL15-duplicate-file-not-named",
+      "file": "src/protocol/delete_tool.zig",
+      "from": "            if (std.ascii.eqlIgnoreCase(earlier.abs, place.abs)) return error.DuplicateBatchFile;\n",
+      "to": "            _ = earlier;\n",
+      "kills": [
+        "delete tool: a file named twice is refused before anything is deleted"
+      ],
+      "note": "a file named twice would reach the batch, whose refusal does not say which file"
+    },
+    {
+      "id": "DEL16-files-and-file-together-accepted",
+      "file": "src/protocol/arg_check.zig",
+      "from": "    if (eql(name, \"emetgate_delete\")) return &delete_rules;\n",
+      "to": "",
+      "kills": [
+        "arg check: arguments that select two different things, or a selector the file type has none of, are refused with a fix"
+      ],
+      "note": "files and file in one call would be merged silently instead of refused"
+    },
+    {
+      "id": "DEL17-delete-aliases-dropped",
+      "file": "src/protocol/forgive.zig",
+      "from": "    if (eql(name, \"emetgate_delete\")) return .{ .name = name, .args = try normalizeDelete(arena, given) };\n",
+      "to": "",
+      "kills": [
+        "delete tool: a staged new file leaves the index too, so git does not show it as added and deleted"
+      ],
+      "note": "path and hash, the names other tools take, would not reach emetgate_delete"
     }
   ]
 }

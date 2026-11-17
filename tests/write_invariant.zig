@@ -292,6 +292,11 @@ const Op = struct {
             if (!env.repo.exists(route.from) or env.repo.exists(route.to)) return null;
             return try self.send(tool, try self.value(.{ .from = try env.abs(route.from), .to = try env.abs(route.to), .from_hash = try env.fileHash(route.from), .interface_change = true }));
         }
+        if (std.mem.eql(u8, tool, "emetgate_delete")) {
+            const rel = self.pick([]const u8, &.{ "src/core/a.ts", "src/core/a.ts", "src/core/b.ts", "src/util/dead.ts", "src/util/far.ts" });
+            if (!env.repo.exists(rel)) return null;
+            return try self.send(tool, try self.value(.{ .files = .{.{ .file = try env.abs(rel), .file_hash = try env.fileHash(rel) }} }));
+        }
         if (std.mem.eql(u8, tool, "emetgate_run")) {
             return try env.call(tool, .{}, green, false);
         }
@@ -367,6 +372,7 @@ const exercised_tools = [_][]const u8{
     "emetgate_rename",
     "emetgate_move",
     "emetgate_move_file",
+    "emetgate_delete",
     "emetgate_run",
     "emetgate_git_write",
 };
@@ -432,6 +438,10 @@ test "write invariant: after any accepted emetgate_move a scan finds no violatio
 
 test "write invariant: after any accepted emetgate_move_file a scan finds no violation it did not find before" {
     try exerciseTool("emetgate_move_file");
+}
+
+test "write invariant: after any accepted emetgate_delete a scan finds no violation it did not find before" {
+    try exerciseTool("emetgate_delete");
 }
 
 test "write invariant: after any accepted emetgate_run a scan finds no violation it did not find before" {

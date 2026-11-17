@@ -11,6 +11,7 @@ pub const all = [_][]const u8{
     "emetgate_rename",
     "emetgate_move",
     "emetgate_move_file",
+    "emetgate_delete",
     "emetgate_read_file",
     "emetgate_list",
     "emetgate_search",

@@ -1546,6 +1546,8 @@ const fixes = std.StaticStringMap([]const u8).initComptime(.{
     .{ "BaseChanged", "the file changed on disk while the gate ran (another program or the user wrote it); that change was kept and nothing was written; read the file again and send the edit against what it holds now" },
     .{ "SymbolReferenced", "the symbol is still used elsewhere; remove or change those uses in the same batch (emetgate_search finds them), then delete it" },
     .{ "CacheBusy", "another emetgate server holds this repository's caches, or this process may not open them (access denied, for example an exe running at Low integrity); retry when the other server's write ends, and if it repeats the user runs emetgate doctor" },
+    .{ "ReparsePoint", "the path is a junction or symbolic link, and emetgate never writes or deletes through one; nothing was changed; the user removes the link by hand if it should go" },
+    .{ "DeleteOutsideGate", "the command did not run: delete the files with emetgate_delete, which checks the rules and the tests and takes each file out of the git index too, then run the rest of the command without the delete" },
     .{ "IsDir", "the path is a directory; emetgate_list with dir lists its files" },
     .{ "IsDirectory", "the path is a directory; emetgate_list with dir lists its files" },
     .{ "MissingPath", "sub blame needs path, the file to blame" },
@@ -2572,7 +2574,7 @@ test "every error name the exit-code map knows has its own fix" {
 test "every error a tool file returns has its own fix" {
     var names: std.ArrayList([]const u8) = .empty;
     defer names.deinit(testing.allocator);
-    inline for (.{ "handlers.zig", "read_tools.zig", "git_tools.zig", "search_v1.zig", "find_tools.zig", "git_write.zig", "open_run.zig", "move_tool.zig", "move_file_tool.zig", "rename_tool.zig", "edit_tool.zig", "node_tool.zig", "map_tools.zig", "workspace.zig", "policy.zig", "run_tool.zig", "tool_result.zig", "batch_merge.zig", "batch_stage.zig" }) |file| {
+    inline for (.{ "handlers.zig", "read_tools.zig", "git_tools.zig", "search_v1.zig", "find_tools.zig", "git_write.zig", "open_run.zig", "move_tool.zig", "move_file_tool.zig", "delete_tool.zig", "rename_tool.zig", "edit_tool.zig", "node_tool.zig", "map_tools.zig", "workspace.zig", "policy.zig", "run_tool.zig", "tool_result.zig", "batch_merge.zig", "batch_stage.zig" }) |file| {
         try returnedErrorNames(@embedFile(file), &names);
     }
     // Not tool replies: an unknown tool name is a JSON-RPC error, the rest are test-only.

@@ -20,6 +20,8 @@ const frozen_hold = @import("../platform/frozen_hold.zig");
 const run_audit = @import("../platform/run_audit.zig");
 const command_danger = @import("../platform/command_danger.zig");
 const low_run = @import("../platform/low_run.zig");
+const pretool_hook = @import("pretool_hook.zig");
+const wire = @import("wire.zig");
 const Runtime = @import("../engine/runtime.zig").Runtime;
 
 const Allocator = std.mem.Allocator;
@@ -27,7 +29,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const Policy = policy_mod.Policy;
 
-pub const description = "Runs any shell command in the session folder and replies with the shell, the integrity, the exit code and the output. It runs through cmd.exe at low integrity, so it can write only inside the repository; Git Bash and its tools (sh, sed, touch) cannot start at low integrity. as_user:true runs it in Git Bash (if installed, else cmd) with the user's full rights after the user approves, and a plain git push, fetch, pull, clone, ls-remote or gh runs with the user's rights for the credential manager. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first. A path held by a frozen rule, and with no rule emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config), comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
+pub const description = "Runs any shell command in the session folder and replies with the shell, the integrity, the exit code and the output. It runs through cmd.exe at low integrity, so it can write only inside the repository; Git Bash and its tools (sh, sed, touch) cannot start at low integrity. as_user:true runs it in Git Bash (if installed, else cmd) with the user's full rights after the user approves, and a plain git push, fetch, pull, clone, ls-remote or gh runs with the user's rights for the credential manager. Long output is cut and each cut is labeled: git line-ending warnings, hints and progress are dropped, a passing test run is one line, a failing one keeps its failing tests, other output keeps its head and tail (4 KiB, 16 KiB for cat/sed/head). raw:true returns all output up to 64 KiB. Commands that delete recursively, rewrite git history, discard changes, drop data or commit outside the gate ask the user first; one that deletes files in the repository without recursion is refused, as emetgate_delete deletes them through the gate. A path held by a frozen rule, and with no rule emetgate's own configuration (.mcp.json, the Claude settings and agents, the rules ledger, the git hooks and git config), comes back after the command: changes to it are put back and the reply names them in frozen_restored; a commit the command made to one is named in frozen_committed.";
 
 pub const command_desc = "the shell command, as you would type it";
 pub const raw_desc = "return the output uncut, up to 64 KiB";
@@ -96,6 +98,13 @@ pub fn render(gpa: Allocator, io: std.Io, runtime: *Runtime, args: ?Value, polic
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    if (try command_danger.plainDelete(arena, request.command, .{ .cwd = policy.session_dir orelse root_abs, .root = root_abs })) |found| {
+        event.fail("DeleteOutsideGate");
+        wire.setFix("{s}", .{try pretool_hook.deleteFix(arena, found, tool_names.prefix())});
+        const what = if (found.folders) "removes a folder" else "deletes files";
+        try wire.writeErrorMessage(w, "DeleteOutsideGate", 2, try std.fmt.allocPrint(arena, "the command {s} outside the gate ({s}), so it did not run: no rule check, no hash check and no receipt", .{ what, found.fragment }));
+        return true;
+    }
     const configured: ?[]const u8 = policy.test_command orelse if (policy.detect_test) test_command.detectIn(arena, io, root_abs) catch null else null;
     const shape = try run_trim.shapeOf(arena, request.command, configured);
     const timeout_s = request.timeout_s orelse if (shape.test_run) test_timeout_s else default_timeout_s;

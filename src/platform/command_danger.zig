@@ -703,6 +703,213 @@ fn sqlDrops(words: []const []const u8) bool {
     return false;
 }
 
+pub const Deletion = struct { fragment: []const u8, files: []const []const u8, folders: bool };
+
+pub const Place = struct { cwd: ?[]const u8 = null, root: ?[]const u8 = null };
+
+const Path = struct { head: []const u8, parts: []const []const u8 };
+
+const unknown_head = "\x00unknown";
+const cwd_head = "\x00cwd";
+const internal_dirs = [_][]const u8{ ".git", ".emetgate" };
+const change_dirs = [_][]const u8{ "cd", "chdir", "pushd", "set-location", "sl" };
+const powershell_valued = [_][]const u8{ "include", "exclude", "filter", "credential", "stream" };
+const powershell_paths = [_][]const u8{ "path", "literalpath", "lp", "pspath" };
+
+pub fn plainDelete(arena: Allocator, command: []const u8, place: Place) Allocator.Error!?Deletion {
+    if (command.len > max_command_bytes) return null;
+    const start: Path = if (place.cwd) |cwd| try pathOf(arena, cwd) else .{ .head = cwd_head, .parts = &.{} };
+    const boundary: Path = if (place.root) |root| try pathOf(arena, root) else start;
+    var here: ?Path = start;
+    return deletionIn(arena, command, boundary, &here, 0);
+}
+
+fn deletionIn(arena: Allocator, text: []const u8, boundary: Path, here: *?Path, depth: usize) Allocator.Error!?Deletion {
+    if (depth > max_depth) return null;
+    for (try parse(arena, text)) |segment| {
+        for (segment.nested.items) |inner| {
+            var inner_here = here.*;
+            if (try deletionIn(arena, inner, boundary, &inner_here, depth + 1)) |found| return found;
+        }
+        const words = unwrap(segment.words.items);
+        if (words.len == 0) continue;
+        if (is(words[0], &change_dirs)) {
+            here.* = try changedDir(arena, here.*, words[1..]);
+            continue;
+        }
+        if (try deleteOperands(arena, words)) |operands| {
+            var inside: std.ArrayList([]const u8) = .empty;
+            for (operands.files) |target| {
+                if (try insideRepo(arena, target, here.*, boundary)) try inside.append(arena, target);
+            }
+            if (inside.items.len != 0) return .{ .fragment = try fragmentOf(arena, words), .files = inside.items, .folders = operands.folders };
+            continue;
+        }
+        const script = try wrappedScript(arena, words) orelse continue;
+        var inner_here = here.*;
+        if (try deletionIn(arena, script, boundary, &inner_here, depth + 1)) |found| return found;
+    }
+    return null;
+}
+
+const Operands = struct { files: []const []const u8, folders: bool = false };
+
+fn deleteOperands(arena: Allocator, words: []const []const u8) Allocator.Error!?Operands {
+    const program = words[0];
+    const args = words[1..];
+    const recursive_switch = hasPowerShellSwitch(args, "Recurse", 1);
+    const preview = hasPowerShellSwitch(args, "WhatIf", 2);
+    if (is(program, &.{"rm"})) {
+        if (hasShort(args, "rRd") or hasLong(args, &.{ "--recursive", "--dir" }) or recursive_switch or preview) return null;
+        return .{ .files = try operandsOf(arena, args, false) };
+    }
+    if (is(program, &.{"unlink"})) return .{ .files = try operandsOf(arena, args, false) };
+    if (is(program, &.{ "del", "erase" })) {
+        if (hasSlash(args, "s") or recursive_switch or preview) return null;
+        return .{ .files = try operandsOf(arena, args, true) };
+    }
+    if (is(program, &.{ "rd", "rmdir" })) {
+        if (hasSlash(args, "s") or recursive_switch or preview) return null;
+        return .{ .files = try operandsOf(arena, args, true), .folders = true };
+    }
+    if (is(program, &.{ "remove-item", "ri" })) {
+        if (recursive_switch or preview) return null;
+        return .{ .files = try operandsOf(arena, args, false) };
+    }
+    if (is(program, &.{"git"})) {
+        const rest = skipOptions(args, &git_valued);
+        if (rest.len == 0 or !std.mem.eql(u8, rest[0], "rm")) return null;
+        const git_args = rest[1..];
+        if (hasShort(git_args, "rn") or hasLong(git_args, &.{ "--cached", "--dry-run", "--pathspec-from-file" })) return null;
+        return .{ .files = try operandsOf(arena, git_args, false) };
+    }
+    return null;
+}
+
+fn operandsOf(arena: Allocator, args: []const []const u8, slash_switches: bool) Allocator.Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    var ended = false;
+    var k: usize = 0;
+    while (k < args.len) : (k += 1) {
+        var arg = args[k];
+        if (!ended and std.mem.eql(u8, arg, "--")) {
+            ended = true;
+            continue;
+        }
+        if (!ended and arg.len >= 2 and arg[0] == '-') {
+            const name = arg[1..];
+            const colon = std.mem.indexOfScalar(u8, name, ':');
+            const bare = if (colon) |at| name[0..at] else name;
+            if (eqlAny(bare, &powershell_paths)) {
+                if (colon) |at| {
+                    arg = name[at + 1 ..];
+                } else if (k + 1 < args.len) {
+                    k += 1;
+                    arg = args[k];
+                } else continue;
+            } else {
+                if (colon == null and eqlAny(bare, &powershell_valued)) k += 1;
+                continue;
+            }
+        } else if (!ended and slash_switches and arg.len >= 2 and arg[0] == '/') continue;
+        var parts = std.mem.tokenizeScalar(u8, arg, ',');
+        while (parts.next()) |part| {
+            const trimmed = std.mem.trim(u8, part, " \t");
+            if (trimmed.len != 0) try out.append(arena, trimmed);
+        }
+    }
+    return out.items;
+}
+
+fn wrappedScript(arena: Allocator, words: []const []const u8) Allocator.Error!?[]const u8 {
+    const program = words[0];
+    const args = words[1..];
+    if (is(program, &shells)) return shellScript(args);
+    if (is(program, &.{"cmd"})) {
+        for (args, 0..) |arg, k| {
+            if (eqlAny(arg, &.{ "/c", "/k", "/r" })) return try joined(arena, args[k + 1 ..]);
+            if (arg.len > 2 and arg[0] == '/' and std.mem.indexOfScalar(u8, "cCkKrR", arg[1]) != null) return try std.mem.concat(arena, u8, &.{ arg[2..], " ", try joined(arena, args[k + 1 ..]) });
+        }
+        return null;
+    }
+    if (is(program, &.{ "powershell", "pwsh" })) {
+        for (args, 0..) |arg, k| {
+            if (arg.len < 2 or (arg[0] != '-' and arg[0] != '/')) return try joined(arena, args[k..]);
+            const flag = arg[1..];
+            if (std.ascii.startsWithIgnoreCase("command", flag)) return try joined(arena, args[k + 1 ..]);
+            if (std.ascii.startsWithIgnoreCase("encodedcommand", flag) or std.ascii.startsWithIgnoreCase("file", flag)) return null;
+        }
+        return null;
+    }
+    if (is(program, &.{ "eval", "iex", "invoke-expression" })) return try joined(arena, args);
+    return null;
+}
+
+fn changedDir(arena: Allocator, here: ?Path, args: []const []const u8) Allocator.Error!?Path {
+    var given: std.ArrayList([]const u8) = .empty;
+    for (args) |arg| {
+        if (!std.ascii.eqlIgnoreCase(arg, "/d")) try given.append(arena, arg);
+    }
+    const operands = try operandsOf(arena, given.items, false);
+    if (operands.len == 0 or std.mem.eql(u8, operands[0], "-")) return null;
+    return resolved(arena, here, operands[0]);
+}
+
+fn insideRepo(arena: Allocator, target: []const u8, here: ?Path, boundary: Path) Allocator.Error!bool {
+    const path = try resolved(arena, here, target) orelse return false;
+    if (!std.ascii.eqlIgnoreCase(path.head, boundary.head) or path.parts.len <= boundary.parts.len) return false;
+    for (boundary.parts, path.parts[0..boundary.parts.len]) |want, have| {
+        if (!std.ascii.eqlIgnoreCase(want, have)) return false;
+    }
+    return !eqlAny(path.parts[boundary.parts.len], &internal_dirs);
+}
+
+fn resolved(arena: Allocator, here: ?Path, target: []const u8) Allocator.Error!?Path {
+    if (target.len == 0 or target[0] == '~' or std.mem.indexOfAny(u8, target, "$%") != null) return null;
+    if (absolute(target)) {
+        const path = try pathOf(arena, target);
+        return if (std.mem.eql(u8, path.head, unknown_head)) null else path;
+    }
+    if (target.len >= 2 and target[1] == ':') return null;
+    const base = here orelse return null;
+    return joinedPath(arena, base, target);
+}
+
+fn absolute(text: []const u8) bool {
+    if (text.len >= 2 and std.ascii.isAlphabetic(text[0]) and text[1] == ':') return text.len == 2 or text[2] == '\\' or text[2] == '/';
+    return text.len != 0 and (text[0] == '\\' or text[0] == '/');
+}
+
+fn pathOf(arena: Allocator, text: []const u8) Allocator.Error!Path {
+    var rest = text;
+    if (std.mem.startsWith(u8, rest, "\\\\?\\")) rest = rest[4..];
+    var head: []const u8 = unknown_head;
+    if (rest.len >= 2 and std.ascii.isAlphabetic(rest[0]) and rest[1] == ':') {
+        head = try std.ascii.allocLowerString(arena, rest[0..2]);
+        rest = rest[2..];
+    } else if (rest.len >= 2 and rest[0] == '/' and std.ascii.isAlphabetic(rest[1]) and (rest.len == 2 or rest[2] == '/')) {
+        head = try std.mem.concat(arena, u8, &.{ &.{std.ascii.toLower(rest[1])}, ":" });
+        rest = rest[2..];
+    } else return .{ .head = unknown_head, .parts = &.{} };
+    return (try joinedPath(arena, .{ .head = head, .parts = &.{} }, rest)) orelse .{ .head = unknown_head, .parts = &.{} };
+}
+
+fn joinedPath(arena: Allocator, base: Path, rel: []const u8) Allocator.Error!?Path {
+    var parts: std.ArrayList([]const u8) = .empty;
+    try parts.appendSlice(arena, base.parts);
+    var it = std.mem.tokenizeAny(u8, rel, "/\\");
+    while (it.next()) |part| {
+        if (std.mem.eql(u8, part, ".")) continue;
+        if (std.mem.eql(u8, part, "..")) {
+            if (parts.items.len == 0) return null;
+            parts.items.len -= 1;
+            continue;
+        }
+        try parts.append(arena, part);
+    }
+    return .{ .head = base.head, .parts = parts.items };
+}
+
 const testing = std.testing;
 
 fn expectAsk(command: []const u8) !void {
@@ -951,4 +1158,146 @@ test "command danger: the finding names the reason and the command part" {
     const found = (try classify(arena.allocator(), "npm test && git push --force origin main")).?;
     try testing.expectEqualStrings(R.push_force, found.reason);
     try testing.expectEqualStrings("git push --force origin main", found.fragment);
+}
+
+const test_place: Place = .{ .cwd = "C:\\work\\repo", .root = "C:\\work\\repo" };
+
+fn deletedFiles(command: []const u8, place: Place) !?[]const u8 {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const found = try plainDelete(arena.allocator(), command, place) orelse return null;
+    return try std.mem.join(testing.allocator, "|", found.files);
+}
+
+fn expectDeletes(command: []const u8, files: []const u8) !void {
+    const got = try deletedFiles(command, test_place) orelse {
+        std.debug.print("not a plain delete: {s}\n", .{command});
+        return error.TestExpectedDeletion;
+    };
+    defer testing.allocator.free(got);
+    errdefer std.debug.print("{s}\n", .{command});
+    try testing.expectEqualStrings(files, got);
+}
+
+fn expectNoDelete(command: []const u8) !void {
+    if (try deletedFiles(command, test_place)) |got| {
+        defer testing.allocator.free(got);
+        std.debug.print("taken for a plain delete: {s} ({s})\n", .{ command, got });
+        return error.TestUnexpectedDeletion;
+    }
+}
+
+test "plain delete: a non-recursive delete of a file in the repository is found with the files it names" {
+    try expectDeletes("del scratch.txt", "scratch.txt");
+    try expectDeletes("erase /q a.txt b.txt", "a.txt|b.txt");
+    try expectDeletes("del /f locked.txt", "locked.txt");
+    try expectDeletes("rm notes.md", "notes.md");
+    try expectDeletes("rm -f -- -odd.txt", "-odd.txt");
+    try expectDeletes("/usr/bin/rm.exe src/a.ts", "src/a.ts");
+    try expectDeletes("unlink build.log", "build.log");
+    try expectDeletes("Remove-Item a.txt, b.txt", "a.txt|b.txt");
+    try expectDeletes("Remove-Item -Path src\\old.ts -Force", "src\\old.ts");
+    try expectDeletes("ri -LiteralPath:x.txt", "x.txt");
+    try expectDeletes("Remove-Item -Include *.tmp -Path out.txt", "out.txt");
+    try expectDeletes("rmdir empty", "empty");
+    try expectDeletes("rd old", "old");
+    try expectDeletes("git rm src/gone.ts", "src/gone.ts");
+    try expectDeletes("git -C . rm -f -q a.txt", "a.txt");
+    try expectDeletes("del C:\\work\\repo\\scratch.txt", "C:\\work\\repo\\scratch.txt");
+    try expectDeletes("rm /c/work/repo/a.txt", "/c/work/repo/a.txt");
+    try expectDeletes("del *.txt", "*.txt");
+    try expectDeletes("sudo rm a.txt", "a.txt");
+}
+
+test "plain delete: a delete chained, piped, grouped or wrapped in a shell is found" {
+    try expectDeletes("del a.txt && echo x", "a.txt");
+    try expectDeletes("echo x & del a.txt", "a.txt");
+    try expectDeletes("npm test; rm a.txt", "a.txt");
+    try expectDeletes("npm test || rm a.txt", "a.txt");
+    try expectDeletes("dir | del a.txt", "a.txt");
+    try expectDeletes("echo x\ndel a.txt", "a.txt");
+    try expectDeletes("(cd src && del a.ts)", "a.ts");
+    try expectDeletes("cmd /c del a.txt", "a.txt");
+    try expectDeletes("cmd /c \"del a.txt\"", "a.txt");
+    try expectDeletes("powershell -Command \"Remove-Item a.txt\"", "a.txt");
+    try expectDeletes("bash -c 'rm a.txt'", "a.txt");
+    try expectDeletes("echo $(rm a.txt)", "a.txt");
+}
+
+test "plain delete: a recursive delete, a preview, an index-only git rm and words that only mention a delete are not one" {
+    for ([_][]const u8{
+        "echo rm a.txt",
+        "echo del a.txt",
+        "grep del src",
+        "grep -rn 'rm a.txt' src",
+        "findstr erase notes.md",
+        "git log --grep=rm",
+        "git commit -m \"rm a.txt\"",
+        "npm run del",
+        "echo 'del a.txt'",
+        "echo a > del",
+        "rm -rf build",
+        "rm -r src",
+        "rm --recursive x",
+        "rm -d empty",
+        "del /s *.obj",
+        "rmdir /s /q build",
+        "rd /S build",
+        "Remove-Item -Recurse build",
+        "Remove-Item a.txt -WhatIf",
+        "git rm -r src",
+        "git rm --cached a.txt",
+        "git rm -n a.txt",
+        "ls | xargs rm",
+        "rm",
+        "del",
+        "",
+    }) |command| try expectNoDelete(command);
+}
+
+test "plain delete: a target outside the repository, in its .git or behind a variable is not one, and cd is followed" {
+    for ([_][]const u8{
+        "del ..\\outside.txt",
+        "rm ../../x.txt",
+        "rm /tmp/x.txt",
+        "del C:\\other\\x.txt",
+        "del D:\\work\\repo\\x.txt",
+        "rm /d/work/repo/x.txt",
+        "del %TEMP%\\x.txt",
+        "rm $HOME/x.txt",
+        "rm ~/x.txt",
+        "del \\\\server\\share\\x.txt",
+        "del .git\\index.lock",
+        "rm .emetgate/x",
+        "cd .. && del x.txt",
+        "cd /d C:\\other && del x.txt",
+        "cd %TEMP% && del x.txt",
+        "pushd C:\\other && del x.txt",
+    }) |command| try expectNoDelete(command);
+    try expectDeletes("cd src && del a.ts", "a.ts");
+    try expectDeletes("cd .. && del ..\\x.txt && del repo\\y.txt", "repo\\y.txt");
+    try expectDeletes("del ..\\outside.txt inside.txt", "inside.txt");
+    try expectDeletes("del src\\..\\a.txt", "src\\..\\a.txt");
+}
+
+test "plain delete: without a known folder only a relative path that stays below the command's folder counts" {
+    const plain = (try deletedFiles("del a.txt", .{})).?;
+    testing.allocator.free(plain);
+    for ([_][]const u8{ "del ..\\a.txt", "del C:\\x\\a.txt", "rm /c/x/a.txt" }) |command| {
+        try testing.expect(try deletedFiles(command, .{}) == null);
+    }
+    const nested: Place = .{ .cwd = "C:\\work\\repo\\sub", .root = "C:\\work\\repo" };
+    const got = (try deletedFiles("del ..\\a.txt", nested)).?;
+    defer testing.allocator.free(got);
+    try testing.expectEqualStrings("..\\a.txt", got);
+}
+
+test "plain delete: the finding names the command part and marks a folder removal" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const file = (try plainDelete(arena.allocator(), "npm test && del /q scratch.txt", test_place)).?;
+    try testing.expectEqualStrings("del /q scratch.txt", file.fragment);
+    try testing.expect(!file.folders);
+    const folder = (try plainDelete(arena.allocator(), "rmdir old", test_place)).?;
+    try testing.expect(folder.folders);
 }

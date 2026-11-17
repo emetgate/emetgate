@@ -63,7 +63,7 @@ rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // cl
 
 用 Claude Code 的 hook 和 ESLint，你可以自己搭出其中一部分。区别在于：
 
-- **每个写入工具都过同一道门。** lockdown 会关闭 Claude Code 自带的编辑工具；编辑、重命名和移动都经过同样的规则。智能体如果用 shell 命令修改文件，会被记录，冻结路径会被恢复，未通过门的修改无法通过 emetgate 提交。
+- **每个写入工具都过同一道门。** lockdown 会关闭 Claude Code 自带的编辑工具；编辑、重命名、移动和删除都经过同样的规则。智能体如果用 shell 命令修改文件，会被记录，冻结路径会被恢复，未通过门的修改无法通过 emetgate 提交。
 - **智能体可以关掉 ESLint。** `eslint-disable` 行和 `.eslintrc` 都在智能体能编辑的文件里。emetgate 的规则在智能体没有工具修改的账本里；添加 `eslint-disable` 本身也可能触发规则。
 - **修改作为整体检查。** 涉及多个文件的修改会在仓库副本上一起检查；通过则全部写入，否则一个也不写。
 - **从对话到规则。** 你给出的长期指令会被提议为规则；不需要为每条规则写脚本。
@@ -133,7 +133,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## 限制
 
 - 目前仅支持 Windows。
-- 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。
+- 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。在 lockdown 下，非递归删除仓库内文件的命令会被拒绝；智能体改用经过门的 `emetgate_delete` 删除它们。
 - 规则账本是 `.emetgate/` 下的一个文件。智能体没有写它的工具，但通过命令编辑它不会被监视规则命令的 hook 捕获。
 - 在 lockdown 之外、用智能体自带工具打开的会话中没有门。在其他支持 MCP 的智能体中，只要智能体使用 emetgate 的工具，门就会生效。
 - 每次写入在门上大约耗时 0.2–0.4 s。我们不承诺更少的 token。

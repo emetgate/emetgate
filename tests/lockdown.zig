@@ -214,6 +214,7 @@ const gated_tools = [_][]const u8{
     "emetgate_rename",
     "emetgate_move",
     "emetgate_move_file",
+    "emetgate_delete",
     "emetgate_commit",
     "emetgate_git_write",
 };

@@ -63,7 +63,7 @@ rejected: rule me2014a06b646515d (added:no_comment) at src\pricing.js:2:3: // cl
 
 You can build part of this yourself with Claude Code hooks and ESLint. The difference:
 
-- **The gate is the same for every write tool.** Lockdown turns off Claude Code's own edit tools; edits, renames and moves pass the same rules. If the agent changes a file with a shell command, it is recorded, frozen paths are put back, and a change that did not pass the gate cannot be committed through emetgate.
+- **The gate is the same for every write tool.** Lockdown turns off Claude Code's own edit tools; edits, renames, moves and deletes pass the same rules. If the agent changes a file with a shell command, it is recorded, frozen paths are put back, and a change that did not pass the gate cannot be committed through emetgate.
 - **The agent can switch ESLint off.** An `eslint-disable` line and `.eslintrc` live in files the agent can edit. emetgate's rules live in a ledger the agent has no tool to change; adding `eslint-disable` can itself hit a rule.
 - **The change is checked as a whole.** A change that touches several files is checked together on a copy of the repository; if it passes all of it is written, if not none of it is.
 - **From chat to rule.** A lasting instruction you give is offered as a rule; you do not write a script per rule.
@@ -133,7 +133,7 @@ A cache that a running emetgate holds a lease on is never removed. The shared `c
 ## Limits
 
 - Windows only, for now.
-- Rules apply to changes made through emetgate's write tools. A command the agent runs does not pass the gate: the files it changes are reported and frozen paths are put back, but the other rules do not apply to commands.
+- Rules apply to changes made through emetgate's write tools. A command the agent runs does not pass the gate: the files it changes are reported and frozen paths are put back, but the other rules do not apply to commands. A command that deletes files in the repository without recursion is refused under lockdown; the agent deletes them with `emetgate_delete`, which passes the gate.
 - The rule ledger is a file under `.emetgate/`. The agent has no tool to write it, but an edit made by a command is not caught by the hook that watches rule commands.
 - Outside lockdown, in a session opened with the agent's own tools, there is no gate. In other agents that speak MCP, the gate works as long as the agent uses emetgate's tools.
 - Every write takes about 0.2–0.4 s at the gate. We do not promise fewer tokens.
