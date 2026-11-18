@@ -10,13 +10,14 @@ pub const Kind = enum {
     sqlite,
     postgres,
     mysql,
+    mongodb,
 
     pub fn parse(text: []const u8) ?Kind {
         return std.meta.stringToEnum(Kind, text);
     }
 
     pub fn supported(self: Kind) bool {
-        return self == .sqlite;
+        return self == .sqlite or self == .postgres or self == .mongodb;
     }
 };
 
@@ -63,6 +64,7 @@ pub const Value = union(enum) {
     real: f64,
     text: []const u8,
     blob: []const u8,
+    json: []const u8,
 };
 
 pub const Treatment = union(enum) {
@@ -166,6 +168,10 @@ pub const Error = error{
     SqlFailed,
     DatabaseUnavailable,
     EngineNotSupported,
+    CommandInvalid,
+    HiddenFieldUsed,
+    MaskedFieldUsed,
+    OperatorDenied,
 };
 
 pub const Settings = struct {
@@ -238,5 +244,5 @@ test "db engine: limits take a dashed or underscored name and refuse zero and va
     try testing.expectError(error.LimitOutOfRange, limits.set(.timeout_ms, Limits.ceiling.timeout_ms + 1));
     try testing.expect(Limits.parseField("rows") == null);
     try testing.expect(Limits.parseField("timeout_ms") != null);
-    try testing.expect(Kind.sqlite.supported() and !Kind.postgres.supported());
+    try testing.expect(Kind.sqlite.supported() and Kind.postgres.supported() and !Kind.mysql.supported());
 }

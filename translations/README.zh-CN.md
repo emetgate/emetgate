@@ -102,7 +102,29 @@ emetgate db protect main
 
 智能体用 `emetgate_db` 读取：列出表、描述表结构、抽样行，每次调用执行一条 `SELECT`，结果为 JSON、CSV 或 Markdown，行数、单元格大小、回复大小和时间都有上限。文件以只读方式打开，每条语句在运行前都要经过 SQLite 的授权器。隐藏的列无论出现在哪里（`SELECT *`、视图、子查询、`WHERE`）都读作 NULL；被屏蔽的表即使通过视图也会被拒绝；脱敏的列无论用什么别名选出都以脱敏形式返回，把它放进表达式的查询会被拒绝。规则看的是值来自哪一列，而不是值被起了什么名字。
 
-**写入需要你点头。** 智能体只读。要让它修改数据，请把 `/db write` 作为提示输入：由 hook 直接回答，模型看不到。只有在你下一条提示的那一轮里，`emetgate_db_write` 才能执行 `INSERT`、`UPDATE`、`DELETE` 或 DDL，每条语句都连同影响的行数一起记录。删除表、清空表或修改每一行，除非你输入了 `/db write --destructive`，否则仍会被拒绝；`/db read` 立即关闭写入模式。
+**MongoDB** 也是同样的做法。`db add` 先登录一次来检查 URI，然后用 Windows DPAPI 把它连同密码一起封存：
+
+```
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db block shop audit_log
+```
+
+集合充当表，规则指向顶层字段。智能体发送的不是 SQL，而是一条 JSON 命令：`find`（filter、projection、sort、limit、skip）、`aggregate`（pipeline）、`distinct` 或 `countDocuments`。emetgate 在发送任何内容之前会解析每条命令并完整遍历一遍。它拒绝在任何位置（过滤条件、排序、`$expr`、带点的路径、`$getField`）提到隐藏或脱敏的字段，拒绝 `$$ROOT` 这类整篇文档的引用、服务器端 JavaScript、`$out` 和 `$merge`，也拒绝连接到有规则的集合（`$lookup`、`$unionWith`、`$graphLookup`）。实际运行的 pipeline 在最前和最后都会删掉隐藏字段，回复还会按名字再删一次隐藏字段，并对脱敏字段做脱敏。视图按它所代表的 pipeline 来检查。
+
+**写入需要你点头。** 智能体只读。要让它修改数据，请把 `/db write` 作为提示输入：由 hook 直接回答，模型看不到。只有在你下一条提示的那一轮里，`emetgate_db_write` 才能执行 `INSERT`、`UPDATE`、`DELETE` 或 DDL（在 MongoDB 上是 `insertOne`、`insertMany`、`updateOne`、`updateMany`、`deleteOne`、`deleteMany`、`drop`），每条语句都连同影响的行数一起记录。删除表、清空表或修改每一行，除非你输入了 `/db write --destructive`，否则仍会被拒绝；`/db read` 立即关闭写入模式。
+
+**PostgreSQL** 的用法相同。用 URL 添加。密码用 DPAPI 封存在 `%LOCALAPPDATA%\emetgate\db\credentials` 下，绝不写入仓库；也可以不放在 URL 里，而在运行 `db add` 时设置 `PGPASSWORD`：
+
+```
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+emetgate db hide prod users.password_hash
+emetgate db mask prod users.email --mode email
+emetgate doctor
+```
+
+emetgate 自己实现 PostgreSQL 协议：SCRAM-SHA-256 登录；`sslmode=verify-full` 时用 Windows 根证书库或 `sslrootcert` 校验 TLS。每次读取都在带语句超时的 `READ ONLY` 事务中运行，然后回滚。查询运行前，emetgate 先向服务器要执行计划（`EXPLAIN (VERBOSE)`），检查计划涉及的每张表（包括经由视图和子查询的）以及用到的每个列和函数。隐藏列或掩码列只能被直接选择，结果为 NULL 或掩码后的值；出现在其他任何位置（`WHERE`、`ORDER BY`、`GROUP BY`、函数、`row_to_json(t)`、整行 `t`、`UNION`、标量子查询）时，查询被拒绝。`pg_stats` 等系统目录、`COPY`，以及内置允许列表之外的所有函数（`pg_read_file`、`lo_get`、`dblink`、`query_to_xml`、`set_config`、数据库里定义的函数）也会被拒绝。请用只有 `SELECT` 权限的角色连接：角色是超级用户或可写时，`emetgate doctor` 会警告。
 
 ## 2 分钟上手
 
@@ -149,7 +171,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## 限制
 
 - 目前仅支持 Windows。
-- 数据库：目前仅支持 SQLite，PostgreSQL 和 MySQL 之后提供。含有隐藏或脱敏列的数据库请放在仓库之外，并运行 `emetgate db protect`，这样任何文件工具或命令都读不到文件本身。
+- 数据库：支持 SQLite、PostgreSQL 和 MongoDB，MySQL 之后提供。含有隐藏或脱敏列的 SQLite 数据库请放在仓库之外，并运行 `emetgate db protect`，这样任何文件工具或命令都读不到文件本身。 在 PostgreSQL 上，计划检查无法追踪的查询会被拒绝而不是运行，因此对含隐藏列或掩码列的表的一些合法查询也会被拒绝（返回这类列的视图、`UNION` 或标量子查询）。隐式类型转换和扩展定义的类型函数不经检查运行；最小权限角色是最后一道防线。MongoDB 服务器必须要求密码，否则这台机器上的任何程序都能直接读取它；emetgate 只用 SCRAM 登录，不解析 `mongodb+srv://`（请逐个列出主机），也无法连接要求 TLS 客户端证书的服务器。
 - 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。在 lockdown 下，非递归删除仓库内文件的命令会被拒绝；智能体改用经过门的 `emetgate_delete` 删除它们。
 - 规则账本是 `.emetgate/` 下的一个文件。智能体没有写它的工具，但通过命令编辑它不会被监视规则命令的 hook 捕获。
 - 在 lockdown 之外、用智能体自带工具打开的会话中没有门。在其他支持 MCP 的智能体中，只要智能体使用 emetgate 的工具，门就会生效。

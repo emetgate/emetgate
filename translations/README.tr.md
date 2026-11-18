@@ -102,7 +102,29 @@ emetgate db protect main
 
 Ajan `emetgate_db` ile okur: tabloları listeler, tarif eder, örnek satır alır ve her çağrıda tek bir `SELECT` çalıştırır; sonuç JSON, CSV ya da Markdown olur, satır, hücre boyu, yanıt boyu ve süre sınırlıdır. Dosya salt okunur açılır ve her ifade çalışmadan önce SQLite'ın yetkilendiricisinden geçer. Gizli bir sütun nerede geçerse geçsin NULL okunur (`SELECT *`, bir view, bir alt sorgu, bir `WHERE`); engellenmiş bir tablo bir view üzerinden bile reddedilir; maskeli bir sütun hangi takma adla seçilirse seçilsin maskeli döner, onu bir ifadenin içine koyan sorgu reddedilir. Kurallar değere verilen ada değil, değerin geldiği sütuna bakar.
 
-**Yazmak senin iznine bağlı.** Ajan yalnızca okur. Veriyi değiştirmesine izin vermek için istem olarak `/db write` yaz: hook bunu kendisi yanıtlar, model görmez. Yalnızca bir sonraki isteminin turunda `emetgate_db_write` `INSERT`, `UPDATE`, `DELETE` ya da DDL çalıştırabilir; her ifade etkilediği satır sayısıyla kayda geçer. Bir tabloyu silmek, boşaltmak ya da her satırını değiştirmek, `/db write --destructive` yazmadıysan yine reddedilir; `/db read` yazma kipini hemen kapatır.
+**MongoDB** de aynı şekilde çalışır. `db add` URI'yi denetlemek için bir kez oturum açar, sonra onu parolasıyla birlikte Windows DPAPI ile mühürler:
+
+```
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db block shop audit_log
+```
+
+Tabloların yerini koleksiyonlar alır ve bir kural en üst düzeydeki bir alanı adlandırır. Ajan SQL yerine tek bir JSON komutu gönderir: `find` (filter, projection, sort, limit, skip), `aggregate` (pipeline), `distinct` ya da `countDocuments`. emetgate her komutu çözümler ve hiçbir şey gönderilmeden önce baştan sona dolaşır. Gizli ya da maskeli bir alanın herhangi bir yerde anılmasını (bir filtre, bir sıralama, `$expr`, noktalı bir yol, `$getField`), `$$ROOT` gibi belgenin bütününe yapılan başvuruları, sunucu tarafında çalışan JavaScript'i, `$out` ve `$merge`'ü, kuralı olan bir koleksiyona yapılan birleştirmeleri (`$lookup`, `$unionWith`, `$graphLookup`) reddeder. Çalışan pipeline gizli alanları en başta ve en sonda siler; yanıt da onları bir kez daha adlarıyla düşürür ve maskeli olanları maskeler. Bir view, yerine geçtiği pipeline gibi denetlenir.
+
+**Yazmak senin iznine bağlı.** Ajan yalnızca okur. Veriyi değiştirmesine izin vermek için istem olarak `/db write` yaz: hook bunu kendisi yanıtlar, model görmez. Yalnızca bir sonraki isteminin turunda `emetgate_db_write` `INSERT`, `UPDATE`, `DELETE` ya da DDL (MongoDB'de `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `drop`) çalıştırabilir; her ifade etkilediği satır sayısıyla kayda geçer. Bir tabloyu silmek, boşaltmak ya da her satırını değiştirmek, `/db write --destructive` yazmadıysan yine reddedilir; `/db read` yazma kipini hemen kapatır.
+
+**PostgreSQL** da aynı şekilde çalışır. URL ile eklersin. Parola `%LOCALAPPDATA%\emetgate\db\credentials` altında DPAPI ile mühürlenir, depoya hiç yazılmaz; URL'ye koymayıp `db add` komutu için `PGPASSWORD` da verebilirsin:
+
+```
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+emetgate db hide prod users.password_hash
+emetgate db mask prod users.email --mode email
+emetgate doctor
+```
+
+emetgate PostgreSQL protokolünü kendisi konuşur: SCRAM-SHA-256 ile giriş, `sslmode=verify-full` ile Windows kök sertifikalarına ya da `sslrootcert`'e karşı denetlenen TLS. Her okuma, sorgu zaman aşımı olan bir `READ ONLY` transaction içinde çalışır ve geri alınır. Bir sorgu çalışmadan önce emetgate sunucudan planını ister (`EXPLAIN (VERBOSE)`) ve planın dokunduğu her tabloyu, view ve alt sorgular dahil, kullandığı her sütunu ve fonksiyonu denetler. Gizli ya da maskeli bir sütun yalnızca doğrudan seçilebilir, o zaman NULL ya da maskeli döner; başka her yerde (`WHERE`, `ORDER BY`, `GROUP BY`, bir fonksiyon, `row_to_json(t)`, satırın tamamı `t`, `UNION`, skaler alt sorgu) sorgu reddedilir. `pg_stats` gibi sistem katalogları, `COPY` ve yerleşik listede olmayan her fonksiyon (`pg_read_file`, `lo_get`, `dblink`, `query_to_xml`, `set_config`, veritabanında tanımlı fonksiyonlar) da reddedilir. Yalnızca `SELECT` yetkisi olan bir rolle bağlan: rol süper kullanıcıysa ya da yazabiliyorsa `emetgate doctor` uyarır.
 
 ## 2 dakikada başla
 
@@ -149,7 +171,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## Sınırlar
 
 - Şimdilik yalnızca Windows.
-- Veritabanları: şimdilik yalnızca SQLite; PostgreSQL ve MySQL sonra gelecek. Gizli ya da maskeli sütunu olan bir veritabanını reponun dışında tut ve `emetgate db protect` çalıştır; böylece hiçbir dosya aracı ya da komut dosyanın kendisini okuyamaz.
+- Veritabanları: SQLite, PostgreSQL ve MongoDB; MySQL sonra gelecek. Gizli ya da maskeli sütunu olan bir SQLite veritabanını reponun dışında tut ve `emetgate db protect` çalıştır; böylece hiçbir dosya aracı ya da komut dosyanın kendisini okuyamaz. PostgreSQL'de plan denetiminin izini süremediği bir sorgu çalıştırılmaz, reddedilir; bu yüzden gizli ya da maskeli sütunları olan tablolardaki bazı geçerli sorgular da reddedilir (böyle bir sütunu döndüren bir view, `UNION` ya da skaler alt sorgu). Örtük tip dönüşümleri ve eklentilerin tanımladığı tip fonksiyonları denetimden geçmeden çalışır; en az yetkili rol son güvencedir. Bir MongoDB sunucusu parola istemeli, yoksa makinedeki her program onu doğrudan okuyabilir; emetgate yalnızca SCRAM ile oturum açar, `mongodb+srv://` adreslerini çözmez (yerine sunucuları tek tek yaz) ve TLS istemci sertifikası isteyen bir sunucuya bağlanamaz.
 - Kurallar emetgate'in yazma araçlarından geçen değişikliklere uygulanır. Ajanın çalıştırdığı bir komut kapıdan geçmez: değiştirdiği dosyalar raporlanır ve dondurulmuş yollar geri alınır, ama diğer kurallar komutlara uygulanmaz. Depodaki dosyaları özyinelemesiz silen bir komut lockdown altında reddedilir; ajan onları kapıdan geçen `emetgate_delete` ile siler.
 - Kural defteri `.emetgate/` altında bir dosyadır. Ajanın onu yazacak bir aracı yok, ama bir komutla düzenlenmesi kural komutlarını izleyen kancaya takılmaz.
 - lockdown dışında, ajanın kendi araçlarıyla açılan bir oturumda kapı yoktur. MCP konuşan başka ajanlarda kapı, ajan emetgate'in araçlarını kullandığı sürece çalışır.

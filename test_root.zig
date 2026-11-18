@@ -234,6 +234,17 @@ pub const db_grant = src.db_grant;
 pub const db_tool = src.db_tool;
 pub const db_command = src.db_command;
 pub const db_health = src.db_health;
+pub const db_postgres = src.db_postgres;
+pub const db_pg_plan = src.db_pg_plan;
+pub const db_pg_sql = src.db_pg_sql;
+pub const db_pg_wire = src.db_pg_wire;
+pub const db_pg_scram = src.db_pg_scram;
+pub const db_pg_net = src.db_pg_net;
+pub const db_bson = src.db_bson;
+pub const db_scram = src.db_scram;
+pub const db_mongo_guard = src.db_mongo_guard;
+pub const db_mongo_wire = src.db_mongo_wire;
+pub const db_mongo = src.db_mongo;
 
 comptime {
     for (@typeInfo(src).@"struct".decls) |decl| {
@@ -417,4 +428,6 @@ test {
     _ = @import("tests/suites.zig");
     _ = @import("tests/db_security.zig");
     _ = @import("tests/db_tool.zig");
+    _ = @import("tests/db_postgres.zig");
+    _ = @import("tests/db_mongo_security.zig");
 }

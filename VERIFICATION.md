@@ -6,11 +6,11 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3293**
-- Mutations declared in `tests/mutations.json`: **2095**
-  - killed: **2044**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3346**
+- Mutations declared in `tests/mutations.json`: **2147**
+  - killed: **2095**
   - equivalent: **9**
-  - defense in depth: **13**
+  - defense in depth: **14**
   - open: **3**
   - control: **3**
   - not caught by a test, documented as unbounded cost: **1**
@@ -726,7 +726,7 @@ python tools/verification_page.py --check
 
 ### Database access
 
-18 mutation(s).
+42 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -748,6 +748,30 @@ python tools/verification_page.py --check
 | `DB16-grant-outlives-its-turn` | `src/db/grant.zig` | `if (grant.state == .active or expired(grant, now)) return revok...` -> `if (expired(grant, now)) return revoke(io, file);` | db tool: a write is refused until the user's /db write prompt, lasts one turn, ...; db gr... | killed |
 | `DB17-grant-covers-every-database` | `src/protocol/db_tool.zig` | `if (!given.covers(name)) {` -> `if (false) {` | db tool: /db write --destructive allows a wipe; /db read ends write mode at onc... | killed |
 | `DB18-blocked-table-listed` | `src/db/sqlite.zig` | `if (self.access.tableRefusal(name) != null) {                 w...` -> `if (false) {                 withheld += 1;` | db security: tables and describe leave blocked tables out and label hidden and ... | killed |
+| `MG1-hidden-field-name-unchecked` | `src/db/mongo_guard.zig` | `if (self.scope.hidden(field)) {             if (self.purpose ==...` -> `if (false) {             if (self.purpose == .write) return sel...` | db mongo security: a hidden field named in a filter, sort, projection, distinct...; db mo... | killed |
+| `MG2-masked-field-name-unchecked` | `src/db/mongo_guard.zig` | `if (self.scope.mask(field) != null) {             if (self.purp...` -> `if (false) {             if (self.purpose == .write)` | db mongo security: a masked field comes back masked as it is but is never filte...; db mo... | killed |
+| `MG3-whole-document-variable-allowed` | `src/db/mongo_guard.zig` | `if (rest.len == 0) return self.denied(text, "a whole-document r...` -> `if (rest.len == 0) return;` | db mongo security: $$ROOT, $$CURRENT, a rebound CURRENT and whole-document oper...; db mo... | killed |
+| `MG4-join-into-guarded-collection` | `src/db/mongo_guard.zig` | `if (scope.guarded()) return self.denied(stage, "the joined coll...` -> `` | db mongo security: $lookup, $graphLookup, $unionWith and $facet that reach guar...; db mo... | killed |
+| `MG5-out-merge-named-refusal-dropped` | `src/db/mongo_guard.zig` | `if (eqlAny(op, &.{ "$out", "$merge" })) return self.denied(op, ...` -> `` | db mongo security: $out and $merge are never run by a read, at the top or nested | defense in depth |
+| `MG6-any-expression-operator-allowed` | `src/db/mongo_guard.zig` | `if (!expression_ops.has(op) and !accumulator_ops.has(op)) retur...` -> `if (false) return self.denied(op, "it is not on the allowed exp...` | db mongo security: server-side JavaScript, $jsonSchema, $text on a guarded coll... | killed |
+| `MG7-leading-unset-dropped` | `src/db/mongo_guard.zig` | `var out: std.ArrayList(Value) = .empty;     if (hidden.len != 0...` -> `var out: std.ArrayList(Value) = .empty;     switch` | db mongo security: hidden fields are stripped and masked fields masked even whe...; db mo... | killed |
+| `MG8-hidden-field-kept-in-results` | `src/db/mongo.zig` | `if (scope.hidden(element.key)) continue;` -> `` | db mongo security: hidden fields are stripped and masked fields masked even whe...; db mo... | killed |
+| `MG9-masked-field-returned-plain` | `src/db/mongo.zig` | `const how: engine.Treatment = if (scope.mask(element.key)) \|m\...` -> `const how: engine.Treatment = .plain;                     try c...` | db mongo security: hidden fields are stripped and masked fields masked even whe...; db mo... | killed |
+| `MG10-blocked-collection-read` | `src/db/mongo_guard.zig` | `if (self.access.tableRefusal(name)) \|why\| return .{ .name = n...` -> `` | db mongo security: a blocked collection and a view over hidden data are refused...; db mo... | killed |
+| `MG11-view-definition-not-walked` | `src/db/mongo.zig` | `for (names[0 .. names.len - 1]) \|view_name\| {` -> `for (names[0..0]) \|view_name\| {` | db mongo security: a blocked collection and a view over hidden data are refused... | killed |
+| `MG12-match-all-delete-unflagged` | `src/db/mongo.zig` | `if (total >= 2 and matched >= total) {` -> `if (total >= 2 and matched >= total and false) {` | db mongo security: drop, an empty-filter or match-all deleteMany and updateMany... | killed |
+| `MG13-write-reads-guarded-as-plain-refusal` | `src/db/mongo_guard.zig` | `checker.purpose = .write;` -> `` | db mongo security: a write may not read or set hidden or masked fields, replace...; db mo... | killed |
+| `MG14-read-connection-writes` | `src/db/mongo.zig` | `if (self.mode != .write) {             self.setProblem("this co...` -> `if (false) {             self.setProblem("this connection was o...` | db mongo security: a read connection refuses every write command | killed |
+| `MG15-server-signature-not-verified` | `src/db/mongo.zig` | `client.verify(server_final.bytes) catch return authFailed(` -> `if (server_final.bytes.len == 0) client.verify(server_final.byt...` | db mongo security: SCRAM-SHA-256 logs in, and a wrong password or a server that... | killed |
+| `MG16-getfield-literal-name-unchecked` | `src/db/mongo_guard.zig` | `const field = try self.literalName(arg);             try self.n...` -> `const field = try self.literalName(arg);             _ = field;...` | db mongo security: $getField, $setField and $unsetField take only a literal fie...; db mo... | killed |
+| `MG17-facet-on-masked-collection` | `src/db/mongo_guard.zig` | `if (self.scope.masks() or (self.raw and self.scope.guarded())) ...` -> `if (false) return self.denied(op,` | db mongo security: $lookup, $graphLookup, $unionWith and $facet that reach guar...; db mo... | killed |
+| `MG18-row-cap-ignored` | `src/db/mongo.zig` | `if (i >= max_rows) {` -> `if (i >= max_rows and false) {` | db mongo security: the row cap holds and the reply says more documents exist | killed |
+| `MG19-nul-key-truncated` | `src/db/bson.zig` | `if (std.mem.indexOfScalar(u8, key, 0) != null) return error.Key...` -> `` | db bson: a key with a NUL byte and malformed extended json are refused instead ...; db mo... | killed |
+| `MG20-text-search-on-guarded-collection` | `src/db/mongo_guard.zig` | `if (self.scope.guarded()) return self.denied("$text",` -> `if (false) return self.denied("$text",` | db mongo security: server-side JavaScript, $jsonSchema, $text on a guarded coll... | killed |
+| `MG21-view-facet-before-unset` | `src/db/mongo.zig` | `check.raw = true;` -> `check.raw = false;` | db mongo security: a blocked collection and a view over hidden data are refused... | killed |
+| `MG22-whole-collection-rule-ignored` | `src/db/mongo_guard.zig` | `if (checker.scope.wholeGuarded()) return checker.fail(` -> `if (false) return checker.fail(` | db mongo security: a wildcard hidden rule hides a field in every collection, an... | killed |
+| `MG23-scram-proof-xor-dropped` | `src/db/scram.zig` | `for (proof[0..len], client_key[0..len], signature[0..len]) \|*p...` -> `for (proof[0..len], client_key[0..len], signature[0..len]) \|*p...` | db scram: SCRAM-SHA-256 matches the RFC 7677 exchange; db mongo security: SCRAM-SHA-256 l... | killed |
+| `MG24-reply-more-to-come-accepted` | `src/db/mongo_wire.zig` | `if (flags & flag_more_to_come != 0) return error.BadReply;` -> `` | db mongo wire: a reply with two bodies, an unknown section, moreToCome, a bad c... | killed |
 
 ### Mutation testing tool itself
 
@@ -799,7 +823,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1402 mutation(s).
+1430 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2205,6 +2229,34 @@ python tools/verification_page.py --check
 | `DEL15-duplicate-file-not-named` | `src/protocol/delete_tool.zig` | `if (std.ascii.eqlIgnoreCase(earlier.abs, place.abs)) return err...` -> `_ = earlier;` | delete tool: a file named twice is refused before anything is deleted | killed |
 | `DEL16-files-and-file-together-accepted` | `src/protocol/arg_check.zig` | `if (eql(name, "emetgate_delete")) return &delete_rules;` -> `` | arg check: arguments that select two different things, or a selector the file t... | killed |
 | `DEL17-delete-aliases-dropped` | `src/protocol/forgive.zig` | `if (eql(name, "emetgate_delete")) return .{ .name = name, .args...` -> `` | delete tool: a staged new file leaves the index too, so git does not show it as... | killed |
+| `PG1-hidden-result-column-not-nulled` | `src/db/pg_plan.zig` | `slot.* = if (field.origin) \|o\| treatmentOf(self.access, o) el...` -> `_ = field;             slot.* = .plain;` | pg security: recorded plans of every read bypass are refused, and plain reads k...; pg fa... | killed |
+| `PG2-guarded-column-in-expression-allowed` | `src/db/pg_plan.zig` | `if (bare) return;` -> `if (bare or true) return;` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG3-whole-row-of-guarded-table-allowed` | `src/db/pg_plan.zig` | `.base => \|b\| .{ .class = if (b.guarded) .tainted else .plain,...` -> `.base => \|b\| .{ .class = if (b.guarded and false) .tainted el...` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG4-blocked-table-read` | `src/db/pg_plan.zig` | `if (access.isBlocked(name)) return .{ .name = name, .why = .blo...` -> `if (access.isBlocked(name) and false) return .{ .name = name, ....` | pg security: recorded plans of every read bypass are refused, and plain reads k...; pg se... | killed |
+| `PG5-system-catalog-read` | `src/db/pg_plan.zig` | `if (rel.system or isSystemSchema(schema)) return self.refuse(` -> `if (false) return self.refuse(` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG6-any-function-allowed` | `src/db/pg_plan.zig` | `if (!allowed) return self.refuse(error.FunctionDenied,` -> `if (!allowed and false) return self.refuse(error.FunctionDenied,` | pg security: recorded plans of every read bypass are refused, and plain reads k...; pg se... | killed |
+| `PG7-shadowed-function-name-allowed` | `src/db/pg_plan.zig` | `if (std.mem.eql(u8, shadow, name)) return self.refuse(` -> `if (std.mem.eql(u8, shadow, name) and false) return self.refuse(` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG8-scalar-subquery-not-traced` | `src/db/pg_plan.zig` | `if (!std.mem.startsWith(u8, name, "CTE ") and try self.carries(...` -> `if (!std.mem.startsWith(u8, name, "CTE ") and try self.carries(...` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG9-set-operation-not-traced` | `src/db/pg_plan.zig` | `if (try self.carries(i)) return self.refuse(error.MaskedColumnU...` -> `if (try self.carries(i) and false) return self.refuse(error.Mas...` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG10-subquery-and-cte-taint-dropped` | `src/db/pg_plan.zig` | `if (try self.carries(producer)) {` -> `if (try self.carries(producer) and false) {` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG11-view-origin-not-compared` | `src/db/pg_plan.zig` | `if (weaker) return self.refuse(` -> `if (weaker and false) return self.refuse(` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG12-untraced-result-column-allowed` | `src/db/pg_plan.zig` | `const origin = field.origin orelse return self.refuse(` -> `const origin = field.origin orelse if (true) continue else retu...` | pg security: recorded plans of every read bypass are refused, and plain reads k... | killed |
+| `PG13-unchecked-plan-step-allowed` | `src/db/pg_plan.zig` | `if (!node_types_read.has(t)) return self.refuse(error.ActionDen...` -> `if (!node_types_read.has(t) and false) return self.refuse(error...` | pg security: a plan the checker cannot read, an unknown plan step or a relation... | killed |
+| `PG14-read-plan-may-modify` | `src/db/pg_plan.zig` | `if (is_modify or std.mem.eql(u8, t, "LockRows")) return self.re...` -> `if (false) return self.refuse(error.StatementNotRead,` | pg security: recorded plans of every read bypass are refused, and plain reads k...; pg se... | killed |
+| `PG15-write-reads-guarded-column` | `src/db/pg_plan.zig` | `if (self.mode == .write) {` -> `if (self.mode == .write and false) {` | pg security: recorded plans of writes that read hidden, masked or blocked data ... | killed |
+| `PG16-write-names-hidden-column` | `src/db/pg_plan.zig` | `if (ruleTouches(col.table, involved)) return .{ .err = error.Gu...` -> `if (ruleTouches(col.table, involved) and false) return .{ .err ...` | pg security: a write that names a hidden or masked column, or calls a server fu... | killed |
+| `PG17-write-calls-server-function` | `src/db/pg_plan.zig` | `if (ddl_denied_functions.has(lower) or std.mem.startsWith(u8, l...` -> `if (false) {` | pg security: a write that names a hidden or masked column, or calls a server fu... | killed |
+| `PG18-read-transaction-writable` | `src/db/postgres.zig` | `.{ if (read_only) " READ ONLY" else " READ WRITE",` -> `.{ if (read_only) " READ WRITE" else " READ WRITE",` | pg fake server: SCRAM login, the checked read and the masking all run over the ... | killed |
+| `PG19-statement-timeout-not-set` | `src/db/postgres.zig` | `"BEGIN ISOLATION LEVEL REPEATABLE READ{s}; SET LOCAL statement_...` -> `"BEGIN ISOLATION LEVEL REPEATABLE READ{s}; SET LOCAL lock_timeo...` | pg fake server: SCRAM login, the checked read and the masking all run over the ... | killed |
+| `PG20-session-not-read-only` | `src/db/postgres.zig` | `.{ "default_transaction_read_only", if (settings.mode == .read)...` -> `.{ "default_transaction_read_only", "off" },` | pg fake server: SCRAM login, the checked read and the masking all run over the ... | killed |
+| `PG21-row-cap-ignored` | `src/db/postgres.zig` | `if (outcome.rows >= max_rows) {` -> `if (outcome.rows >= max_rows and false) {` | pg fake server: the row cap holds on the wire and the reply says more rows exist | killed |
+| `PG22-masked-value-sent-plain` | `src/db/postgres.zig` | `try access_mod.writeMasked(&out.writer, mask, text);` -> `_ = mask;                 try out.writer.writeAll(text);` | pg fake server: SCRAM login, the checked read and the masking all run over the ...; pg fa... | killed |
+| `PG23-hidden-value-sent` | `src/db/postgres.zig` | `.hidden => return .null,` -> `.hidden => return .{ .text = text },` | pg fake server: SCRAM login, the checked read and the masking all run over the ...; pg fa... | killed |
+| `PG24-cleartext-password-over-plain-tcp` | `src/db/postgres.zig` | `if (!conn.encrypted) {` -> `if (false) {` | pg fake server: a clear-text password request over an unencrypted connection is... | killed |
+| `PG25-scram-server-signature-unchecked` | `src/db/pg_scram.zig` | `if (!std.crypto.timing_safe.eql([key_len]u8, got, want)) return...` -> `_ = .{ got, want };` | pg scram: a forged server signature, a foreign nonce and absurd iteration count...; pg fa... | killed |
+| `PG26-scram-nonce-unchecked` | `src/db/pg_scram.zig` | `if (!std.mem.startsWith(u8, server_nonce, self.nonce()) or serv...` -> `if (false) return error.ScramNonceMismatch;` | pg scram: a forged server signature, a foreign nonce and absurd iteration count... | killed |
+| `PG27-truncate-cascade-allowed` | `src/db/pg_sql.zig` | `if (token.word("cascade")) return .{ .statement = .denied };` -> `if (token.word("cascade") and false) return .{ .statement = .de...` | pg sql: a statement's shape names its kind and the tables it targets | killed |
+| `PG28-rename-of-guarded-table-not-flagged` | `src/db/pg_sql.zig` | `if (token.word("rename") or token.word("detach") or token.word(...` -> `if ((token.word("rename") or token.word("detach") or token.word...` | pg sql: a statement's shape names its kind and the tables it targets | killed |
 
 ## What this system does not prove
 

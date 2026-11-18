@@ -815,6 +815,7 @@ fn dbCmd(init: std.process.Init, runtime: *Runtime, request: db_command.Request,
     var buffer: [4096]u8 = undefined;
     var stderr_writer: std.Io.File.Writer = .initStreaming(std.Io.File.stderr(), init.io, &buffer);
     defer stderr_writer.interface.flush() catch {};
+    db_command.env_password = init.environ_map.get(db_command.password_variable);
     return db_command.run(gpa, init.io, root, request, out, &stderr_writer.interface);
 }
 

@@ -458,7 +458,18 @@ const nativeOf = (tool: string, base: Activity, args: Args, text: string, diffRo
     const { head, body } = parse(text)
     const db = str(args, 'db') || str(head, 'db')
     const op = tool === 'db_write' ? 'write' : str(args, 'op') || 'query'
-    const sql = clean(str(args, 'sql').replace(/\s+/g, ' ').trim())
+    const raw = str(args, 'sql').trim()
+    const mongo = (() => {
+      if (!raw.startsWith('{')) return ''
+      try {
+        const command = JSON.parse(raw) as Record<string, unknown>
+        const [verb, target] = Object.entries(command)[0] ?? []
+        return typeof verb === 'string' && typeof target === 'string' ? clean(`${verb} ${target}`) : ''
+      } catch {
+        return ''
+      }
+    })()
+    const sql = mongo || clean(raw.replace(/\s+/g, ' '))
     const target = sql || str(args, 'table')
     const arg = [db, target].filter(part => part !== '').join(' · ')
     const list = (value: unknown) => (Array.isArray(value) ? (value as unknown[]).map(String) : [])

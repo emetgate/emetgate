@@ -20107,6 +20107,504 @@
       "kills": [
         "db security: tables and describe leave blocked tables out and label hidden and masked columns"
       ]
+    },
+    {
+      "id": "PG1-hidden-result-column-not-nulled",
+      "file": "src/db/pg_plan.zig",
+      "from": "            slot.* = if (field.origin) |o| treatmentOf(self.access, o) else .plain;",
+      "to": "            _ = field;\n            slot.* = .plain;",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns",
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL",
+        "pg tool: emetgate db add seals a postgres URL, and emetgate_db reads through it with the rules applied"
+      ]
+    },
+    {
+      "id": "PG2-guarded-column-in-expression-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": "        if (bare) return;",
+      "to": "        if (bare or true) return;",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG3-whole-row-of-guarded-table-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": ".base => |b| .{ .class = if (b.guarded) .tainted else .plain, .label = b.label },",
+      "to": ".base => |b| .{ .class = if (b.guarded and false) .tainted else .plain, .label = b.label },",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG4-blocked-table-read",
+      "file": "src/db/pg_plan.zig",
+      "from": "        if (access.isBlocked(name)) return .{ .name = name, .why = .blocked };",
+      "to": "        if (access.isBlocked(name) and false) return .{ .name = name, .why = .blocked };",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns",
+        "pg security: recorded plans of writes that read hidden, masked or blocked data or call unlisted functions are refused"
+      ]
+    },
+    {
+      "id": "PG5-system-catalog-read",
+      "file": "src/db/pg_plan.zig",
+      "from": "                if (rel.system or isSystemSchema(schema)) return self.refuse(",
+      "to": "                if (false) return self.refuse(",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG6-any-function-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": "        if (!allowed) return self.refuse(error.FunctionDenied,",
+      "to": "        if (!allowed and false) return self.refuse(error.FunctionDenied,",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns",
+        "pg security: recorded plans of writes that read hidden, masked or blocked data or call unlisted functions are refused"
+      ]
+    },
+    {
+      "id": "PG7-shadowed-function-name-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": "            if (std.mem.eql(u8, shadow, name)) return self.refuse(",
+      "to": "            if (std.mem.eql(u8, shadow, name) and false) return self.refuse(",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG8-scalar-subquery-not-traced",
+      "file": "src/db/pg_plan.zig",
+      "from": "                if (!std.mem.startsWith(u8, name, \"CTE \") and try self.carries(index)) {",
+      "to": "                if (!std.mem.startsWith(u8, name, \"CTE \") and try self.carries(index) and false) {",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG9-set-operation-not-traced",
+      "file": "src/db/pg_plan.zig",
+      "from": "                if (try self.carries(i)) return self.refuse(error.MaskedColumnUsed,",
+      "to": "                if (try self.carries(i) and false) return self.refuse(error.MaskedColumnUsed,",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG10-subquery-and-cte-taint-dropped",
+      "file": "src/db/pg_plan.zig",
+      "from": "                        if (try self.carries(producer)) {",
+      "to": "                        if (try self.carries(producer) and false) {",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG11-view-origin-not-compared",
+      "file": "src/db/pg_plan.zig",
+      "from": "            if (weaker) return self.refuse(",
+      "to": "            if (weaker and false) return self.refuse(",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG12-untraced-result-column-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": "            const origin = field.origin orelse return self.refuse(",
+      "to": "            const origin = field.origin orelse if (true) continue else return self.refuse(",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns"
+      ]
+    },
+    {
+      "id": "PG13-unchecked-plan-step-allowed",
+      "file": "src/db/pg_plan.zig",
+      "from": "                if (!node_types_read.has(t)) return self.refuse(error.ActionDenied,",
+      "to": "                if (!node_types_read.has(t) and false) return self.refuse(error.ActionDenied,",
+      "kills": [
+        "pg security: a plan the checker cannot read, an unknown plan step or a relation it was not told about is refused"
+      ]
+    },
+    {
+      "id": "PG14-read-plan-may-modify",
+      "file": "src/db/pg_plan.zig",
+      "from": "                if (is_modify or std.mem.eql(u8, t, \"LockRows\")) return self.refuse(error.StatementNotRead,",
+      "to": "                if (false) return self.refuse(error.StatementNotRead,",
+      "kills": [
+        "pg security: recorded plans of every read bypass are refused, and plain reads keep their hidden and masked columns",
+        "pg security: a plan the checker cannot read, an unknown plan step or a relation it was not told about is refused"
+      ]
+    },
+    {
+      "id": "PG15-write-reads-guarded-column",
+      "file": "src/db/pg_plan.zig",
+      "from": "        if (self.mode == .write) {",
+      "to": "        if (self.mode == .write and false) {",
+      "kills": [
+        "pg security: recorded plans of writes that read hidden, masked or blocked data or call unlisted functions are refused"
+      ]
+    },
+    {
+      "id": "PG16-write-names-hidden-column",
+      "file": "src/db/pg_plan.zig",
+      "from": "            if (ruleTouches(col.table, involved)) return .{ .err = error.GuardedColumnInWrite,",
+      "to": "            if (ruleTouches(col.table, involved) and false) return .{ .err = error.GuardedColumnInWrite,",
+      "kills": [
+        "pg security: a write that names a hidden or masked column, or calls a server function, is refused from its text"
+      ]
+    },
+    {
+      "id": "PG17-write-calls-server-function",
+      "file": "src/db/pg_plan.zig",
+      "from": "            if (ddl_denied_functions.has(lower) or std.mem.startsWith(u8, lower, \"dblink\") or std.mem.startsWith(u8, lower, \"pg_\")) {",
+      "to": "            if (false) {",
+      "kills": [
+        "pg security: a write that names a hidden or masked column, or calls a server function, is refused from its text"
+      ]
+    },
+    {
+      "id": "PG18-read-transaction-writable",
+      "file": "src/db/postgres.zig",
+      "from": ".{ if (read_only) \" READ ONLY\" else \" READ WRITE\",",
+      "to": ".{ if (read_only) \" READ WRITE\" else \" READ WRITE\",",
+      "kills": [
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL"
+      ]
+    },
+    {
+      "id": "PG19-statement-timeout-not-set",
+      "file": "src/db/postgres.zig",
+      "from": "\"BEGIN ISOLATION LEVEL REPEATABLE READ{s}; SET LOCAL statement_timeout = {d}; SET LOCAL lock_timeout = {d}\"",
+      "to": "\"BEGIN ISOLATION LEVEL REPEATABLE READ{s}; SET LOCAL lock_timeout = {d}; SELECT {d}\"",
+      "kills": [
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL"
+      ]
+    },
+    {
+      "id": "PG20-session-not-read-only",
+      "file": "src/db/postgres.zig",
+      "from": ".{ \"default_transaction_read_only\", if (settings.mode == .read) \"on\" else \"off\" },",
+      "to": ".{ \"default_transaction_read_only\", \"off\" },",
+      "kills": [
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL"
+      ]
+    },
+    {
+      "id": "PG21-row-cap-ignored",
+      "file": "src/db/postgres.zig",
+      "from": "                    if (outcome.rows >= max_rows) {",
+      "to": "                    if (outcome.rows >= max_rows and false) {",
+      "kills": [
+        "pg fake server: the row cap holds on the wire and the reply says more rows exist"
+      ]
+    },
+    {
+      "id": "PG22-masked-value-sent-plain",
+      "file": "src/db/postgres.zig",
+      "from": "                try access_mod.writeMasked(&out.writer, mask, text);",
+      "to": "                _ = mask;\n                try out.writer.writeAll(text);",
+      "kills": [
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL",
+        "pg fake server: the row cap holds on the wire and the reply says more rows exist",
+        "pg tool: emetgate db add seals a postgres URL, and emetgate_db reads through it with the rules applied"
+      ]
+    },
+    {
+      "id": "PG23-hidden-value-sent",
+      "file": "src/db/postgres.zig",
+      "from": "            .hidden => return .null,",
+      "to": "            .hidden => return .{ .text = text },",
+      "kills": [
+        "pg fake server: SCRAM login, the checked read and the masking all run over the wire with no real PostgreSQL",
+        "pg fake server: the row cap holds on the wire and the reply says more rows exist",
+        "pg tool: emetgate db add seals a postgres URL, and emetgate_db reads through it with the rules applied"
+      ]
+    },
+    {
+      "id": "PG24-cleartext-password-over-plain-tcp",
+      "file": "src/db/postgres.zig",
+      "from": "                        if (!conn.encrypted) {",
+      "to": "                        if (false) {",
+      "kills": [
+        "pg fake server: a clear-text password request over an unencrypted connection is refused"
+      ]
+    },
+    {
+      "id": "PG25-scram-server-signature-unchecked",
+      "file": "src/db/pg_scram.zig",
+      "from": "        if (!std.crypto.timing_safe.eql([key_len]u8, got, want)) return error.ScramServerUnverified;",
+      "to": "        _ = .{ got, want };",
+      "kills": [
+        "pg scram: a forged server signature, a foreign nonce and absurd iteration counts are refused",
+        "pg fake server: a wrong password and a server that cannot prove the password are both refused"
+      ]
+    },
+    {
+      "id": "PG26-scram-nonce-unchecked",
+      "file": "src/db/pg_scram.zig",
+      "from": "        if (!std.mem.startsWith(u8, server_nonce, self.nonce()) or server_nonce.len == self.nonce().len) return error.ScramNonceMismatch;",
+      "to": "        if (false) return error.ScramNonceMismatch;",
+      "kills": [
+        "pg scram: a forged server signature, a foreign nonce and absurd iteration counts are refused"
+      ]
+    },
+    {
+      "id": "PG27-truncate-cascade-allowed",
+      "file": "src/db/pg_sql.zig",
+      "from": "            if (token.word(\"cascade\")) return .{ .statement = .denied };",
+      "to": "            if (token.word(\"cascade\") and false) return .{ .statement = .denied };",
+      "kills": [
+        "pg sql: a statement's shape names its kind and the tables it targets"
+      ]
+    },
+    {
+      "id": "PG28-rename-of-guarded-table-not-flagged",
+      "file": "src/db/pg_sql.zig",
+      "from": "            if (token.word(\"rename\") or token.word(\"detach\") or token.word(\"inherit\")) renames = true;",
+      "to": "            if ((token.word(\"rename\") or token.word(\"detach\") or token.word(\"inherit\")) and false) renames = true;",
+      "kills": [
+        "pg sql: a statement's shape names its kind and the tables it targets"
+      ]
+    },
+    {
+      "id": "MG1-hidden-field-name-unchecked",
+      "file": "src/db/mongo_guard.zig",
+      "from": "        if (self.scope.hidden(field)) {\n            if (self.purpose == .write) return self.fail(error.GuardedColumnInWrite, \"field {s} of {s} is hidden: a write may not read or set it\"",
+      "to": "        if (false) {\n            if (self.purpose == .write) return self.fail(error.GuardedColumnInWrite, \"field {s} of {s} is hidden: a write may not read or set it\"",
+      "kills": [
+        "db mongo security: a hidden field named in a filter, sort, projection, distinct key, dotted path, regex or $expr is refused before anything is sent",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG2-masked-field-name-unchecked",
+      "file": "src/db/mongo_guard.zig",
+      "from": "        if (self.scope.mask(field) != null) {\n            if (self.purpose == .write)",
+      "to": "        if (false) {\n            if (self.purpose == .write)",
+      "kills": [
+        "db mongo security: a masked field comes back masked as it is but is never filtered, sorted, grouped, renamed or computed with",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG3-whole-document-variable-allowed",
+      "file": "src/db/mongo_guard.zig",
+      "from": "            if (rest.len == 0) return self.denied(text, \"a whole-document reference would carry hidden and masked fields; name the fields you need\");",
+      "to": "            if (rest.len == 0) return;",
+      "kills": [
+        "db mongo security: $$ROOT, $$CURRENT, a rebound CURRENT and whole-document operators are refused",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG4-join-into-guarded-collection",
+      "file": "src/db/mongo_guard.zig",
+      "from": "        if (scope.guarded()) return self.denied(stage, \"the joined collection has hidden or masked fields, which a join would carry out unmasked\");",
+      "to": "",
+      "kills": [
+        "db mongo security: $lookup, $graphLookup, $unionWith and $facet that reach guarded or blocked data are refused",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG5-out-merge-named-refusal-dropped",
+      "expect_status": "survived",
+      "note": "defense in depth: $out and $merge are also missing from the stage allowlist, so a read still refuses them as OperatorDenied",
+      "file": "src/db/mongo_guard.zig",
+      "from": "            if (eqlAny(op, &.{ \"$out\", \"$merge\" })) return self.denied(op, \"a read never writes to a collection\");\n",
+      "to": "",
+      "kills": [
+        "db mongo security: $out and $merge are never run by a read, at the top or nested"
+      ]
+    },
+    {
+      "id": "MG6-any-expression-operator-allowed",
+      "file": "src/db/mongo_guard.zig",
+      "from": "        if (!expression_ops.has(op) and !accumulator_ops.has(op)) return self.denied(op, \"it is not on the allowed expression operator list\");",
+      "to": "        if (false) return self.denied(op, \"it is not on the allowed expression operator list\");",
+      "kills": [
+        "db mongo security: server-side JavaScript, $jsonSchema, $text on a guarded collection and unknown operators are refused"
+      ]
+    },
+    {
+      "id": "MG7-leading-unset-dropped",
+      "file": "src/db/mongo_guard.zig",
+      "from": "    var out: std.ArrayList(Value) = .empty;\n    if (hidden.len != 0) try out.append(arena, try makeStage(arena, \"$unset\", try stringArray(arena, hidden)));\n    switch",
+      "to": "    var out: std.ArrayList(Value) = .empty;\n    switch",
+      "kills": [
+        "db mongo security: hidden fields are stripped and masked fields masked even when the server ignores the pipeline",
+        "db mongo guard: a read pipeline starts and ends by unsetting hidden fields and caps the rows",
+        "db mongo security: a blocked collection and a view over hidden data are refused in tables, count, describe and sample"
+      ]
+    },
+    {
+      "id": "MG8-hidden-field-kept-in-results",
+      "file": "src/db/mongo.zig",
+      "from": "                if (scope.hidden(element.key)) continue;",
+      "to": "",
+      "kills": [
+        "db mongo security: hidden fields are stripped and masked fields masked even when the server ignores the pipeline",
+        "db mongo security: a wildcard hidden rule hides a field in every collection, and a whole-collection rule refuses reads"
+      ]
+    },
+    {
+      "id": "MG9-masked-field-returned-plain",
+      "file": "src/db/mongo.zig",
+      "from": "                    const how: engine.Treatment = if (scope.mask(element.key)) |m| .{ .masked = m } else .plain;\n                    try columns.append",
+      "to": "                    const how: engine.Treatment = .plain;\n                    try columns.append",
+      "kills": [
+        "db mongo security: hidden fields are stripped and masked fields masked even when the server ignores the pipeline",
+        "db mongo security: a masked field comes back masked as it is but is never filtered, sorted, grouped, renamed or computed with"
+      ]
+    },
+    {
+      "id": "MG10-blocked-collection-read",
+      "file": "src/db/mongo_guard.zig",
+      "from": "            if (self.access.tableRefusal(name)) |why| return .{ .name = name, .why = why };",
+      "to": "",
+      "kills": [
+        "db mongo security: a blocked collection and a view over hidden data are refused in tables, count, describe and sample",
+        "db mongo security: $lookup, $graphLookup, $unionWith and $facet that reach guarded or blocked data are refused",
+        "db mongo security: a write may not read or set hidden or masked fields, replace a guarded document or touch a blocked collection",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG11-view-definition-not-walked",
+      "file": "src/db/mongo.zig",
+      "from": "        for (names[0 .. names.len - 1]) |view_name| {",
+      "to": "        for (names[0..0]) |view_name| {",
+      "kills": [
+        "db mongo security: a blocked collection and a view over hidden data are refused in tables, count, describe and sample"
+      ]
+    },
+    {
+      "id": "MG12-match-all-delete-unflagged",
+      "file": "src/db/mongo.zig",
+      "from": "                if (total >= 2 and matched >= total) {",
+      "to": "                if (total >= 2 and matched >= total and false) {",
+      "kills": [
+        "db mongo security: drop, an empty-filter or match-all deleteMany and updateMany need the destructive grant"
+      ]
+    },
+    {
+      "id": "MG13-write-reads-guarded-as-plain-refusal",
+      "file": "src/db/mongo_guard.zig",
+      "from": "    checker.purpose = .write;\n",
+      "to": "",
+      "kills": [
+        "db mongo security: a write may not read or set hidden or masked fields, replace a guarded document or touch a blocked collection",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG14-read-connection-writes",
+      "file": "src/db/mongo.zig",
+      "from": "        if (self.mode != .write) {\n            self.setProblem(\"this connection was opened read-only\", .{});",
+      "to": "        if (false) {\n            self.setProblem(\"this connection was opened read-only\", .{});",
+      "kills": [
+        "db mongo security: a read connection refuses every write command"
+      ]
+    },
+    {
+      "id": "MG15-server-signature-not-verified",
+      "file": "src/db/mongo.zig",
+      "from": "    client.verify(server_final.bytes) catch return authFailed(",
+      "to": "    if (server_final.bytes.len == 0) client.verify(server_final.bytes) catch return authFailed(",
+      "kills": [
+        "db mongo security: SCRAM-SHA-256 logs in, and a wrong password or a server that cannot prove the password is refused"
+      ]
+    },
+    {
+      "id": "MG16-getfield-literal-name-unchecked",
+      "file": "src/db/mongo_guard.zig",
+      "from": "            const field = try self.literalName(arg);\n            try self.name(field, field);\n            const first = field[0 .. std.mem.indexOfScalar(u8, field, '.') orelse field.len];\n            return self.name(first, field);",
+      "to": "            const field = try self.literalName(arg);\n            _ = field;\n            return;",
+      "kills": [
+        "db mongo security: $getField, $setField and $unsetField take only a literal field name, which is checked",
+        "db mongo security: a masked field comes back masked as it is but is never filtered, sorted, grouped, renamed or computed with",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG17-facet-on-masked-collection",
+      "file": "src/db/mongo_guard.zig",
+      "from": "                if (self.scope.masks() or (self.raw and self.scope.guarded())) return self.denied(op,",
+      "to": "                if (false) return self.denied(op,",
+      "kills": [
+        "db mongo security: $lookup, $graphLookup, $unionWith and $facet that reach guarded or blocked data are refused",
+        "db mongo security: a blocked collection and a view over hidden data are refused in tables, count, describe and sample",
+        "db mongo guard: the walker names the rule each bypass hits"
+      ]
+    },
+    {
+      "id": "MG18-row-cap-ignored",
+      "file": "src/db/mongo.zig",
+      "from": "            if (i >= max_rows) {",
+      "to": "            if (i >= max_rows and false) {",
+      "kills": [
+        "db mongo security: the row cap holds and the reply says more documents exist"
+      ]
+    },
+    {
+      "id": "MG19-nul-key-truncated",
+      "file": "src/db/bson.zig",
+      "from": "        if (std.mem.indexOfScalar(u8, key, 0) != null) return error.KeyHasNul;",
+      "to": "",
+      "kills": [
+        "db bson: a key with a NUL byte and malformed extended json are refused instead of truncated",
+        "db mongo security: a malformed command, a write in a read, a NUL in a key and extended JSON abuse are refused"
+      ]
+    },
+    {
+      "id": "MG20-text-search-on-guarded-collection",
+      "file": "src/db/mongo_guard.zig",
+      "from": "                    if (self.scope.guarded()) return self.denied(\"$text\",",
+      "to": "                    if (false) return self.denied(\"$text\",",
+      "kills": [
+        "db mongo security: server-side JavaScript, $jsonSchema, $text on a guarded collection and unknown operators are refused"
+      ]
+    },
+    {
+      "id": "MG21-view-facet-before-unset",
+      "file": "src/db/mongo.zig",
+      "from": "            check.raw = true;\n",
+      "to": "            check.raw = false;\n",
+      "kills": [
+        "db mongo security: a blocked collection and a view over hidden data are refused in tables, count, describe and sample"
+      ]
+    },
+    {
+      "id": "MG22-whole-collection-rule-ignored",
+      "file": "src/db/mongo_guard.zig",
+      "from": "    if (checker.scope.wholeGuarded()) return checker.fail(",
+      "to": "    if (false) return checker.fail(",
+      "kills": [
+        "db mongo security: a wildcard hidden rule hides a field in every collection, and a whole-collection rule refuses reads"
+      ]
+    },
+    {
+      "id": "MG23-scram-proof-xor-dropped",
+      "file": "src/db/scram.zig",
+      "from": "        for (proof[0..len], client_key[0..len], signature[0..len]) |*p, k, s| p.* = k ^ s;",
+      "to": "        for (proof[0..len], client_key[0..len], signature[0..len]) |*p, k, s| p.* = k ^ s ^ 1;",
+      "kills": [
+        "db scram: SCRAM-SHA-256 matches the RFC 7677 exchange",
+        "db mongo security: SCRAM-SHA-256 logs in, and a wrong password or a server that cannot prove the password is refused"
+      ]
+    },
+    {
+      "id": "MG24-reply-more-to-come-accepted",
+      "file": "src/db/mongo_wire.zig",
+      "from": "    if (flags & flag_more_to_come != 0) return error.BadReply;",
+      "to": "",
+      "kills": [
+        "db mongo wire: a reply with two bodies, an unknown section, moreToCome, a bad checksum or a lying length is refused"
+      ]
     }
   ]
 }

@@ -102,7 +102,29 @@ emetgate db protect main
 
 The agent reads with `emetgate_db`: it lists tables, describes them, samples rows and runs one `SELECT` per call, as JSON, CSV or Markdown, with caps on rows, cell size, reply size and time. The file is opened read-only and every statement passes SQLite's authorizer before it runs. A hidden column reads as NULL wherever it appears (`SELECT *`, a view, a subquery, a `WHERE`); a blocked table is refused even through a view; a masked column comes back masked under any alias, and a query that puts it inside an expression is refused. The rules follow the column a value comes from, not the name it is given.
 
-**Writing needs you.** The agent only reads. To let it change data, type `/db write` as a prompt: the hook answers it and the model never sees it. Only during the turn of your next prompt may `emetgate_db_write` run `INSERT`, `UPDATE`, `DELETE` or DDL, each statement logged with its row count. Dropping a table, emptying one or changing every row is still refused unless you typed `/db write --destructive`; `/db read` ends write mode at once.
+**MongoDB** works the same way. `db add` logs in once to check the URI, then seals it, password included, with Windows DPAPI:
+
+```
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db block shop audit_log
+```
+
+Collections play the part of tables and a rule names a top-level field. Instead of SQL the agent sends one JSON command: `find` (filter, projection, sort, limit, skip), `aggregate` (pipeline), `distinct` or `countDocuments`. emetgate parses every command and walks it before anything is sent. It refuses a hidden or masked field named anywhere (a filter, a sort, `$expr`, a dotted path, `$getField`), whole-document references like `$$ROOT`, server-side JavaScript, `$out` and `$merge`, and joins (`$lookup`, `$unionWith`, `$graphLookup`) into a collection that has rules. The pipeline that runs removes hidden fields first and last, and the reply drops them and masks masked ones by name once more. A view is checked like the pipeline it stands for.
+
+**Writing needs you.** The agent only reads. To let it change data, type `/db write` as a prompt: the hook answers it and the model never sees it. Only during the turn of your next prompt may `emetgate_db_write` run `INSERT`, `UPDATE`, `DELETE` or DDL (on MongoDB: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `drop`), each statement logged with its row count. Dropping a table, emptying one or changing every row is still refused unless you typed `/db write --destructive`; `/db read` ends write mode at once.
+
+**PostgreSQL** works the same way. Add it by URL. The password is sealed with DPAPI under `%LOCALAPPDATA%\emetgate\db\credentials`, never written to the repository; leave it out of the URL and set `PGPASSWORD` for the `db add` command instead:
+
+```
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+emetgate db hide prod users.password_hash
+emetgate db mask prod users.email --mode email
+emetgate doctor
+```
+
+emetgate speaks the PostgreSQL protocol itself: SCRAM-SHA-256 login, TLS checked against the Windows root store or `sslrootcert` with `sslmode=verify-full`. Every read runs in a `READ ONLY` transaction with a statement timeout and is rolled back. Before a query runs, emetgate asks the server for its plan (`EXPLAIN (VERBOSE)`) and checks every table the plan touches, through views and subqueries, and every column and function it uses. A hidden or masked column may only be selected directly, and then comes back NULL or masked; anywhere else (`WHERE`, `ORDER BY`, `GROUP BY`, a function, `row_to_json(t)`, a whole row `t`, `UNION`, a scalar subquery) the query is refused. System catalogs such as `pg_stats`, `COPY`, and every function off a built-in list (`pg_read_file`, `lo_get`, `dblink`, `query_to_xml`, `set_config`, functions defined in the database) are refused too. Connect with a role that has only `SELECT`: `emetgate doctor` warns when the role is a superuser or can write.
 
 ## Start in 2 minutes
 
@@ -149,7 +171,7 @@ A cache that a running emetgate holds a lease on is never removed. The shared `c
 ## Limits
 
 - Windows only, for now.
-- Databases: SQLite only, for now; PostgreSQL and MySQL come later. Keep a database with hidden or masked columns outside the repository and run `emetgate db protect`, so no file tool or command reads the file itself.
+- Databases: SQLite, PostgreSQL and MongoDB; MySQL comes later. Keep a SQLite database with hidden or masked columns outside the repository and run `emetgate db protect`, so no file tool or command reads the file itself. On PostgreSQL a query the plan check cannot trace is refused rather than run, so some valid queries over tables with hidden or masked columns are refused (a view, a `UNION` or a scalar subquery that returns such a column). Implicit casts and the type functions that extensions define run without the check; a least-privilege role is the backstop. A MongoDB server must ask for a password, or any program on the machine can read it directly; emetgate logs in with SCRAM only, does not resolve `mongodb+srv://` (list the hosts instead) and cannot connect to a server that asks for a TLS client certificate.
 - Rules apply to changes made through emetgate's write tools. A command the agent runs does not pass the gate: the files it changes are reported and frozen paths are put back, but the other rules do not apply to commands. A command that deletes files in the repository without recursion is refused under lockdown; the agent deletes them with `emetgate_delete`, which passes the gate.
 - The rule ledger is a file under `.emetgate/`. The agent has no tool to write it, but an edit made by a command is not caught by the hook that watches rule commands.
 - Outside lockdown, in a session opened with the agent's own tools, there is no gate. In other agents that speak MCP, the gate works as long as the agent uses emetgate's tools.

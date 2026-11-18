@@ -137,6 +137,13 @@ pub const Rows = struct {
                 try writeBlob(w, bytes);
                 try w.writeByte('"');
             },
+            .json => |raw| {
+                if (self.clipped(raw).left == 0 and std.unicode.utf8ValidateSlice(raw)) {
+                    try w.writeAll(raw);
+                    return 0;
+                }
+                return self.jsonCell(w, .{ .text = raw });
+            },
         }
         return 0;
     }
@@ -151,7 +158,7 @@ pub const Rows = struct {
             .null => if (how == .markdown) try cell.writer.writeAll("NULL"),
             .integer => |n| try cell.writer.print("{d}", .{n}),
             .real => |f| try cell.writer.print("{d}", .{f}),
-            .text => |text| {
+            .text, .json => |text| {
                 const part = self.clipped(text);
                 try cell.writer.writeAll(validUtf8Prefix(part.kept));
                 if (part.left != 0) {
@@ -259,6 +266,15 @@ test "db render: json rows carry typed cells, a long cell is cut with a count, a
     });
     defer testing.allocator.free(got.text);
     try testing.expectEqualStrings("[7,\"abc\\u2026[+3 chars]\"],[null,\"x'01ff'\"],[1.5,\"a\\\"b\"]", got.text);
+    try testing.expectEqual(@as(usize, 1), got.cut);
+}
+
+test "db render: a json cell is written raw while it fits and becomes a cut string when it does not" {
+    const got = try feed(.json, .{ .max_cell_chars = 12 }, &.{
+        &.{ .{ .json = "{\"a\":[1,2]}" }, .{ .json = "{\"$oid\":\"64b7f0c2a1b2c3d4e5f60718\"}" } },
+    });
+    defer testing.allocator.free(got.text);
+    try testing.expectEqualStrings("[{\"a\":[1,2]},\"{\\\"$oid\\\":\\\"64b\\u2026[+23 chars]\"]", got.text);
     try testing.expectEqual(@as(usize, 1), got.cut);
 }
 

@@ -102,7 +102,29 @@ emetgate db protect main
 
 에이전트는 `emetgate_db`로 읽습니다. 테이블을 나열하고, 구조를 설명하고, 행을 샘플링하고, 호출마다 `SELECT` 하나를 실행하며, 결과는 JSON, CSV 또는 Markdown으로 받고 행 수, 셀 크기, 응답 크기, 시간에 상한이 있습니다. 파일은 읽기 전용으로 열리고 모든 문장은 실행 전에 SQLite의 authorizer를 거칩니다. 숨긴 열은 어디에 나오든(`SELECT *`, 뷰, 서브쿼리, `WHERE`) NULL로 읽히고, 차단한 테이블은 뷰를 거쳐도 거부되며, 마스킹한 열은 어떤 별칭으로 고르든 마스킹되어 돌아오고 그 열을 식 안에 넣은 쿼리는 거부됩니다. 규칙은 값에 붙은 이름이 아니라 값이 나온 열을 따릅니다.
 
-**쓰기에는 당신이 필요합니다.** 에이전트는 읽기만 합니다. 데이터를 바꾸게 하려면 프롬프트로 `/db write`를 입력하세요. hook이 직접 답하고 모델은 보지 못합니다. 다음 프롬프트의 턴 동안에만 `emetgate_db_write`가 `INSERT`, `UPDATE`, `DELETE` 또는 DDL을 실행할 수 있고, 각 문장은 영향받은 행 수와 함께 기록됩니다. 테이블 삭제, 테이블 비우기, 모든 행 변경은 `/db write --destructive`를 입력하지 않았다면 여전히 거부되며, `/db read`는 쓰기 모드를 즉시 끕니다.
+**MongoDB**도 같은 방식으로 동작합니다. `db add`는 URI를 확인하려고 한 번 로그인한 뒤, 비밀번호를 포함한 URI를 Windows DPAPI로 봉인합니다.
+
+```
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db block shop audit_log
+```
+
+컬렉션이 테이블 역할을 하고, 규칙은 최상위 필드를 가리킵니다. 에이전트는 SQL 대신 JSON 명령 하나를 보냅니다: `find`(filter, projection, sort, limit, skip), `aggregate`(pipeline), `distinct` 또는 `countDocuments`. emetgate는 무엇이든 보내기 전에 모든 명령을 파싱하고 끝까지 살펴봅니다. 숨기거나 마스킹한 필드를 어디서든(필터, 정렬, `$expr`, 점으로 이어진 경로, `$getField`) 가리키는 것, `$$ROOT` 같은 문서 전체 참조, 서버 쪽 JavaScript, `$out`과 `$merge`, 그리고 규칙이 있는 컬렉션으로의 조인(`$lookup`, `$unionWith`, `$graphLookup`)을 거부합니다. 실행되는 pipeline은 숨긴 필드를 맨 처음과 맨 끝에서 지우고, 응답은 이름으로 그 필드를 한 번 더 빼고 마스킹할 필드를 마스킹합니다. 뷰는 그 뷰가 대신하는 pipeline처럼 검사됩니다.
+
+**쓰기에는 당신이 필요합니다.** 에이전트는 읽기만 합니다. 데이터를 바꾸게 하려면 프롬프트로 `/db write`를 입력하세요. hook이 직접 답하고 모델은 보지 못합니다. 다음 프롬프트의 턴 동안에만 `emetgate_db_write`가 `INSERT`, `UPDATE`, `DELETE` 또는 DDL(MongoDB에서는 `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `drop`)을 실행할 수 있고, 각 문장은 영향받은 행 수와 함께 기록됩니다. 테이블 삭제, 테이블 비우기, 모든 행 변경은 `/db write --destructive`를 입력하지 않았다면 여전히 거부되며, `/db read`는 쓰기 모드를 즉시 끕니다.
+
+**PostgreSQL**도 같은 방식으로 동작합니다. URL로 추가합니다. 비밀번호는 `%LOCALAPPDATA%\emetgate\db\credentials` 아래에 DPAPI로 봉인되며 저장소에는 기록되지 않습니다. URL에서 빼고 `db add` 명령에 `PGPASSWORD`를 지정해도 됩니다:
+
+```
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+emetgate db hide prod users.password_hash
+emetgate db mask prod users.email --mode email
+emetgate doctor
+```
+
+emetgate는 PostgreSQL 프로토콜을 직접 구현합니다: SCRAM-SHA-256 로그인, `sslmode=verify-full`이면 Windows 루트 저장소나 `sslrootcert`로 검증하는 TLS. 모든 읽기는 문장 시간 제한이 걸린 `READ ONLY` 트랜잭션 안에서 실행되고 롤백됩니다. 쿼리를 실행하기 전에 emetgate는 서버에 실행 계획(`EXPLAIN (VERBOSE)`)을 요청하고, 계획이 건드리는 모든 테이블(뷰와 서브쿼리를 거친 것 포함)과 사용하는 모든 열과 함수를 검사합니다. 숨긴 열이나 마스킹한 열은 직접 선택할 때만 허용되며 NULL이나 마스킹된 값으로 돌아옵니다. 그 밖의 위치(`WHERE`, `ORDER BY`, `GROUP BY`, 함수, `row_to_json(t)`, 행 전체 `t`, `UNION`, 스칼라 서브쿼리)에 있으면 쿼리를 거부합니다. `pg_stats` 같은 시스템 카탈로그, `COPY`, 내장 허용 목록에 없는 함수(`pg_read_file`, `lo_get`, `dblink`, `query_to_xml`, `set_config`, 데이터베이스에 정의된 함수)도 거부됩니다. `SELECT` 권한만 있는 역할로 연결하세요: 역할이 슈퍼유저이거나 쓸 수 있으면 `emetgate doctor`가 경고합니다.
 
 ## 2분 만에 시작하기
 
@@ -149,7 +171,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 ## 한계
 
 - 현재는 Windows 전용입니다.
-- 데이터베이스: 현재는 SQLite만 지원하며 PostgreSQL과 MySQL은 나중에 추가됩니다. 숨기거나 마스킹한 열이 있는 데이터베이스는 저장소 밖에 두고 `emetgate db protect`를 실행하세요. 그러면 어떤 파일 도구나 명령도 파일 자체를 읽지 못합니다.
+- 데이터베이스: SQLite, PostgreSQL, MongoDB를 지원하며 MySQL은 나중에 추가됩니다. 숨기거나 마스킹한 열이 있는 SQLite 데이터베이스는 저장소 밖에 두고 `emetgate db protect`를 실행하세요. 그러면 어떤 파일 도구나 명령도 파일 자체를 읽지 못합니다. PostgreSQL에서는 계획 검사가 추적할 수 없는 쿼리를 실행하지 않고 거부하므로, 숨긴 열이나 마스킹한 열이 있는 테이블에 대한 일부 정상 쿼리도 거부됩니다(그런 열을 반환하는 뷰, `UNION`, 스칼라 서브쿼리). 암묵적 형 변환과 확장이 정의한 타입 함수는 검사 없이 실행되므로, 최소 권한 역할이 마지막 방어선입니다. MongoDB 서버는 비밀번호를 요구해야 합니다. 그렇지 않으면 이 컴퓨터의 어떤 프로그램이든 서버를 직접 읽을 수 있습니다. emetgate는 SCRAM으로만 로그인하고, `mongodb+srv://`는 해석하지 않으며(대신 호스트를 나열하세요), TLS 클라이언트 인증서를 요구하는 서버에는 연결하지 못합니다.
 - 규칙은 emetgate의 쓰기 도구를 거친 변경에 적용됩니다. 에이전트가 실행한 명령은 게이트를 거치지 않습니다. 바꾼 파일은 보고되고 고정된 경로는 되돌려지지만, 다른 규칙은 명령에 적용되지 않습니다. 저장소의 파일을 재귀 없이 삭제하는 명령은 lockdown에서 거부되며, 에이전트는 게이트를 통과하는 `emetgate_delete`로 파일을 삭제합니다.
 - 규칙 장부는 `.emetgate/` 아래의 파일입니다. 에이전트에게는 그것을 쓸 도구가 없지만, 명령으로 편집하는 경우는 규칙 명령을 감시하는 hook에 걸리지 않습니다.
 - lockdown 밖에서 에이전트 자체 도구로 연 세션에는 게이트가 없습니다. MCP를 쓰는 다른 에이전트에서는 에이전트가 emetgate 도구를 쓰는 동안 게이트가 동작합니다.
