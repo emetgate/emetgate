@@ -311,6 +311,7 @@ const R = struct {
     const push_force = "rewrites or deletes remote history (git push --force, --delete, --mirror or a +/: refspec)";
     const reset_hard = "discards uncommitted changes (git reset --hard)";
     const clean = "deletes untracked files (git clean -f)";
+    const git_rm = "deletes tracked files recursively or from a list (git rm -r, --pathspec-from-file)";
     const checkout = "discards uncommitted changes in the working tree (git checkout --, . or -f)";
     const restore = "discards uncommitted changes in the working tree (git restore)";
     const switch_discard = "discards uncommitted changes (git switch --discard-changes or -f)";
@@ -643,6 +644,8 @@ fn gitCommand(arena: Allocator, words: []const []const u8) Allocator.Error!?Find
         (if (hasLong(args, &.{ "--hard", "--merge" })) R.reset_hard else null)
     else if (std.mem.eql(u8, sub, "clean"))
         (if (hasShort(args, "f") or hasLong(args, &.{"--force"})) R.clean else null)
+    else if (std.mem.eql(u8, sub, "rm"))
+        (if ((hasShort(args, "r") or hasLong(args, &.{"--pathspec-from-file"})) and !hasShort(args, "n") and !hasLong(args, &.{ "--cached", "--dry-run" })) R.git_rm else null)
     else if (std.mem.eql(u8, sub, "checkout"))
         (if (checkoutDiscards(args)) R.checkout else null)
     else if (std.mem.eql(u8, sub, "restore"))
@@ -969,6 +972,10 @@ test "command danger: destructive commands are flagged" {
         "git reset --hard HEAD~3",
         "git clean -fd",
         "git clean -xdf",
+        "git rm -r src",
+        "git rm -rf src",
+        "git -C . rm -q -r src",
+        "git rm --pathspec-from-file=gone.txt",
         "git clean --force",
         "git checkout -- src/main.zig",
         "git checkout .",
@@ -1104,6 +1111,10 @@ test "command danger: everyday commands are not flagged" {
         "git reset HEAD~1",
         "git reset --soft HEAD~1",
         "git clean -n",
+        "git rm --cached -r src",
+        "git rm -rn src",
+        "git rm --dry-run -r src",
+        "git rm -- -r",
         "git checkout main",
         "git checkout -b feature",
         "git restore --staged src/main.zig",

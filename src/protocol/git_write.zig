@@ -14,7 +14,7 @@ const Writer = std.Io.Writer;
 const Value = std.json.Value;
 const ToolResult = tool_result.ToolResult;
 
-pub const description = "Runs git, args as for git, e.g. [\"switch\",\"-c\",\"x\"]; force:true for work-losing forms. commit -m with every change staged (or -a with none untracked) is made by the gated commit, with receipts.";
+pub const description = "Runs git, args as for git, e.g. [\"switch\",\"-c\",\"x\"]; force:true for work-losing forms. rm takes files only out of the index (--cached); emetgate_delete deletes them. commit -m with every change staged (or -a with none untracked) is made by the gated commit, with receipts.";
 
 pub const max_args = 32;
 const max_output_lines = 40;
@@ -286,6 +286,7 @@ const Walker = struct {
     i: usize,
     staged: bool = false,
     worktree: bool = false,
+    index_only: bool = false,
     safe: bool,
 
     fn take(self: *Walker, flag: Flag, inline_value: ?[]const u8) ?Check {
@@ -299,6 +300,7 @@ const Walker = struct {
         }
         if (std.mem.eql(u8, flag.name, "--staged") or std.mem.eql(u8, flag.name, "-S")) self.staged = true;
         if (std.mem.eql(u8, flag.name, "--worktree") or std.mem.eql(u8, flag.name, "-W")) self.worktree = true;
+        if (std.mem.eql(u8, flag.name, "--cached") or std.mem.eql(u8, flag.name, "-n") or std.mem.eql(u8, flag.name, "--dry-run")) self.index_only = true;
         if (listed(self.ok.spec.safe_with, flag.name)) self.safe = true;
         if (std.mem.eql(u8, flag.name, "-a") or std.mem.eql(u8, flag.name, "--all")) self.ok.commit_all = true;
         if (std.mem.eql(u8, flag.name, "-i") or std.mem.eql(u8, flag.name, "--include")) self.ok.commit_include = true;
@@ -377,6 +379,7 @@ fn checkIn(table: []const Spec, args: []const []const u8) Check {
         walk.ok.npos += 1;
         if (before) walk.ok.npos_before = walk.ok.npos;
     }
+    if (std.mem.eql(u8, spec.sub, "rm") and !walk.index_only) return refuse("deletes_files", args[0]);
     if (std.mem.eql(u8, spec.sub, "restore") and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;
     if (!walk.safe) walk.ok.lossy = true;
     return .{ .ok = walk.ok };
@@ -813,7 +816,7 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     const git = try exe_path.git(arena, root_abs);
     var ok = switch (check(args)) {
         .refused => |why| {
-            event.fail("GitWriteRefused");
+            event.fail(if (std.mem.eql(u8, why.reason, "deletes_files")) "DeleteOutsideGate" else "GitWriteRefused");
             try writeRefused(w, why.reason, why.arg);
             return true;
         },
@@ -1056,6 +1059,7 @@ fn writeRefused(w: *Writer, reason: []const u8, arg: []const u8) !void {
 
 fn fixFor(reason: []const u8) []const u8 {
     if (std.mem.eql(u8, reason, "would_lose_work")) return "this discards uncommitted work or rewrites a remote; pass force:true only when the user asked for exactly that";
+    if (std.mem.eql(u8, reason, "deletes_files")) return "git rm deletes files outside the gate, with no rule check, no hash check and no receipt, so it did not run, with or without force: delete them with emetgate_delete, which takes each out of the git index too, then commit; rm --cached takes a file out of the index and keeps it on disk";
     if (std.mem.eql(u8, reason, "unsupported_subcommand")) return "args[0] is one of " ++ sub_list;
     if (std.mem.eql(u8, reason, "missing_value")) return "give the flag its value as the next element or as --flag=value";
     if (std.mem.eql(u8, reason, "outside_root")) return "paths, clone targets and local remotes must be inside the served root";
@@ -1177,7 +1181,7 @@ test "git write reads short flag clusters, attached values and counts flag by fl
     try expectLossy(&.{ "clean", "-fd" }, true);
     try expectLossy(&.{ "clean", "-nd" }, false);
     try expectLossy(&.{ "clean", "-d" }, true);
-    try expectLossy(&.{ "rm", "-rf", "dir" }, true);
+    try expectReason(&.{ "rm", "-rf", "dir" }, "deletes_files");
     try expectLossy(&.{ "apply", "-p1", "fix.patch" }, false);
     try expectLossy(&.{ "log", "-5", "--oneline" }, false);
     try expectLossy(&.{ "diff", "-U1", "HEAD~1" }, false);
@@ -1241,6 +1245,20 @@ test "git write keeps paths, clone targets, local remotes and config keys inside
     try expectConfined(&.{ "config", "Remote.Origin.URL", "ext::calc" }, "unsupported_url");
     try expectConfined(&.{ "config", "branch.main.remote", "origin" }, null);
     try expectConfined(&.{ "config", "edit" }, "unsupported_action");
+}
+
+test "git write refuses an rm that deletes files and lets an index-only or dry-run rm through" {
+    try expectReason(&.{ "rm", "a.txt" }, "deletes_files");
+    try expectReason(&.{ "rm", "-f", "a.txt" }, "deletes_files");
+    try expectReason(&.{ "rm", "-r", "--", "src" }, "deletes_files");
+    try expectReason(&.{ "rm", "--ignore-unmatch", "-q", "a.txt" }, "deletes_files");
+    try expectLossy(&.{ "rm", "--cached", "a.txt" }, false);
+    try expectLossy(&.{ "rm", "--cached", "-r", "src" }, false);
+    try expectLossy(&.{ "rm", "-rn", "src" }, false);
+    try expectLossy(&.{ "rm", "--dry-run", "a.txt" }, false);
+    try expectLossy(&.{ "rm", "--cached", "-f", "a.txt" }, true);
+    try testing.expect(std.mem.indexOf(u8, fixFor("deletes_files"), "emetgate_delete") != null);
+    try testing.expect(std.mem.indexOf(u8, fixFor("deletes_files"), "--cached") != null);
 }
 
 test "git read table holds only read-only forms" {

@@ -102,7 +102,7 @@ What to expect:
 - Reading and searching run without permission prompts. Writes ask for permission as usual.
 - Each write is reparsed, checked against your rules, and run against your tests in a sandboxed copy. If anything fails, nothing touches your files and the model is told why.
 - Every emetgate call shows in the transcript the way Claude Code's own tools do (`Read`, `Search`, `Update` with a diff, `Bash`), with a strip of how much of the file the agent has seen; an edit to a part it never read is marked `edited without reading`, and each turn ends with a line listing the files it touched. Passed and refused writes are marked too; `/golem off` hides the marks, `/rule` adds a rule without going through the model.
-- Deleting a file is a write too: `emetgate_delete` checks it the same way and takes the file out of the git index. A command that deletes repository files without recursion (`del`, `rm`, `Remove-Item`, `git rm`, ...) is refused and the model is told to use `emetgate_delete`; a recursive delete still asks you first.
+- Deleting a file is a write too: `emetgate_delete` checks it the same way and takes the file out of the git index. A command that deletes repository files without recursion (`del`, `rm`, `Remove-Item`, `git rm`, ...) is refused and the model is told to use `emetgate_delete`, and so is `git rm` through `emetgate_git_write`, even with `force:true`; a recursive delete, `git rm -r` included, still asks you first.
 - Arguments after `lockdown` go to `claude` (e.g. `emetgate lockdown -p "fix the failing test"`). Flags that would lift the lock (`--tools`, `--mcp-config`, `--dangerously-skip-permissions`, ...) are refused.
 - The lock is per launch: a plain `claude` in the same folder is not locked.
 

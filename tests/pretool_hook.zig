@@ -247,3 +247,17 @@ test "pretool hook: mentions of a delete, recursive deletes and deletes outside 
     defer testing.allocator.free(got.reason);
     try testing.expectEqualStrings("ask", got.kind);
 }
+
+test "pretool hook: a recursive git rm asks the user and names it, and an index-only one passes" {
+    const out = try runIn("git rm -r src", repo_cwd, false);
+    defer testing.allocator.free(out);
+    const got = try decision(out);
+    defer testing.allocator.free(got.kind);
+    defer testing.allocator.free(got.reason);
+    try testing.expectEqualStrings("ask", got.kind);
+    try testing.expect(std.mem.indexOf(u8, got.reason, "git rm -r src") != null);
+    try testing.expect(std.mem.indexOf(u8, got.reason, "deletes tracked files recursively") != null);
+    const cached = try runIn("git rm --cached -r src", repo_cwd, false);
+    defer testing.allocator.free(cached);
+    try testing.expectEqualStrings("", cached);
+}
