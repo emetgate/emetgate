@@ -66,6 +66,29 @@ test "pretool hook: any server name in front of emetgate_run is matched" {
     try testing.expect(std.mem.indexOf(u8, reason, "rm -rf build") != null);
 }
 
+test "pretool hook: git am asks like a commit outside the gate, git clean -f asks, and git apply, git mv and am --quit pass like other file writes" {
+    for ([_][2][]const u8{
+        .{ "git am 0001-fix.patch", "commits patches outside the gate" },
+        .{ "npm test && git am --continue", "commits patches outside the gate" },
+        .{ "git clean -f", "deletes untracked files" },
+    }) |case| {
+        const input = try callJson("mcp__emetgate__emetgate_run", case[0]);
+        defer testing.allocator.free(input);
+        const out = try reply(input);
+        defer testing.allocator.free(out);
+        const reason = try askReason(out);
+        defer testing.allocator.free(reason);
+        try testing.expect(std.mem.indexOf(u8, reason, case[1]) != null);
+    }
+    for ([_][]const u8{ "git apply fix.patch", "git mv a.txt b.txt", "git am --quit", "git am --show-current-patch", "git clean -n" }) |command| {
+        const input = try callJson("mcp__emetgate__emetgate_run", command);
+        defer testing.allocator.free(input);
+        const out = try reply(input);
+        defer testing.allocator.free(out);
+        try testing.expectEqualStrings("", out);
+    }
+}
+
 test "pretool hook: an everyday command and another tool print nothing" {
     for ([_][2][]const u8{
         .{ "mcp__emetgate__emetgate_run", "git status" },

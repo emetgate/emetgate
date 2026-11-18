@@ -308,7 +308,7 @@ test "git parity: config writes only listed keys and reads any key" {
     try expectRefused(&global, "unsupported_flag");
 }
 
-test "git parity: clean previews freely and deletes only with force" {
+test "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -324,14 +324,15 @@ test "git parity: clean previews freely and deletes only with force" {
     defer preview.deinit();
     try expectOk(&preview);
     try expectOutputHas(&preview, "Would remove junk.tmp");
-    var refused = try call(runtime, repo.root_abs, .{ .args = .{ "clean", "-fd" } });
-    defer refused.deinit();
-    try expectRefused(&refused, "would_lose_work");
+    try testing.expect(std.mem.indexOf(u8, preview.string("output").?, ".emetgate") == null);
+    for ([_]bool{ false, true }) |force| {
+        var refused = try call(runtime, repo.root_abs, .{ .args = .{ "clean", "-fd" }, .force = force });
+        defer refused.deinit();
+        try expectRefused(&refused, "deletes_untracked");
+        try testing.expect(std.mem.indexOf(u8, refused.string("fix").?, "emetgate_delete") != null);
+        try testing.expect(std.mem.indexOf(u8, refused.string("fix").?, "clean -n") != null);
+    }
     try testing.expect(exists(&repo, "junk.tmp"));
-    var forced = try call(runtime, repo.root_abs, .{ .args = .{ "clean", "-fd" }, .force = true });
-    defer forced.deinit();
-    try expectOk(&forced);
-    try testing.expect(!exists(&repo, "junk.tmp"));
     try testing.expect(exists(&repo, ".emetgate/keep.txt"));
 }
 
@@ -359,7 +360,7 @@ test "git parity: worktree add and list inside the root, outside refused" {
     try expectRefused(&remove, "would_lose_work");
 }
 
-test "git parity: format-patch, apply --check and am carry a commit across a reset" {
+test "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write" {
     if (builtin.os.tag != .windows) return error.SkipZigTest;
     var repo = try Repo.init();
     defer repo.deinit();
@@ -380,15 +381,66 @@ test "git parity: format-patch, apply --check and am carry a commit across a res
     var check = try call(runtime, repo.root_abs, .{ .args = .{ "apply", "--check", "patches/0001-second.patch" } });
     defer check.deinit();
     try expectOk(&check);
-    var am = try call(runtime, repo.root_abs, .{ .args = .{ "am", "patches/0001-second.patch" } });
-    defer am.deinit();
-    try expectOk(&am);
+    var stat = try call(runtime, repo.root_abs, .{ .args = .{ "apply", "--stat", "patches/0001-second.patch" } });
+    defer stat.deinit();
+    try expectOk(&stat);
+    try expectOutputHas(&stat, "a.txt");
+    const head = try repo.git(&.{ "rev-parse", "HEAD" });
+    defer gpa.free(head);
+    for ([_]bool{ false, true }) |force| {
+        var apply = try call(runtime, repo.root_abs, .{ .args = .{ "apply", "patches/0001-second.patch" }, .force = force });
+        defer apply.deinit();
+        try expectRefused(&apply, "writes_files");
+        try testing.expect(std.mem.indexOf(u8, apply.string("fix").?, "emetgate_change") != null);
+        var am = try call(runtime, repo.root_abs, .{ .args = .{ "am", "patches/0001-second.patch" }, .force = force });
+        defer am.deinit();
+        try expectRefused(&am, "commits_outside_gate");
+        try testing.expect(std.mem.indexOf(u8, am.string("fix").?, "emetgate_change") != null);
+    }
     const content = try repo.readFile("a.txt");
     defer gpa.free(content);
-    try testing.expectEqualStrings("two\n", content);
+    try testing.expectEqualStrings("one\n", content);
+    const still = try repo.git(&.{ "rev-parse", "HEAD" });
+    defer gpa.free(still);
+    try testing.expectEqualStrings(head, still);
+    var cached = try call(runtime, repo.root_abs, .{ .args = .{ "apply", "--cached", "patches/0001-second.patch" } });
+    defer cached.deinit();
+    try expectOk(&cached);
+    const staged = try repo.git(&.{ "diff", "--cached", "--name-only" });
+    defer gpa.free(staged);
+    try testing.expectEqualStrings("a.txt\n", staged);
+    const on_disk = try repo.readFile("a.txt");
+    defer gpa.free(on_disk);
+    try testing.expectEqualStrings("one\n", on_disk);
     var outside = try call(runtime, repo.root_abs, .{ .args = .{ "format-patch", "-1", "-o", "..\\out" } });
     defer outside.deinit();
     try expectRefused(&outside, "outside_root");
+}
+
+test "git parity: mv is refused with or without force and names emetgate_move_file, and mv -n previews the move" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("a.txt", "one\n");
+    try repo.commitAll("init");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    for ([_]bool{ false, true }) |force| {
+        var moved = try call(runtime, repo.root_abs, .{ .args = .{ "mv", "a.txt", "b.txt" }, .force = force });
+        defer moved.deinit();
+        try expectRefused(&moved, "moves_files");
+        try testing.expect(std.mem.indexOf(u8, moved.string("fix").?, "emetgate_move_file") != null);
+    }
+    var preview = try call(runtime, repo.root_abs, .{ .args = .{ "mv", "-n", "a.txt", "b.txt" } });
+    defer preview.deinit();
+    try expectOk(&preview);
+    try expectOutputHas(&preview, "b.txt");
+    try testing.expect(exists(&repo, "a.txt"));
+    try testing.expect(!exists(&repo, "b.txt"));
+    const status = try repo.git(&.{ "status", "--porcelain" });
+    defer gpa.free(status);
+    try testing.expectEqualStrings("", status);
 }
 
 test "git parity: bisect walks to the first bad commit and resets" {
@@ -660,4 +712,45 @@ test "git write commit is rejected when it would carry a frozen path, however th
     const dirty = try repo.git(&.{ "status", "--short" });
     defer gpa.free(dirty);
     try testing.expect(std.mem.indexOf(u8, dirty, "held.txt") != null);
+}
+
+test "git write puts a frozen path back after a forced reset, restore or checkout and names it" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    var repo = try Repo.init();
+    defer repo.deinit();
+    try repo.writeFile("held.txt", "one\n");
+    try repo.writeFile("free.txt", "one\n");
+    try repo.commitAll("init");
+    try freeze(repo.root_abs, "held.txt");
+    const runtime = try Runtime.create(gpa);
+    defer runtime.destroy() catch @panic("live snapshots");
+
+    for ([_][]const []const u8{
+        &.{ "reset", "--hard" },
+        &.{ "restore", "held.txt", "free.txt" },
+        &.{ "checkout", "--", "held.txt", "free.txt" },
+    }) |args| {
+        try repo.writeFile("held.txt", "by hand\n");
+        try repo.writeFile("free.txt", "dirty\n");
+        var reply = try call(runtime, repo.root_abs, .{ .args = args, .force = true });
+        defer reply.deinit();
+        try expectOk(&reply);
+        const restored = reply.body.value.object.get("frozen_restored") orelse return error.TestExpectedFrozenRestored;
+        try testing.expectEqual(@as(usize, 1), restored.array.items.len);
+        try testing.expectEqualStrings("held.txt", restored.array.items[0].object.get("path").?.string);
+        try testing.expect(std.mem.indexOf(u8, reply.string("fix").?, "changed by hand") != null);
+        const held = try repo.readFile("held.txt");
+        defer gpa.free(held);
+        try testing.expectEqualStrings("by hand\n", held);
+        const free = try repo.readFile("free.txt");
+        defer gpa.free(free);
+        try testing.expectEqualStrings("one\n", free);
+    }
+    try repo.writeFile("held.txt", "one\n");
+    try repo.writeFile("free.txt", "dirty\n");
+    var plain = try call(runtime, repo.root_abs, .{ .args = .{ "reset", "--hard" }, .force = true });
+    defer plain.deinit();
+    try expectOk(&plain);
+    try testing.expect(plain.body.value.object.get("frozen_restored") == null);
+    try testing.expect(plain.string("fix") == null);
 }

@@ -7,6 +7,8 @@ const exe_path = @import("../platform/exe_path.zig");
 const shadow = @import("../platform/shadow.zig");
 const bounded_run = @import("../platform/bounded_run.zig");
 const rules = @import("../platform/rules.zig");
+const frozen_hold = @import("../platform/frozen_hold.zig");
+const open_run = @import("open_run.zig");
 const wire = @import("wire.zig");
 
 const Allocator = std.mem.Allocator;
@@ -149,7 +151,7 @@ const write_specs = [_]Spec{
     .{ .sub = "worktree", .paths = .worktree, .flags = fl("-b= -B=! --detach -d --checkout --no-checkout --lock --reason= --track --no-track --guess-remote --no-guess-remote --orphan --porcelain -v --verbose -z --expire= -n --dry-run -f! --force!"), .actions = words("add list lock unlock move prune repair"), .lossy_actions = words("remove") },
     .{ .sub = "submodule", .network = true, .paths = .submodule, .flags = fl("--init --recursive --remote --no-fetch -N --checkout --rebase --merge --depth= --recommend-shallow --no-recommend-shallow -b= --branch= --name= --cached --files --all --single-branch -j= --jobs= --default -d -f! --force!"), .actions = words("add status init update summary sync set-branch set-url absorbgitdirs"), .lossy_actions = words("deinit") },
     .{ .sub = "apply", .paths = .all, .flags = fl("--check --stat --numstat --summary --index --cached -3 --3way -R --reverse -p= -C= --reject --whitespace= --ignore-space-change --ignore-whitespace --recount --unidiff-zero --directory= --exclude= --include= -v --verbose --allow-empty -N --intent-to-add") },
-    .{ .sub = "am", .paths = .all, .flags = fl("-3 --3way -s --signoff -k --keep --keep-non-patch --keep-cr --no-keep-cr -c --scissors --no-scissors -m --message-id -r --resolved --abort --continue --skip --quit --show-current-patch --committer-date-is-author-date --ignore-date --ignore-space-change --ignore-whitespace --whitespace= -p= -C= --directory= --exclude= --include= --reject --allow-empty --empty=") },
+    .{ .sub = "am", .paths = .all, .flags = fl("-3 --3way -s --signoff -k --keep --keep-non-patch --keep-cr --no-keep-cr -c --scissors --no-scissors -m --message-id -r --resolved --abort! --continue --skip --quit --show-current-patch --committer-date-is-author-date --ignore-date --ignore-space-change --ignore-whitespace --whitespace= -p= -C= --directory= --exclude= --include= --reject --allow-empty --empty=") },
     .{ .sub = "format-patch", .numeric = true, .flags = fl("-o@ --output-directory@ --stdout -n --numbered -N --no-numbered --cover-letter --no-cover-letter -v= --reroll-count= --subject-prefix= --rfc --start-number= --base= --no-stat -k --keep-subject -s --signoff --zero-commit --root --suffix= --no-binary -M --find-renames --thread --no-thread --to= --cc= --from") },
     .{ .sub = "bisect", .flags = fl("--term-old= --term-new= --term-good= --term-bad= --no-checkout --first-parent"), .actions = words("start bad good new old skip reset log terms") },
 };
@@ -181,6 +183,9 @@ const config_sub_keys = words("branch.remote branch.merge branch.rebase branch.p
 const config_actions = words("get set unset list");
 const workspace_exclude = ":(exclude,icase)" ++ shadow.workspace_dir;
 const remote_schemes = words("https:// http:// ssh:// git:// git+ssh:// ssh+git://");
+const previews = words("-n --dry-run");
+const apply_reports = words("--check --stat --numstat --summary");
+const am_steps = words("--abort --quit --show-current-patch");
 
 const prefix = [_][]const u8{
     "-c",         "core.editor=:",
@@ -235,9 +240,16 @@ pub const Ok = struct {
     commit_all: bool = false,
     commit_include: bool = false,
     dry_run: bool = false,
+    seen: [max_args * 2][]const u8 = undefined,
+    nseen: usize = 0,
 
     fn positionals(self: *const Ok) []const []const u8 {
         return self.pos[0..self.npos];
+    }
+
+    fn saw(self: *const Ok, names: []const []const u8) bool {
+        for (self.seen[0..self.nseen]) |name| if (listed(names, name)) return true;
+        return false;
     }
 };
 
@@ -305,6 +317,9 @@ const Walker = struct {
         if (std.mem.eql(u8, flag.name, "-a") or std.mem.eql(u8, flag.name, "--all")) self.ok.commit_all = true;
         if (std.mem.eql(u8, flag.name, "-i") or std.mem.eql(u8, flag.name, "--include")) self.ok.commit_include = true;
         if (std.mem.eql(u8, flag.name, "--dry-run")) self.ok.dry_run = true;
+        if (self.ok.nseen == self.ok.seen.len) return refuse("too_many_args", arg);
+        self.ok.seen[self.ok.nseen] = flag.name;
+        self.ok.nseen += 1;
         if (!flag.value) return null;
         const value = inline_value orelse blk: {
             self.i += 1;
@@ -383,6 +398,17 @@ fn checkIn(table: []const Spec, args: []const []const u8) Check {
     if (std.mem.eql(u8, spec.sub, "restore") and !(walk.staged and !walk.worktree)) walk.ok.lossy = true;
     if (!walk.safe) walk.ok.lossy = true;
     return .{ .ok = walk.ok };
+}
+
+const Outside = struct { reason: []const u8, event: []const u8 };
+
+fn outsideGate(ok: *const Ok) ?Outside {
+    const sub = ok.spec.sub;
+    if (std.mem.eql(u8, sub, "clean") and !ok.saw(previews)) return .{ .reason = "deletes_untracked", .event = "DeleteOutsideGate" };
+    if (std.mem.eql(u8, sub, "mv") and !ok.saw(previews)) return .{ .reason = "moves_files", .event = "MoveOutsideGate" };
+    if (std.mem.eql(u8, sub, "apply") and !ok.saw(apply_reports) and !(ok.saw(&.{"--cached"}) and !ok.saw(&.{ "--index", "--reject" }))) return .{ .reason = "writes_files", .event = "WriteOutsideGate" };
+    if (std.mem.eql(u8, sub, "am") and !ok.saw(am_steps)) return .{ .reason = "commits_outside_gate", .event = "WriteOutsideGate" };
+    return null;
 }
 
 fn insideRoot(arena: Allocator, root_abs: []const u8, path: []const u8) !bool {
@@ -827,6 +853,11 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
         try writeRefused(w, why.reason, why.arg);
         return true;
     }
+    if (outsideGate(&ok)) |outside| {
+        event.fail(outside.event);
+        try writeRefused(w, outside.reason, args[0]);
+        return true;
+    }
     var lossy = ok.lossy;
     if (std.mem.eql(u8, ok.spec.sub, "checkout") and !lossy) lossy = try checkoutLosesWork(arena, io, git, root_abs, args);
     if (lossy and !force) {
@@ -841,8 +872,22 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
 
     if (std.mem.eql(u8, ok.spec.sub, "commit") and !ok.dry_run and try refuseFrozen(arena, io, git, root_abs, &ok, guard_config, w, event)) return true;
 
+    var hold: ?*frozen_hold.Hold = null;
+    if (lossy) hold = frozen_hold.begin(arena, io, root_abs, .{ .guard_config = guard_config }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            event.fail("FrozenHoldFailed");
+            try writeRefused(w, "frozen_hold_failed", args[0]);
+            return true;
+        },
+    };
     const before = try headOid(arena, io, git, root_abs);
-    const ran = try runGit(arena, io, root_abs, try fullArgv(arena, git, &prefix, &ok, args), ok.spec.network);
+    const ran = runGit(arena, io, root_abs, try fullArgv(arena, git, &prefix, &ok, args), ok.spec.network) catch |err| {
+        if (hold) |held| held.finish().deinit(arena);
+        return err;
+    };
+    const frozen: frozen_hold.Report = if (hold) |held| held.finish() else .{};
+    defer frozen.deinit(arena);
     const after = try headOid(arena, io, git, root_abs);
     const branch = try capture(arena, io, git, root_abs, &.{ "branch", "--show-current" });
     const first_bad = if (std.mem.eql(u8, ok.spec.sub, "bisect")) try bisectFirstBad(arena, io, git, root_abs) else null;
@@ -876,6 +921,7 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
         try js.objectField("first_bad");
         try js.write(oid);
     }
+    try open_run.writeFrozen(arena, &js, frozen, null);
     const output = try tail(arena, ran.stdout, ran.stderr);
     if (output.len != 0) {
         try js.objectField("output");
@@ -883,7 +929,8 @@ fn render(arena: Allocator, io: std.Io, root: ?[]const u8, args: []const []const
     }
     try js.endObject();
     try w.writeByte('\n');
-    return failed;
+    if (!frozen.held()) event.fail("FrozenNotRestored");
+    return failed or !frozen.held();
 }
 
 fn refuseFrozen(arena: Allocator, io: std.Io, git: []const u8, root_abs: []const u8, ok: *const Ok, guard_config: bool, w: *Writer, event: *telemetry.Event) !bool {
@@ -1070,6 +1117,11 @@ fn fixFor(reason: []const u8) []const u8 {
     if (std.mem.eql(u8, reason, "invalid_revision")) return "show and cat-file take a 4-64 character hex object id or HEAD (optionally with ~N or ^N); resolve a name with rev-parse first";
     if (std.mem.eql(u8, reason, "too_many_args")) return "give at most 32 arguments";
     if (std.mem.eql(u8, reason, "rule_check_failed")) return "the frozen rules could not be checked, so nothing was committed; emetgate doctor says why";
+    if (std.mem.eql(u8, reason, "deletes_untracked")) return "git clean deletes untracked files outside the gate, with no rule check, no hash check and no receipt, so it did not run, with or without force: clean -n lists them; delete each one with emetgate_delete";
+    if (std.mem.eql(u8, reason, "moves_files")) return "git mv moves files outside the gate, past the frozen and scope rules, so it did not run, with or without force: move a source file with emetgate_move_file, which rewrites its importers, and any other file with emetgate_change, one item that writes it at the new path and an op:\"delete\" item with the old file's hash, then stage both with add; mv -n shows what would move";
+    if (std.mem.eql(u8, reason, "writes_files")) return "git apply writes files outside the gate, with no rule check and no receipt, so it did not run, with or without force: make the patch's changes with emetgate_change (an op:\"delete\" item for a file it removes) or delete files with emetgate_delete; apply --check, --stat or --numstat reads the patch, and apply --cached changes only the index";
+    if (std.mem.eql(u8, reason, "commits_outside_gate")) return "git am writes and commits files outside the gate, with no rule check and no receipt, so it did not run, with or without force: make the patch's changes with emetgate_change and commit them with its commit step; apply --stat reads the patch; am --abort (with force:true), --quit and --show-current-patch still run";
+    if (std.mem.eql(u8, reason, "frozen_hold_failed")) return "nothing ran: emetgate could not keep a copy of the frozen paths to put them back; emetgate doctor says why";
     return "use a supported flag; file edits go through the gate";
 }
 
@@ -1209,6 +1261,64 @@ test "git write marks the new destructive forms as work-losing" {
     try expectReason(&.{ "merge", "-s", "evil", "x" }, "unsupported_value");
     try expectLossy(&.{ "merge", "-s", "ours", "x" }, false);
     try expectLossy(&.{ "rebase", "-i", "--autosquash", "main" }, false);
+}
+
+fn expectOutside(args: []const []const u8, reason: ?[]const u8) !void {
+    const ok = switch (check(args)) {
+        .refused => |why| {
+            std.debug.print("refused {s} {s}\n", .{ why.reason, why.arg });
+            return error.TestUnexpectedRefusal;
+        },
+        .ok => |ok| ok,
+    };
+    if (reason) |expected| {
+        const got = outsideGate(&ok) orelse return error.TestExpectedRefusal;
+        try testing.expectEqualStrings(expected, got.reason);
+    } else if (outsideGate(&ok)) |got| {
+        std.debug.print("outside the gate {s}\n", .{got.reason});
+        return error.TestUnexpectedRefusal;
+    }
+}
+
+test "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through" {
+    try expectOutside(&.{ "clean", "-fd" }, "deletes_untracked");
+    try expectOutside(&.{ "clean", "-f" }, "deletes_untracked");
+    try expectOutside(&.{ "clean", "-x", "--force", "--", "build" }, "deletes_untracked");
+    try expectOutside(&.{ "clean", "-d" }, "deletes_untracked");
+    try expectOutside(&.{ "clean", "-nd" }, null);
+    try expectOutside(&.{ "clean", "--dry-run", "-fdx" }, null);
+    try expectOutside(&.{ "mv", "a.txt", "b.txt" }, "moves_files");
+    try expectOutside(&.{ "mv", "-f", "a.txt", "b.txt" }, "moves_files");
+    try expectOutside(&.{ "mv", "-k", "-v", "a.txt", "dir" }, "moves_files");
+    try expectOutside(&.{ "mv", "-n", "a.txt", "b.txt" }, null);
+    try expectOutside(&.{ "mv", "--dry-run", "a.txt", "b.txt" }, null);
+    try expectOutside(&.{ "apply", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "--index", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "-R", "-p1", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "--3way", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "--cached", "--index", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "--cached", "--reject", "fix.patch" }, "writes_files");
+    try expectOutside(&.{ "apply", "--check", "fix.patch" }, null);
+    try expectOutside(&.{ "apply", "--stat", "fix.patch" }, null);
+    try expectOutside(&.{ "apply", "--numstat", "--summary", "fix.patch" }, null);
+    try expectOutside(&.{ "apply", "--index", "--check", "fix.patch" }, null);
+    try expectOutside(&.{ "apply", "--cached", "fix.patch" }, null);
+    try expectOutside(&.{ "apply", "--cached", "-3", "fix.patch" }, null);
+    try expectOutside(&.{ "am", "0001-fix.patch" }, "commits_outside_gate");
+    try expectOutside(&.{ "am", "-3", "--signoff", "0001-fix.patch" }, "commits_outside_gate");
+    try expectOutside(&.{ "am", "--continue" }, "commits_outside_gate");
+    try expectOutside(&.{ "am", "--skip" }, "commits_outside_gate");
+    try expectOutside(&.{ "am", "--quit" }, null);
+    try expectOutside(&.{ "am", "--show-current-patch" }, null);
+    try expectOutside(&.{ "am", "--abort" }, null);
+    try expectLossy(&.{ "am", "--abort" }, true);
+    try expectLossy(&.{ "am", "--quit" }, false);
+    try expectReason(&.{ "clean", "-" ++ "d" ** 70 }, "too_many_args");
+    try testing.expect(std.mem.indexOf(u8, fixFor("deletes_untracked"), "emetgate_delete") != null);
+    try testing.expect(std.mem.indexOf(u8, fixFor("deletes_untracked"), "clean -n") != null);
+    try testing.expect(std.mem.indexOf(u8, fixFor("moves_files"), "emetgate_move_file") != null);
+    try testing.expect(std.mem.indexOf(u8, fixFor("writes_files"), "emetgate_change") != null);
+    try testing.expect(std.mem.indexOf(u8, fixFor("commits_outside_gate"), "emetgate_change") != null);
 }
 
 test "git write keeps paths, clone targets, local remotes and config keys inside the root" {

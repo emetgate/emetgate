@@ -16102,7 +16102,7 @@
       "from": "        try full.append(arena, workspace_exclude);",
       "to": "        _ = workspace_exclude;",
       "kills": [
-        "git parity: clean previews freely and deletes only with force",
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete",
         "git parity: add, commit -a and stash never pick up or remove .emetgate"
       ]
     },
@@ -16150,6 +16150,243 @@
       "kills": [
         "git parity: add, commit -a and stash never pick up or remove .emetgate"
       ]
+    },
+    {
+      "id": "GW15-git-write-runs-forms-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (outsideGate(&ok)) |outside| {",
+      "to": "    if (@as(?Outside, null)) |outside| {",
+      "kills": [
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write",
+        "git parity: mv is refused with or without force and names emetgate_move_file, and mv -n previews the move"
+      ],
+      "note": "git clean, mv, apply and am would run and change files with no rule check and no receipt"
+    },
+    {
+      "id": "GW16-clean-deletes-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"clean\") and !ok.saw(previews))",
+      "to": "if (std.mem.eql(u8, sub, \"clean\") and false)",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete"
+      ],
+      "note": "git clean -f with force:true would delete untracked files outside the gate"
+    },
+    {
+      "id": "GW17-clean-preview-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"clean\") and !ok.saw(previews))",
+      "to": "if (std.mem.eql(u8, sub, \"clean\"))",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete"
+      ],
+      "note": "clean -n, which only lists the files, would be refused too"
+    },
+    {
+      "id": "GW18-mv-moves-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"mv\") and !ok.saw(previews))",
+      "to": "if (std.mem.eql(u8, sub, \"mv\") and false)",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: mv is refused with or without force and names emetgate_move_file, and mv -n previews the move"
+      ],
+      "note": "git mv would move files past the frozen and scope rules that emetgate_move_file checks"
+    },
+    {
+      "id": "GW19-mv-preview-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"mv\") and !ok.saw(previews))",
+      "to": "if (std.mem.eql(u8, sub, \"mv\"))",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: mv is refused with or without force and names emetgate_move_file, and mv -n previews the move"
+      ],
+      "note": "mv -n, which moves nothing, would be refused too"
+    },
+    {
+      "id": "GW20-apply-writes-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"apply\") and !ok.saw(apply_reports)",
+      "to": "if (std.mem.eql(u8, sub, \"apply\") and false and !ok.saw(apply_reports)",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "git apply would write working-tree files with no rule check"
+    },
+    {
+      "id": "GW21-apply-report-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": " and !ok.saw(apply_reports) and ",
+      "to": " and ",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "apply --check and --stat, which write nothing, would be refused"
+    },
+    {
+      "id": "GW22-apply-cached-with-index-runs",
+      "file": "src/protocol/git_write.zig",
+      "from": "!(ok.saw(&.{\"--cached\"}) and !ok.saw(&.{ \"--index\", \"--reject\" }))",
+      "to": "!ok.saw(&.{\"--cached\"})",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through"
+      ],
+      "note": "apply --cached --index or --reject would write the working tree though it names --cached"
+    },
+    {
+      "id": "GW23-apply-cached-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "!(ok.saw(&.{\"--cached\"}) and !ok.saw(&.{ \"--index\", \"--reject\" }))",
+      "to": "true",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "apply --cached, which changes only the index, would be refused"
+    },
+    {
+      "id": "GW24-am-commits-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"am\") and !ok.saw(am_steps))",
+      "to": "if (std.mem.eql(u8, sub, \"am\") and false)",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "git am would write and commit files with no rule check and no receipt"
+    },
+    {
+      "id": "GW25-am-abort-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, sub, \"am\") and !ok.saw(am_steps))",
+      "to": "if (std.mem.eql(u8, sub, \"am\"))",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through"
+      ],
+      "note": "am --abort, --quit and --show-current-patch, which apply nothing, would be refused"
+    },
+    {
+      "id": "GW26-am-abort-not-lossy",
+      "file": "src/protocol/git_write.zig",
+      "from": "--resolved --abort! --continue",
+      "to": "--resolved --abort --continue",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through"
+      ],
+      "note": "am --abort would discard the working tree without force:true"
+    },
+    {
+      "id": "GW27-flags-not-recorded",
+      "file": "src/protocol/git_write.zig",
+      "from": "        self.ok.nseen += 1;\n",
+      "to": "",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete"
+      ],
+      "note": "the flags a call gives would not be kept, so every preview form would be refused"
+    },
+    {
+      "id": "GW28-flag-overflow-not-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (self.ok.nseen == self.ok.seen.len) return refuse(\"too_many_args\", arg);",
+      "to": "if (self.ok.nseen == self.ok.seen.len) return null;",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through"
+      ],
+      "note": "flags past the recorded ones would pass unseen"
+    },
+    {
+      "id": "GW29-forced-discard-skips-frozen-hold",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (lossy) hold = frozen_hold.begin(",
+      "to": "    if (false) hold = frozen_hold.begin(",
+      "kills": [
+        "git write puts a frozen path back after a forced reset, restore or checkout and names it"
+      ],
+      "note": "a forced reset, restore or checkout would discard a hand edit to a frozen path"
+    },
+    {
+      "id": "GW30-frozen-restore-not-reported",
+      "file": "src/protocol/git_write.zig",
+      "from": "    try open_run.writeFrozen(arena, &js, frozen, null);\n",
+      "to": "",
+      "kills": [
+        "git write puts a frozen path back after a forced reset, restore or checkout and names it"
+      ],
+      "note": "the reply would not say a frozen path was put back"
+    },
+    {
+      "id": "GW31-clean-fix-generic",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, reason, \"deletes_untracked\")) return",
+      "to": "if (std.mem.eql(u8, reason, \"deletes_untracked_\")) return",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: clean previews freely and is refused with or without force, with a fix that names emetgate_delete"
+      ],
+      "note": "the refusal would not name emetgate_delete or clean -n"
+    },
+    {
+      "id": "GW32-mv-fix-generic",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, reason, \"moves_files\")) return",
+      "to": "if (std.mem.eql(u8, reason, \"moves_files_\")) return",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: mv is refused with or without force and names emetgate_move_file, and mv -n previews the move"
+      ],
+      "note": "the refusal would not name emetgate_move_file"
+    },
+    {
+      "id": "GW33-apply-fix-generic",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, reason, \"writes_files\")) return",
+      "to": "if (std.mem.eql(u8, reason, \"writes_files_\")) return",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "the refusal would not name emetgate_change"
+    },
+    {
+      "id": "GW34-am-fix-generic",
+      "file": "src/protocol/git_write.zig",
+      "from": "if (std.mem.eql(u8, reason, \"commits_outside_gate\")) return",
+      "to": "if (std.mem.eql(u8, reason, \"commits_outside_gate_\")) return",
+      "kills": [
+        "git write refuses clean, mv, apply and am that change files outside the gate and lets their previews through",
+        "git parity: format-patch and apply --check, --stat and --cached run, and apply and am are refused before they write"
+      ],
+      "note": "the refusal would not name emetgate_change and its commit step"
+    },
+    {
+      "id": "GW35-git-am-runs-unasked",
+      "file": "src/platform/command_danger.zig",
+      "from": "    else if (std.mem.eql(u8, sub, \"am\"))\n",
+      "to": "    else if (std.mem.eql(u8, sub, \"am_\"))\n",
+      "kills": [
+        "command danger: destructive commands are flagged",
+        "pretool hook: git am asks like a commit outside the gate, git clean -f asks, and git apply, git mv and am --quit pass like other file writes"
+      ],
+      "note": "git am in a shell would commit without the commit check and without asking the user"
+    },
+    {
+      "id": "GW36-git-am-quit-asks",
+      "file": "src/platform/command_danger.zig",
+      "from": "(if (hasLong(args, &.{ \"--show-current-patch\", \"--quit\" })) null else R.am)",
+      "to": "R.am",
+      "kills": [
+        "command danger: everyday commands are not flagged",
+        "pretool hook: git am asks like a commit outside the gate, git clean -f asks, and git apply, git mv and am --quit pass like other file writes"
+      ],
+      "note": "git am --quit and --show-current-patch, which commit nothing, would ask the user"
     },
     {
       "id": "SH1-working-listing-keeps-nested-repository",
