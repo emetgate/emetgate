@@ -20605,6 +20605,72 @@
       "kills": [
         "db mongo wire: a reply with two bodies, an unknown section, moreToCome, a bad checksum or a lying length is refused"
       ]
+    },
+    {
+      "id": "GRM1-git-write-rm-deletes-outside-gate",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, spec.sub, \"rm\") and !walk.index_only) return refuse(\"deletes_files\", args[0]);\n",
+      "to": "",
+      "kills": [
+        "git write refuses an rm that deletes files and lets an index-only or dry-run rm through",
+        "delete tool: git rm through emetgate_git_write is refused with or without force, and the fix names emetgate_delete"
+      ],
+      "note": "git rm through emetgate_git_write would delete files with no rule check, no hash check and no receipt"
+    },
+    {
+      "id": "GRM2-any-rm-flag-taken-for-index-only",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (std.mem.eql(u8, flag.name, \"--cached\") or std.mem.eql(u8, flag.name, \"-n\") or std.mem.eql(u8, flag.name, \"--dry-run\")) self.index_only = true;\n",
+      "to": "        self.index_only = true;\n",
+      "kills": [
+        "git write refuses an rm that deletes files and lets an index-only or dry-run rm through",
+        "delete tool: git rm through emetgate_git_write is refused with or without force, and the fix names emetgate_delete"
+      ],
+      "note": "git rm -f or -r would pass as if it were --cached and delete files outside the gate"
+    },
+    {
+      "id": "GRM3-index-only-rm-refused",
+      "file": "src/protocol/git_write.zig",
+      "from": "        if (std.mem.eql(u8, flag.name, \"--cached\") or std.mem.eql(u8, flag.name, \"-n\") or std.mem.eql(u8, flag.name, \"--dry-run\")) self.index_only = true;\n",
+      "to": "",
+      "kills": [
+        "git write refuses an rm that deletes files and lets an index-only or dry-run rm through",
+        "delete tool: an index-only git rm still runs and keeps the file, and a delete through the gate commits with emetgate_git_write"
+      ],
+      "note": "rm --cached, which emetgate_delete names for an index left behind, would be refused too"
+    },
+    {
+      "id": "GRM4-rm-refusal-fix-generic",
+      "file": "src/protocol/git_write.zig",
+      "from": "    if (std.mem.eql(u8, reason, \"deletes_files\")) return",
+      "to": "    if (std.mem.eql(u8, reason, \"deletes_files_\")) return",
+      "kills": [
+        "git write refuses an rm that deletes files and lets an index-only or dry-run rm through",
+        "delete tool: git rm through emetgate_git_write is refused with or without force, and the fix names emetgate_delete"
+      ],
+      "note": "the refusal would not say to delete with emetgate_delete or to use rm --cached"
+    },
+    {
+      "id": "GRM5-recursive-git-rm-runs-unasked",
+      "file": "src/platform/command_danger.zig",
+      "from": "        (if ((hasShort(args, \"r\") or hasLong(args, &.{\"--pathspec-from-file\"})) and",
+      "to": "        (if ((hasShort(args, \"R\") or hasLong(args, &.{\"--pathspec-from-file\"})) and",
+      "kills": [
+        "command danger: destructive commands are flagged",
+        "pretool hook: a recursive git rm asks the user and names it, and an index-only one passes"
+      ],
+      "note": "a recursive git rm in a shell would delete tracked files without asking the user"
+    },
+    {
+      "id": "GRM6-index-only-recursive-git-rm-asks",
+      "file": "src/platform/command_danger.zig",
+      "from": " and !hasShort(args, \"n\") and !hasLong(args, &.{ \"--cached\", \"--dry-run\" })) R.git_rm else null)",
+      "to": ") R.git_rm else null)",
+      "kills": [
+        "command danger: everyday commands are not flagged",
+        "pretool hook: a recursive git rm asks the user and names it, and an index-only one passes"
+      ],
+      "note": "git rm --cached -r, which deletes nothing on disk, would ask the user"
     }
   ]
 }

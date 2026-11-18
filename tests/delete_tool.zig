@@ -365,3 +365,60 @@ test "delete tool: an open emetgate_run that deletes a repository file without r
         try repo.expectFile("notes.txt", notes);
     }
 }
+
+test "delete tool: git rm through emetgate_git_write is refused with or without force, and the fix names emetgate_delete" {
+    var repo = try Repo.init(&.{ .{ "notes.txt", notes }, .{ "old.txt", draft } });
+    defer repo.deinit();
+    for ([_]bool{ false, true }) |force| {
+        var plain = try repo.callAs("emetgate_git_write", .{ .args = .{ "rm", "notes.txt" }, .force = force }, green);
+        defer plain.deinit();
+        errdefer std.debug.print("reply: {s}\n", .{plain.text});
+        try testing.expect(plain.is_error);
+        try testing.expect(plain.has("\"status\":\"refused\""));
+        try testing.expect(plain.has("\"reason\":\"deletes_files\""));
+        try testing.expect(plain.has("emetgate_delete"));
+        try testing.expect(plain.has("outside the gate"));
+        try testing.expect(plain.has("rm --cached"));
+        var recursive = try repo.callAs("emetgate_git_write", .{ .args = .{ "rm", "-rf", "--", "." }, .force = force }, green);
+        defer recursive.deinit();
+        errdefer std.debug.print("reply: {s}\n", .{recursive.text});
+        try testing.expect(recursive.is_error);
+        try testing.expect(recursive.has("\"reason\":\"deletes_files\""));
+    }
+    try repo.expectFile("notes.txt", notes);
+    try repo.expectFile("old.txt", draft);
+    try expectStatus(&repo, "");
+}
+
+test "delete tool: an index-only git rm still runs and keeps the file, and a delete through the gate commits with emetgate_git_write" {
+    var repo = try Repo.init(&.{ .{ "notes.txt", notes }, .{ "a.txt", draft } });
+    defer repo.deinit();
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var preview = try repo.callAs("emetgate_git_write", .{ .args = .{ "rm", "-n", "notes.txt" } }, green);
+    defer preview.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{preview.text});
+    try testing.expect(!preview.is_error);
+    try expectStatus(&repo, "");
+    var cached = try repo.callAs("emetgate_git_write", .{ .args = .{ "rm", "--cached", "--", "notes.txt" } }, green);
+    defer cached.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{cached.text});
+    try testing.expect(!cached.is_error);
+    try testing.expect(cached.has("\"status\":\"ok\""));
+    try repo.expectFile("notes.txt", notes);
+    try expectStatus(&repo, "D  notes.txt\n?? notes.txt");
+
+    const hash = hashOf(draft);
+    var deleted = try repo.callAs("emetgate_delete", .{ .file = try at(arena, &repo, "a.txt"), .file_hash = @as([]const u8, &hash) }, green);
+    defer deleted.deinit();
+    try expectWritten(&deleted);
+    try expectStatus(&repo, "D  a.txt\nD  notes.txt\n?? notes.txt");
+    var committed = try repo.callAs("emetgate_git_write", .{ .args = .{ "commit", "-m", "Drop a.txt and untrack notes.txt" } }, green);
+    defer committed.deinit();
+    errdefer std.debug.print("reply: {s}\n", .{committed.text});
+    try testing.expect(!committed.is_error);
+    try testing.expect(!exists(&repo, "a.txt"));
+    try repo.expectFile("notes.txt", notes);
+    try expectStatus(&repo, "?? notes.txt");
+}

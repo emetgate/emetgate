@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3346**
-- Mutations declared in `tests/mutations.json`: **2147**
-  - killed: **2095**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3350**
+- Mutations declared in `tests/mutations.json`: **2153**
+  - killed: **2101**
   - equivalent: **9**
   - defense in depth: **14**
   - open: **3**
@@ -823,7 +823,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1430 mutation(s).
+1436 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -2257,6 +2257,12 @@ python tools/verification_page.py --check
 | `PG26-scram-nonce-unchecked` | `src/db/pg_scram.zig` | `if (!std.mem.startsWith(u8, server_nonce, self.nonce()) or serv...` -> `if (false) return error.ScramNonceMismatch;` | pg scram: a forged server signature, a foreign nonce and absurd iteration count... | killed |
 | `PG27-truncate-cascade-allowed` | `src/db/pg_sql.zig` | `if (token.word("cascade")) return .{ .statement = .denied };` -> `if (token.word("cascade") and false) return .{ .statement = .de...` | pg sql: a statement's shape names its kind and the tables it targets | killed |
 | `PG28-rename-of-guarded-table-not-flagged` | `src/db/pg_sql.zig` | `if (token.word("rename") or token.word("detach") or token.word(...` -> `if ((token.word("rename") or token.word("detach") or token.word...` | pg sql: a statement's shape names its kind and the tables it targets | killed |
+| `GRM1-git-write-rm-deletes-outside-gate` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, spec.sub, "rm") and !walk.index_only) retur...` -> `` | git write refuses an rm that deletes files and lets an index-only or dry-run rm...; delet... | killed |
+| `GRM2-any-rm-flag-taken-for-index-only` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, flag.name, "--cached") or std.mem.eql(u8, f...` -> `self.index_only = true;` | git write refuses an rm that deletes files and lets an index-only or dry-run rm...; delet... | killed |
+| `GRM3-index-only-rm-refused` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, flag.name, "--cached") or std.mem.eql(u8, f...` -> `` | git write refuses an rm that deletes files and lets an index-only or dry-run rm...; delet... | killed |
+| `GRM4-rm-refusal-fix-generic` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, reason, "deletes_files")) return` -> `if (std.mem.eql(u8, reason, "deletes_files_")) return` | git write refuses an rm that deletes files and lets an index-only or dry-run rm...; delet... | killed |
+| `GRM5-recursive-git-rm-runs-unasked` | `src/platform/command_danger.zig` | `(if ((hasShort(args, "r") or hasLong(args, &.{"--pathspec-from-...` -> `(if ((hasShort(args, "R") or hasLong(args, &.{"--pathspec-from-...` | command danger: destructive commands are flagged; pretool hook: a recursive git rm asks t... | killed |
+| `GRM6-index-only-recursive-git-rm-asks` | `src/platform/command_danger.zig` | `and !hasShort(args, "n") and !hasLong(args, &.{ "--cached", "--...` -> `) R.git_rm else null)` | command danger: everyday commands are not flagged; pretool hook: a recursive git rm asks ... | killed |
 
 ## What this system does not prove
 
