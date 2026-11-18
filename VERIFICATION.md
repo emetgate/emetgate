@@ -6,9 +6,9 @@ The claim this page backs: the kernel's guards are not just written, they are ea
 
 ## Numbers
 
-- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3350**
-- Mutations declared in `tests/mutations.json`: **2153**
-  - killed: **2101**
+- `test "..."` blocks in `src/`, `tests/`, `tools/`: **3354**
+- Mutations declared in `tests/mutations.json`: **2175**
+  - killed: **2123**
   - equivalent: **9**
   - defense in depth: **14**
   - open: **3**
@@ -823,7 +823,7 @@ python tools/verification_page.py --check
 
 ### Protocol wiring and everything else
 
-1436 mutation(s).
+1458 mutation(s).
 
 | Mutant | File | Change | Proved by | Status |
 |---|---|---|---|---|
@@ -1869,12 +1869,34 @@ python tools/verification_page.py --check
 | `GW6-dry-run-guard-ignored` | `src/protocol/git_write.zig` | `if (!walk.safe) walk.ok.lossy = true;` -> `if (false) walk.ok.lossy = true;` | git write reads short flag clusters, attached values and counts flag by flag | killed |
 | `GW7-ext-url-accepted` | `src/protocol/git_write.zig` | `if (std.mem.indexOf(u8, text, "::") != null) return .{ .reason ...` -> `if (false) return .{ .reason = "unsupported_url", .arg = text };` | git write keeps paths, clone targets, local remotes and config keys inside the ... | killed |
 | `GW8-config-key-unchecked` | `src/protocol/git_write.zig` | `if (!configKeyAllowed(name)) return .{ .reason = "unsupported_c...` -> `if (false) return .{ .reason = "unsupported_config_key", .arg =...` | git write keeps paths, clone targets, local remotes and config keys inside the ...; git p... | killed |
-| `GW9-clean-removes-workspace` | `src/protocol/git_write.zig` | `try full.append(arena, workspace_exclude);` -> `_ = workspace_exclude;` | git parity: clean previews freely and deletes only with force; git parity: add, commit -a... | killed |
+| `GW9-clean-removes-workspace` | `src/protocol/git_write.zig` | `try full.append(arena, workspace_exclude);` -> `_ = workspace_exclude;` | git parity: clean previews freely and is refused with or without force, with a ...; git p... | killed |
 | `GW10-read-tool-runs-changing-form` | `src/protocol/git_write.zig` | `if (ok.lossy) {` -> `if (false) {` | git parity: emetgate_git runs read-only subcommands from args and refuses chang... | killed |
 | `GW11-merge-strategy-unchecked` | `src/protocol/git_write.zig` | `if (flag.strategy and !listed(strategies, value)) return refuse...` -> `if (false and flag.strategy and !listed(strategies, value)) ret...` | git write marks the new destructive forms as work-losing | killed |
 | `GW12-local-remote-outside-root` | `src/protocol/git_write.zig` | `if (try insideRoot(arena, root_abs, localPath(text))) return nu...` -> `if (true or try insideRoot(arena, root_abs, localPath(text))) r...` | git write keeps paths, clone targets, local remotes and config keys inside the ... | killed |
 | `GW13-add-all-picks-workspace` | `src/protocol/git_write.zig` | `if (listed(keep.whole_tree, arg)) return 0;` -> `if (listed(keep.whole_tree, arg)) return null;` | git parity: add, commit -a and stash never pick up or remove .emetgate | killed |
 | `GW14-stash-all-removes-workspace` | `src/protocol/git_write.zig` | `.lossy_actions = words("drop clear"), .keep_workspace = .{ .sco...` -> `.lossy_actions = words("drop clear") },` | git parity: add, commit -a and stash never pick up or remove .emetgate | killed |
+| `GW15-git-write-runs-forms-outside-gate` | `src/protocol/git_write.zig` | `if (outsideGate(&ok)) \|outside\| {` -> `if (@as(?Outside, null)) \|outside\| {` | git parity: clean previews freely and is refused with or without force, with a ...; git p... | killed |
+| `GW16-clean-deletes-outside-gate` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "clean") and !ok.saw(previews))` -> `if (std.mem.eql(u8, sub, "clean") and false)` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW17-clean-preview-refused` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "clean") and !ok.saw(previews))` -> `if (std.mem.eql(u8, sub, "clean"))` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW18-mv-moves-outside-gate` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "mv") and !ok.saw(previews))` -> `if (std.mem.eql(u8, sub, "mv") and false)` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW19-mv-preview-refused` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "mv") and !ok.saw(previews))` -> `if (std.mem.eql(u8, sub, "mv"))` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW20-apply-writes-outside-gate` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "apply") and !ok.saw(apply_reports)` -> `if (std.mem.eql(u8, sub, "apply") and false and !ok.saw(apply_r...` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW21-apply-report-refused` | `src/protocol/git_write.zig` | `and !ok.saw(apply_reports) and` -> `and` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW22-apply-cached-with-index-runs` | `src/protocol/git_write.zig` | `!(ok.saw(&.{"--cached"}) and !ok.saw(&.{ "--index", "--reject" ...` -> `!ok.saw(&.{"--cached"})` | git write refuses clean, mv, apply and am that change files outside the gate an... | killed |
+| `GW23-apply-cached-refused` | `src/protocol/git_write.zig` | `!(ok.saw(&.{"--cached"}) and !ok.saw(&.{ "--index", "--reject" ...` -> `true` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW24-am-commits-outside-gate` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "am") and !ok.saw(am_steps))` -> `if (std.mem.eql(u8, sub, "am") and false)` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW25-am-abort-refused` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, sub, "am") and !ok.saw(am_steps))` -> `if (std.mem.eql(u8, sub, "am"))` | git write refuses clean, mv, apply and am that change files outside the gate an... | killed |
+| `GW26-am-abort-not-lossy` | `src/protocol/git_write.zig` | `--resolved --abort! --continue` -> `--resolved --abort --continue` | git write refuses clean, mv, apply and am that change files outside the gate an... | killed |
+| `GW27-flags-not-recorded` | `src/protocol/git_write.zig` | `self.ok.nseen += 1;` -> `` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW28-flag-overflow-not-refused` | `src/protocol/git_write.zig` | `if (self.ok.nseen == self.ok.seen.len) return refuse("too_many_...` -> `if (self.ok.nseen == self.ok.seen.len) return null;` | git write refuses clean, mv, apply and am that change files outside the gate an... | killed |
+| `GW29-forced-discard-skips-frozen-hold` | `src/protocol/git_write.zig` | `if (lossy) hold = frozen_hold.begin(` -> `if (false) hold = frozen_hold.begin(` | git write puts a frozen path back after a forced reset, restore or checkout and... | killed |
+| `GW30-frozen-restore-not-reported` | `src/protocol/git_write.zig` | `try open_run.writeFrozen(arena, &js, frozen, null);` -> `` | git write puts a frozen path back after a forced reset, restore or checkout and... | killed |
+| `GW31-clean-fix-generic` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, reason, "deletes_untracked")) return` -> `if (std.mem.eql(u8, reason, "deletes_untracked_")) return` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW32-mv-fix-generic` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, reason, "moves_files")) return` -> `if (std.mem.eql(u8, reason, "moves_files_")) return` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW33-apply-fix-generic` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, reason, "writes_files")) return` -> `if (std.mem.eql(u8, reason, "writes_files_")) return` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW34-am-fix-generic` | `src/protocol/git_write.zig` | `if (std.mem.eql(u8, reason, "commits_outside_gate")) return` -> `if (std.mem.eql(u8, reason, "commits_outside_gate_")) return` | git write refuses clean, mv, apply and am that change files outside the gate an...; git p... | killed |
+| `GW35-git-am-runs-unasked` | `src/platform/command_danger.zig` | `else if (std.mem.eql(u8, sub, "am"))` -> `else if (std.mem.eql(u8, sub, "am_"))` | command danger: destructive commands are flagged; pretool hook: git am asks like a commit... | killed |
+| `GW36-git-am-quit-asks` | `src/platform/command_danger.zig` | `(if (hasLong(args, &.{ "--show-current-patch", "--quit" })) nul...` -> `R.am` | command danger: everyday commands are not flagged; pretool hook: git am asks like a commi... | killed |
 | `GB1-bisect-first-bad-without-convergence` | `src/protocol/git_write.zig` | `if (!std.mem.eql(u8, left, bad)) return null;` -> `_ = left;` | git parity: bisect walks to the first bad commit and resets | killed |
 | `GB2-bisect-first-bad-without-good` | `src/protocol/git_write.zig` | `if (goods.len == 0) return null;` -> `if (goods.len == 0 and false) return null;` | git parity: a bad root commit with no good commit marked is not reported as the... | killed |
 | `RS1-rename-service-failure-not-named` | `src/protocol/rename_tool.zig` | `if (err == error.RenameUnresolved and unresolved.count == 0) if...` -> `` | rename: when the language service fails the tool says so and names its error in... | killed |

@@ -174,6 +174,7 @@ emetgate cache prune --all           # remove every cache no running emetgate is
 - 数据库：支持 SQLite、PostgreSQL 和 MongoDB，MySQL 之后提供。含有隐藏或脱敏列的 SQLite 数据库请放在仓库之外，并运行 `emetgate db protect`，这样任何文件工具或命令都读不到文件本身。 在 PostgreSQL 上，计划检查无法追踪的查询会被拒绝而不是运行，因此对含隐藏列或掩码列的表的一些合法查询也会被拒绝（返回这类列的视图、`UNION` 或标量子查询）。隐式类型转换和扩展定义的类型函数不经检查运行；最小权限角色是最后一道防线。MongoDB 服务器必须要求密码，否则这台机器上的任何程序都能直接读取它；emetgate 只用 SCRAM 登录，不解析 `mongodb+srv://`（请逐个列出主机），也无法连接要求 TLS 客户端证书的服务器。
 - 规则作用于经过 emetgate 写入工具的修改。智能体运行的命令不经过门：它修改的文件会被报告，冻结路径会被恢复，但其他规则不作用于命令。在 lockdown 下，非递归删除仓库内文件的命令会被拒绝；智能体改用经过门的 `emetgate_delete` 删除它们。通过 `emetgate_git_write` 执行的 `git rm` 同样会被拒绝，即使带有 `force:true`；把文件留在磁盘上的 `git rm --cached` 仍然可以运行。
 - 规则账本是 `.emetgate/` 下的一个文件。智能体没有写它的工具，但通过命令编辑它不会被监视规则命令的 hook 捕获。
+- `emetgate_git_write` 不会绕过门修改文件：`git clean`、`git mv`、`git apply` 和 `git am` 即使带有 `force:true` 也会被拒绝，修复提示会指向 `emetgate_delete`、`emetgate_move_file` 或 `emetgate_change`；`clean -n`、`mv -n`、`apply --check`、`--stat` 和 `--cached` 仍然可以运行。强制执行的 `reset --hard`、`restore` 或针对路径的 `checkout` 之后，冻结路径会像命令执行后一样被恢复。
 - 在 lockdown 之外、用智能体自带工具打开的会话中没有门。在其他支持 MCP 的智能体中，只要智能体使用 emetgate 的工具，门就会生效。
 - 每次写入在门上大约耗时 0.2–0.4 s。我们不承诺更少的 token。
 - 收据没有签名：能发现与提交不一致的被改动收据，但发现不了被整体重写的历史。

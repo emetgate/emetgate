@@ -320,6 +320,7 @@ const R = struct {
     const rewrite = "rewrites the repository's history";
     const commit = "commits outside the gate: no receipt, though emetgate_run still checks the rules at the commit; emetgate_change with a commit message does both";
     const commit_unchecked = "skips the hooks, so a broken rule is only reported after the commit is made";
+    const am = "commits patches outside the gate without the commit check, or drops the ones applied (git am)";
     const sql = "drops or truncates a database, schema, table or collection";
     const disk = "formats, partitions or overwrites a disk";
     const power = "shuts down, restarts or logs off the machine";
@@ -662,6 +663,8 @@ fn gitCommand(arena: Allocator, words: []const []const u8) Allocator.Error!?Find
         R.commit_unchecked
     else if (std.mem.eql(u8, sub, "merge") and hasLong(args, &.{"--no-verify"}))
         R.commit_unchecked
+    else if (std.mem.eql(u8, sub, "am"))
+        (if (hasLong(args, &.{ "--show-current-patch", "--quit" })) null else R.am)
     else if (std.mem.eql(u8, sub, "commit") or std.mem.eql(u8, sub, "commit-tree") or std.mem.eql(u8, sub, "update-ref"))
         R.commit
     else
@@ -991,6 +994,10 @@ test "command danger: destructive commands are flagged" {
         "git stash drop",
         "git stash clear",
         "git filter-branch --tree-filter x",
+        "git am 0001-fix.patch",
+        "git -C sub am -3 --signoff x.patch",
+        "git am --continue",
+        "git am --abort",
         "psql -c 'DROP TABLE users'",
         "psql -c \"drop database prod\"",
         "mysql -e 'DROP SCHEMA app;'",
@@ -1123,6 +1130,10 @@ test "command danger: everyday commands are not flagged" {
         "git branch feature",
         "git stash",
         "git stash pop",
+        "git am --show-current-patch",
+        "git am --quit",
+        "git apply fix.patch",
+        "git mv a.txt b.txt",
         "git status && git diff",
         "chmod +x run.sh",
         "chmod 644 file",
