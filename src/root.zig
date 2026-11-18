@@ -232,6 +232,17 @@ pub const db_grant = @import("db/grant.zig");
 pub const db_tool = @import("protocol/db_tool.zig");
 pub const db_command = @import("protocol/db_command.zig");
 pub const db_health = @import("db/health.zig");
+pub const db_postgres = @import("db/postgres.zig");
+pub const db_pg_plan = @import("db/pg_plan.zig");
+pub const db_pg_sql = @import("db/pg_sql.zig");
+pub const db_pg_wire = @import("db/pg_wire.zig");
+pub const db_pg_scram = @import("db/pg_scram.zig");
+pub const db_pg_net = @import("db/pg_net.zig");
+pub const db_bson = @import("db/bson.zig");
+pub const db_scram = @import("db/scram.zig");
+pub const db_mongo_guard = @import("db/mongo_guard.zig");
+pub const db_mongo_wire = @import("db/mongo_wire.zig");
+pub const db_mongo = @import("db/mongo.zig");
 
 test {
     @import("std").testing.refAllDecls(@This());

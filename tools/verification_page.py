@@ -38,6 +38,7 @@ GROUPS = [
     )),
     ("Database access", (
         "src/db/sqlite.zig", "src/db/grant.zig", "src/protocol/db_tool.zig",
+        "src/db/mongo.zig", "src/db/mongo_guard.zig", "src/db/mongo_wire.zig", "src/db/bson.zig", "src/db/scram.zig",
     )),
     ("Mutation testing tool itself", (
         "tools/mutate/core.zig", "tools/mutate/changes.zig", "tools/mutate/schema.zig",

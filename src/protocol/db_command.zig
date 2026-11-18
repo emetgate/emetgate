@@ -5,6 +5,8 @@ const config = @import("../db/config.zig");
 const credentials = @import("../db/credentials.zig");
 const grant = @import("../db/grant.zig");
 const sqlite = @import("../db/sqlite.zig");
+const postgres = @import("../db/postgres.zig");
+const mongo = @import("../db/mongo.zig");
 const prompt_words = @import("prompt_words.zig");
 
 const Allocator = std.mem.Allocator;
@@ -14,9 +16,12 @@ const Map = std.process.Environ.Map;
 pub const slash = "/db";
 pub const global_flag = "--global";
 pub const destructive_flag = "--destructive";
+pub const password_variable = "PGPASSWORD";
+
+pub var env_password: ?[]const u8 = null;
 
 pub fn usage(comptime prefix: []const u8) []const u8 {
-    return prefix ++ "add <name> <file.db | postgres://... | mysql://...>\n" ++
+    return prefix ++ "add <name> <file.db | mongodb://user[:password]@host[:port]/db[?authSource=..&tls=true] | postgres://user[:password]@host[:port]/db[?sslmode=disable|prefer|require|verify-full] | mysql://...>   (a postgres password may come from %PGPASSWORD% instead)\n" ++
         prefix ++ "list [--json]\n" ++
         prefix ++ "remove <name>\n" ++
         prefix ++ "hide (<name> | --global) <table.column>   (the model reads it as NULL everywhere)\n" ++
@@ -131,6 +136,7 @@ fn kindOfUrl(url: []const u8) ?Kind {
     if (std.ascii.eqlIgnoreCase(scheme, "postgres") or std.ascii.eqlIgnoreCase(scheme, "postgresql")) return .postgres;
     if (std.ascii.eqlIgnoreCase(scheme, "mysql") or std.ascii.eqlIgnoreCase(scheme, "mariadb")) return .mysql;
     if (std.ascii.eqlIgnoreCase(scheme, "sqlite")) return .sqlite;
+    if (std.ascii.eqlIgnoreCase(scheme, "mongodb") or std.ascii.eqlIgnoreCase(scheme, "mongodb+srv")) return .mongodb;
     return null;
 }
 
@@ -164,8 +170,10 @@ pub fn run(gpa: Allocator, io: std.Io, root: anyerror![]const u8, request: Reque
             try list.append(arena, db);
             try config.save(gpa, io, repo_root, list.items);
             try out.print("added {s}: {s} {s}\n", .{ db.name, @tagName(db.kind), db.path orelse db.display orelse "" });
-            if (!db.kind.supported()) try out.print("note: this version serves sqlite only; {s} is kept for a later version, its connection string sealed with DPAPI under {s}\n", .{ db.name, "%LOCALAPPDATA%\\emetgate\\db\\credentials" });
+            if (!db.kind.supported()) try out.print("note: this version does not serve {s} yet; {s} is kept for a later version, its connection string sealed with DPAPI under {s}\n", .{ @tagName(db.kind), db.name, "%LOCALAPPDATA%\\emetgate\\db\\credentials" });
+            if (db.kind == .postgres) try out.print("the connection string is sealed with DPAPI under %LOCALAPPDATA%\\emetgate\\db\\credentials; connect with a role that has only SELECT, and use sslmode=verify-full off this machine\nnext: emetgate db hide/mask/block {s} ... for private data, then emetgate doctor checks the connection and the role\n", .{db.name});
             try out.writeAll("the model reads it with emetgate_db from its next session on; it writes only after you type /db write in a lockdown session\n");
+            if (db.kind == .mongodb) try out.print("next: emetgate db hide/mask/block {s} collection.field ... for private fields; give it a MongoDB user with only the read role (readWrite only if you will grant /db write)\n", .{db.name});
             if (db.kind == .sqlite) try out.print("next: emetgate db hide/mask/block {s} ... for private data, and emetgate db protect {s} so low-integrity commands cannot read the file itself\n", .{ db.name, db.name });
             return 0;
         },
@@ -360,7 +368,26 @@ fn joined(items: []const []const u8) Joined {
 fn describeTarget(gpa: Allocator, io: std.Io, arena: Allocator, root: []const u8, name: []const u8, target: []const u8, err_out: *Writer) !?config.Database {
     if (kindOfUrl(target)) |kind| {
         if (kind == .sqlite) return describeTarget(gpa, io, arena, root, name, target["sqlite://".len..], err_out);
-        credentials.store(gpa, io, name, target) catch |err| {
+        var sealed: []const u8 = target;
+        if (kind == .postgres) {
+            const parsed = postgres.parseUrl(arena, target) catch {
+                try err_out.writeAll("error: InvalidUrl: the connection string is not a postgres URL emetgate reads; use postgres://user[:password]@host[:port]/db[?sslmode=disable|prefer|require|verify-full][&sslrootcert=C:\\path\\ca.pem]\n");
+                return null;
+            };
+            if (parsed.password == null) {
+                if (env_password) |password| sealed = try postgres.withPassword(arena, target, password);
+            }
+        }
+        if (kind == .mongodb) {
+            var why: mongo.OpenProblem = .{};
+            const conn = mongo.open(gpa, target, .{ .io = io, .mode = .read, .access = .{}, .limits = .{} }, &why) catch |err| {
+                if (err == error.OutOfMemory) return err;
+                try err_out.print("error: DatabaseUnavailable: {s}; nothing was added\n", .{why.text()});
+                return null;
+            };
+            conn.close();
+        }
+        credentials.store(gpa, io, name, sealed) catch |err| {
             try err_out.print("error: {t}: the connection string could not be sealed with DPAPI\n", .{err});
             return null;
         };
@@ -369,7 +396,7 @@ fn describeTarget(gpa: Allocator, io: std.Io, arena: Allocator, root: []const u8
         return .{ .name = try arena.dupe(u8, name), .kind = kind, .credential = try arena.dupe(u8, name), .display = try arena.dupe(u8, shown) };
     }
     if (std.mem.indexOf(u8, target, "://") != null) {
-        try err_out.print("error: UnknownEngine: {s} names an engine emetgate does not know; use a file path, postgres://, mysql:// or sqlite://\n", .{target});
+        try err_out.print("error: UnknownEngine: {s} names an engine emetgate does not know; use a file path, mongodb://, postgres://, mysql:// or sqlite://\n", .{target});
         return null;
     }
     const abs = std.Io.Dir.cwd().realPathFileAlloc(io, target, gpa) catch |err| {

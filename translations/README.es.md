@@ -102,7 +102,29 @@ emetgate db protect main
 
 El agente lee con `emetgate_db`: lista tablas, las describe, toma filas de muestra y ejecuta un `SELECT` por llamada, en JSON, CSV o Markdown, con límites de filas, tamaño de celda, tamaño de respuesta y tiempo. El archivo se abre en solo lectura y cada sentencia pasa por el autorizador de SQLite antes de ejecutarse. Una columna oculta se lee como NULL dondequiera que aparezca (`SELECT *`, una vista, una subconsulta, un `WHERE`); una tabla bloqueada se rechaza incluso a través de una vista; una columna enmascarada vuelve enmascarada con cualquier alias, y una consulta que la mete dentro de una expresión se rechaza. Las reglas siguen la columna de la que viene un valor, no el nombre que se le da.
 
-**Escribir requiere tu permiso.** El agente solo lee. Para dejar que cambie datos, escribe `/db write` como prompt: el hook lo responde y el modelo nunca lo ve. Solo durante el turno de tu siguiente prompt puede `emetgate_db_write` ejecutar `INSERT`, `UPDATE`, `DELETE` o DDL, y cada sentencia queda registrada con su número de filas. Borrar una tabla, vaciarla o cambiar todas sus filas sigue rechazado salvo que hayas escrito `/db write --destructive`; `/db read` termina el modo de escritura al instante.
+**MongoDB** funciona igual. `db add` inicia sesión una vez para comprobar la URI y luego la sella, contraseña incluida, con DPAPI de Windows:
+
+```
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db block shop audit_log
+```
+
+Las colecciones hacen de tablas y una regla nombra un campo de primer nivel. En lugar de SQL, el agente envía un comando JSON: `find` (filter, projection, sort, limit, skip), `aggregate` (pipeline), `distinct` o `countDocuments`. emetgate analiza cada comando y lo recorre entero antes de enviar nada. Rechaza un campo oculto o enmascarado nombrado en cualquier sitio (un filtro, un orden, `$expr`, una ruta con puntos, `$getField`), las referencias al documento entero como `$$ROOT`, el JavaScript del lado del servidor, `$out` y `$merge`, y los joins (`$lookup`, `$unionWith`, `$graphLookup`) hacia una colección que tiene reglas. El pipeline que se ejecuta quita los campos ocultos al principio y al final, y la respuesta los vuelve a quitar y enmascara los enmascarados por nombre. Una vista se comprueba como el pipeline al que sustituye.
+
+**Escribir requiere tu permiso.** El agente solo lee. Para dejar que cambie datos, escribe `/db write` como prompt: el hook lo responde y el modelo nunca lo ve. Solo durante el turno de tu siguiente prompt puede `emetgate_db_write` ejecutar `INSERT`, `UPDATE`, `DELETE` o DDL (en MongoDB: `insertOne`, `insertMany`, `updateOne`, `updateMany`, `deleteOne`, `deleteMany`, `drop`), y cada sentencia queda registrada con su número de filas. Borrar una tabla, vaciarla o cambiar todas sus filas sigue rechazado salvo que hayas escrito `/db write --destructive`; `/db read` termina el modo de escritura al instante.
+
+**PostgreSQL** funciona igual. Se añade por URL. La contraseña se sella con DPAPI en `%LOCALAPPDATA%\emetgate\db\credentials` y nunca se escribe en el repositorio; puedes dejarla fuera de la URL y poner `PGPASSWORD` para el comando `db add`:
+
+```
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+emetgate db hide prod users.password_hash
+emetgate db mask prod users.email --mode email
+emetgate doctor
+```
+
+emetgate habla el protocolo de PostgreSQL por sí mismo: inicio de sesión SCRAM-SHA-256 y TLS verificado contra el almacén raíz de Windows o `sslrootcert` con `sslmode=verify-full`. Cada lectura corre en una transacción `READ ONLY` con un tiempo límite por sentencia y se revierte. Antes de ejecutar una consulta, emetgate pide al servidor su plan (`EXPLAIN (VERBOSE)`) y revisa cada tabla que el plan toca, también a través de vistas y subconsultas, y cada columna y función que usa. Una columna oculta o enmascarada solo puede seleccionarse directamente, y entonces vuelve como NULL o enmascarada; en cualquier otro lugar (`WHERE`, `ORDER BY`, `GROUP BY`, una función, `row_to_json(t)`, la fila entera `t`, `UNION`, una subconsulta escalar) la consulta se rechaza. También se rechazan los catálogos del sistema como `pg_stats`, `COPY` y toda función fuera de una lista integrada (`pg_read_file`, `lo_get`, `dblink`, `query_to_xml`, `set_config`, funciones definidas en la base de datos). Conéctate con un rol que solo tenga `SELECT`: `emetgate doctor` avisa si el rol es superusuario o puede escribir.
 
 ## Empieza en 2 minutos
 
@@ -149,7 +171,7 @@ Una caché que un emetgate en ejecución tiene arrendada nunca se borra. Las car
 ## Límites
 
 - Por ahora solo en Windows.
-- Bases de datos: por ahora solo SQLite; PostgreSQL y MySQL llegarán después. Guarda una base de datos con columnas ocultas o enmascaradas fuera del repositorio y ejecuta `emetgate db protect`, para que ninguna herramienta de archivos ni ningún comando lea el archivo en sí.
+- Bases de datos: SQLite, PostgreSQL y MongoDB; MySQL llegará después. Guarda una base de datos SQLite con columnas ocultas o enmascaradas fuera del repositorio y ejecuta `emetgate db protect`, para que ninguna herramienta de archivos ni ningún comando lea el archivo en sí. En PostgreSQL, una consulta que la revisión del plan no puede rastrear se rechaza en vez de ejecutarse, así que algunas consultas válidas sobre tablas con columnas ocultas o enmascaradas se rechazan (una vista, un `UNION` o una subconsulta escalar que devuelve esa columna). Las conversiones implícitas y las funciones de tipo que definen las extensiones corren sin revisión; un rol con el mínimo de permisos es el respaldo. Un servidor MongoDB debe pedir contraseña; si no, cualquier programa de la máquina puede leerlo directamente. emetgate solo inicia sesión con SCRAM, no resuelve `mongodb+srv://` (escribe los hosts uno a uno) y no puede conectarse a un servidor que pide un certificado TLS de cliente.
 - Las reglas se aplican a los cambios hechos con las herramientas de escritura de emetgate. Un comando que ejecuta el agente no pasa por la puerta: los archivos que cambia se informan y las rutas congeladas se restauran, pero las demás reglas no se aplican a comandos. Con lockdown se rechaza un comando que borra archivos del repositorio sin recursión; el agente los borra con `emetgate_delete`, que pasa por la puerta.
 - El registro de reglas es un archivo bajo `.emetgate/`. El agente no tiene herramienta para escribirlo, pero una edición hecha con un comando no la detecta el hook que vigila los comandos de reglas.
 - Fuera de lockdown, en una sesión abierta con las herramientas propias del agente, no hay puerta. En otros agentes que hablan MCP, la puerta funciona mientras el agente use las herramientas de emetgate.

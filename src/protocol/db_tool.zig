@@ -8,6 +8,9 @@ const repo = @import("../platform/repo.zig");
 const access_mod = @import("../db/access.zig");
 const engine = @import("../db/engine.zig");
 const sqlite = @import("../db/sqlite.zig");
+const postgres = @import("../db/postgres.zig");
+const mongo = @import("../db/mongo.zig");
+const credentials = @import("../db/credentials.zig");
 const render = @import("../db/render.zig");
 const config = @import("../db/config.zig");
 const grant = @import("../db/grant.zig");
@@ -20,8 +23,8 @@ const ToolResult = tool_result.ToolResult;
 pub const read_tool = "emetgate_db";
 pub const write_tool = "emetgate_db_write";
 
-pub const read_description = "Reads a configured database: op tables, describe, sample, count, query, explain or limits. Read-only; hidden columns read as null, masked ones come back masked.";
-pub const write_description = "Runs one write statement on a configured database, only in the turn after the user typed /db write.";
+pub const read_description = "Reads a configured database: op tables, describe, sample, count, query, explain or limits. Read-only; hidden columns read as null, masked ones come back masked. MongoDB: sql is a JSON command, e.g. {\"find\":\"users\",\"filter\":{},\"limit\":5}; also aggregate, distinct, countDocuments.";
+pub const write_description = "Runs one write statement (MongoDB: one JSON command such as updateOne) on a configured database, only in the turn after the user typed /db write.";
 pub const op_desc = "tables, describe, sample, count, query, explain or limits";
 pub const format_desc = "json, csv or markdown";
 
@@ -48,8 +51,10 @@ pub const exit_not_granted: u8 = 72;
 pub const exit_limit: u8 = 73;
 pub const exit_sql: u8 = 74;
 
-const add_hint = "the user adds one in a terminal (not through a tool): emetgate db add <name> <path-to-file.db>";
+const add_hint = "the user adds one in a terminal (not through a tool): emetgate db add <name> <path-to-file.db>, emetgate db add <name> postgres://user@host/db or emetgate db add <name> mongodb://user@host/db";
 const grant_hint = "ask the user to type /db write (or /db write <name>) as their next prompt, then repeat this call in that turn; the user types /db write --destructive to also allow a statement that drops or empties a table";
+
+const mongo_shapes = "for MongoDB, sql is one JSON command: {\"find\":\"users\",\"filter\":{...},\"projection\":{...},\"sort\":{...},\"limit\":10,\"skip\":0}, {\"aggregate\":\"users\",\"pipeline\":[...]}, {\"distinct\":\"users\",\"key\":\"city\"} or {\"countDocuments\":\"users\",\"filter\":{...}}; emetgate_db_write takes insertOne (document), insertMany (documents), updateOne or updateMany (filter, update, upsert), deleteOne or deleteMany (filter) and drop";
 
 pub const Fix = struct { name: []const u8, code: u8, fix: []const u8 };
 
@@ -58,12 +63,12 @@ pub const fixes = [_]Fix{
     .{ .name = "UnknownDatabase", .code = exit_config, .fix = "pass db as one of the names op limits lists" },
     .{ .name = "DbNameRequired", .code = exit_config, .fix = "more than one database is configured: pass db with one of the names op limits lists" },
     .{ .name = "InvalidDbConfig", .code = exit_config, .fix = "the user repairs .emetgate/db.json or the global db rules (emetgate doctor names the problem); emetgate db list shows what is configured" },
-    .{ .name = "DatabaseUnavailable", .code = exit_config, .fix = "the database file could not be opened; the user checks it with emetgate db list and emetgate doctor" },
-    .{ .name = "EngineNotSupported", .code = exit_config, .fix = "this emetgate serves sqlite databases only; PostgreSQL and MySQL come in a later version" },
+    .{ .name = "DatabaseUnavailable", .code = exit_config, .fix = "the database could not be opened or reached; the user checks it with emetgate db list and emetgate doctor" },
+    .{ .name = "EngineNotSupported", .code = exit_config, .fix = "this emetgate serves SQLite, PostgreSQL and MongoDB databases; MySQL comes in a later version" },
     .{ .name = "UnknownOp", .code = 2, .fix = "op is one of " ++ op_desc },
     .{ .name = "UnknownFormat", .code = 2, .fix = "format is one of " ++ format_desc },
     .{ .name = "MissingTable", .code = 2, .fix = "pass table: a name from op tables" },
-    .{ .name = "MissingSql", .code = 2, .fix = "pass sql: one SQL statement" },
+    .{ .name = "MissingSql", .code = 2, .fix = "pass sql: one SQL statement, or for MongoDB one JSON command" },
     .{ .name = "EmptyStatement", .code = exit_sql, .fix = "sql holds no statement; send one SQL statement" },
     .{ .name = "MultipleStatements", .code = exit_sql, .fix = "send one statement per call; split the rest into further calls" },
     .{ .name = "StatementNotRead", .code = exit_refused, .fix = "emetgate_db only reads: send one SELECT or WITH ... SELECT; a change goes through emetgate_db_write after the user types /db write" },
@@ -79,7 +84,11 @@ pub const fixes = [_]Fix{
     .{ .name = "WriteGrantUnavailable", .code = exit_not_granted, .fix = "write mode is granted by the /db write prompt hook, which emetgate lockdown installs; the user starts the session with emetgate lockdown and types /db write" },
     .{ .name = "QueryTimeout", .code = exit_limit, .fix = "narrow the query (a WHERE on an indexed column, fewer joins) or the user raises timeout-ms with emetgate db limit" },
     .{ .name = "RateLimited", .code = exit_limit, .fix = "too many database calls this minute; wait, then retry, or the user raises rate-per-minute with emetgate db limit" },
-    .{ .name = "SqlFailed", .code = exit_sql, .fix = "fix the SQL; op describe shows a table's columns" },
+    .{ .name = "SqlFailed", .code = exit_sql, .fix = "fix the SQL or the MongoDB command; op describe shows a table's columns or fields" },
+    .{ .name = "CommandInvalid", .code = exit_sql, .fix = mongo_shapes },
+    .{ .name = "HiddenFieldUsed", .code = exit_refused, .fix = "this field is hidden: leave it out of filters, projections, sorts and expressions; documents come back without it" },
+    .{ .name = "MaskedFieldUsed", .code = exit_refused, .fix = "a masked field may only be returned as it is ({\"email\":1} in a projection, or no projection); filter, sort, group and compute on other fields" },
+    .{ .name = "OperatorDenied", .code = exit_refused, .fix = "use the allowed stages and operators: no $out, $merge, $where, $function, $accumulator, $jsonSchema, $$ROOT or $$CURRENT, and no $lookup, $unionWith, $graphLookup or $facet that reaches a collection with hidden, masked or blocked data" },
 };
 
 pub fn fixOf(name: []const u8) ?Fix {
@@ -143,6 +152,14 @@ fn refuse(gpa: Allocator, event: *telemetry.Event, name: []const u8, message: []
     defer out.deinit();
     try wire.writeErrorMessage(&out.writer, name, if (known) |fix| fix.code else 1, message);
     return .{ .text = try tool_result.dupTrim(gpa, out.written()), .is_error = true };
+}
+
+threadlocal var kept_name_buf: [64]u8 = undefined;
+
+fn keptName(name: []const u8) []const u8 {
+    const n = @min(name.len, kept_name_buf.len);
+    @memcpy(kept_name_buf[0..n], name[0..n]);
+    return kept_name_buf[0..n];
 }
 
 fn argString(args: ?Value, key: []const u8) ?[]const u8 {
@@ -215,10 +232,15 @@ fn engineFailure(gpa: Allocator, event: *telemetry.Event, err: anyerror, problem
     return refuse(gpa, event, name, if (problem.len != 0) problem else name);
 }
 
-fn openConn(gpa: Allocator, io: std.Io, chosen: *Chosen, mode: engine.Mode, event: *telemetry.Event, failed: *?ToolResult) !?*sqlite.Conn {
+const Opened = struct {
+    conn: engine.Connection,
+    limits: engine.Limits,
+};
+
+fn openConn(gpa: Allocator, io: std.Io, chosen: *Chosen, mode: engine.Mode, event: *telemetry.Event, failed: *?ToolResult) !?Opened {
     const db = chosen.database();
     if (!db.kind.supported()) {
-        failed.* = try refuse(gpa, event, "EngineNotSupported", try std.fmt.allocPrint(chosen.loaded.arena.allocator(), "database {s} is a {s} database; this version serves sqlite only", .{ db.name, @tagName(db.kind) }));
+        failed.* = try refuse(gpa, event, "EngineNotSupported", try std.fmt.allocPrint(chosen.loaded.arena.allocator(), "database {s} is a {s} database, which this version does not serve", .{ db.name, @tagName(db.kind) }));
         return null;
     }
     const rules = chosen.loaded.accessFor(db) catch |err| {
@@ -226,15 +248,61 @@ fn openConn(gpa: Allocator, io: std.Io, chosen: *Chosen, mode: engine.Mode, even
         failed.* = try refuse(gpa, event, "InvalidDbConfig", "a hidden or masked column entry is not table.column");
         return null;
     };
-    const path = try chosen.loaded.location(db, chosen.root);
     var limits = db.limits;
     limits.max_result_bytes = @min(limits.max_result_bytes, @as(u32, @intCast(reply_contract.room(.db))));
+    const settings: engine.Settings = .{ .io = io, .mode = mode, .access = rules, .limits = limits };
+    if (db.kind == .postgres) return openPostgres(gpa, io, chosen, settings, event, failed);
+    if (db.kind == .mongodb) return openMongo(gpa, io, chosen, settings, event, failed);
+    const path = try chosen.loaded.location(db, chosen.root);
     var why: sqlite.OpenProblem = .{};
-    return sqlite.open(gpa, path, .{ .io = io, .mode = mode, .access = rules, .limits = limits }, &why) catch |err| {
+    const conn = sqlite.open(gpa, path, settings, &why) catch |err| {
         if (err == error.OutOfMemory) return err;
         failed.* = try refuse(gpa, event, "DatabaseUnavailable", why.text());
         return null;
     };
+    return .{ .conn = conn.connection(), .limits = limits };
+}
+
+fn openPostgres(gpa: Allocator, io: std.Io, chosen: *Chosen, settings: engine.Settings, event: *telemetry.Event, failed: *?ToolResult) !?Opened {
+    const db = chosen.database();
+    const arena = chosen.loaded.arena.allocator();
+    const secret = credentials.load(gpa, io, db.credential orelse db.name) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        failed.* = try refuse(gpa, event, "DatabaseUnavailable", try std.fmt.allocPrint(arena, "the connection string of {s} cannot be read from the credential store ({t}); the user adds the database again", .{ db.name, err }));
+        return null;
+    };
+    defer credentials.wipe(gpa, secret);
+    var url_arena = std.heap.ArenaAllocator.init(gpa);
+    defer url_arena.deinit();
+    const target = postgres.parseUrl(url_arena.allocator(), secret) catch {
+        failed.* = try refuse(gpa, event, "InvalidDbConfig", "the sealed connection string is not a postgres:// URL emetgate can read");
+        return null;
+    };
+    var why: postgres.OpenProblem = .{};
+    const conn = postgres.open(gpa, target, settings, &why) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        failed.* = try refuse(gpa, event, "DatabaseUnavailable", try arena.dupe(u8, why.text()));
+        return null;
+    };
+    return .{ .conn = conn.connection(), .limits = settings.limits };
+}
+
+fn openMongo(gpa: Allocator, io: std.Io, chosen: *Chosen, settings: engine.Settings, event: *telemetry.Event, failed: *?ToolResult) !?Opened {
+    const db = chosen.database();
+    const arena = chosen.loaded.arena.allocator();
+    const secret = credentials.load(gpa, io, db.credential orelse db.name) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        failed.* = try refuse(gpa, event, "DatabaseUnavailable", try std.fmt.allocPrint(arena, "the sealed connection string of {s} cannot be read ({t}); the user runs emetgate db remove {s} and adds it again", .{ db.name, err, db.name }));
+        return null;
+    };
+    defer credentials.wipe(gpa, secret);
+    var why: mongo.OpenProblem = .{};
+    const conn = mongo.open(gpa, secret, settings, &why) catch |err| {
+        if (err == error.OutOfMemory) return err;
+        failed.* = try refuse(gpa, event, "DatabaseUnavailable", try arena.dupe(u8, why.text()));
+        return null;
+    };
+    return .{ .conn = conn.connection(), .limits = settings.limits };
 }
 
 fn admitted(gpa: Allocator, io: std.Io, call: Call, chosen: *Chosen, event: *telemetry.Event) !?ToolResult {
@@ -254,7 +322,7 @@ pub fn callRead(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
         chosen.loaded.deinit();
         gpa.free(chosen.root);
     }
-    event.file = chosen.database().name;
+    event.file = keptName(chosen.database().name);
     if (op == .limits) return limitsReply(gpa, io, &chosen, call);
     if (try admitted(gpa, io, call, &chosen, event)) |refused| return refused;
     const table = argString(args, "table");
@@ -264,7 +332,8 @@ pub fn callRead(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
         .query, .explain => if (sql == null) return refuse(gpa, event, "MissingSql", "this op needs sql"),
         else => {},
     }
-    const conn = (try openConn(gpa, io, &chosen, .read, event, &failed)) orelse return failed.?;
+    const opened = (try openConn(gpa, io, &chosen, .read, event, &failed)) orelse return failed.?;
+    const conn = opened.conn;
     defer conn.close();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
@@ -292,11 +361,11 @@ pub fn callRead(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Even
             try js.write(.{ .db = name, .plan = plan });
         },
         .query, .sample => {
-            var rows: render.Rows = .init(gpa, format, conn.limits);
+            var rows: render.Rows = .init(gpa, format, opened.limits);
             defer rows.deinit();
-            const asked: u32 = if (argInt(args, "rows")) |n| @intCast(std.math.clamp(n, 1, conn.limits.max_rows)) else @min(20, conn.limits.max_rows);
+            const asked: u32 = if (argInt(args, "rows")) |n| @intCast(std.math.clamp(n, 1, opened.limits.max_rows)) else @min(20, opened.limits.max_rows);
             const outcome = (if (op == .query) conn.query(arena, sql.?, rows.sink()) else conn.sample(arena, table.?, asked, rows.sink())) catch |err| return engineFailure(gpa, event, err, conn.problem());
-            try writeRows(&out.writer, name, format, &rows, outcome, conn.limits);
+            try writeRows(&out.writer, name, format, &rows, outcome, opened.limits);
         },
         .limits => unreachable,
     }
@@ -313,7 +382,7 @@ pub fn callWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Eve
         gpa.free(chosen.root);
     }
     const name = chosen.database().name;
-    event.file = name;
+    event.file = keptName(name);
     event.command = sql;
     const session = call.session orelse return refuse(gpa, event, "WriteGrantUnavailable", "this server has no session to read a write grant from");
     const file = session.grant_file orelse return refuse(gpa, event, "WriteGrantUnavailable", "this session was not started by emetgate lockdown, so no /db write grant can reach it");
@@ -325,7 +394,8 @@ pub fn callWrite(gpa: Allocator, io: std.Io, args: ?Value, event: *telemetry.Eve
         return refuse(gpa, event, "WriteNotGranted", message);
     }
     if (try admitted(gpa, io, call, &chosen, event)) |refused| return refused;
-    const conn = (try openConn(gpa, io, &chosen, .write, event, &failed)) orelse return failed.?;
+    const opened = (try openConn(gpa, io, &chosen, .write, event, &failed)) orelse return failed.?;
+    const conn = opened.conn;
     defer conn.close();
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();

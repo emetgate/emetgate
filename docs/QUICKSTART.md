@@ -108,7 +108,7 @@ What to expect:
 
 ## 6. Optional: let the agent read a database
 
-If the project has a SQLite database, add it once, in a terminal:
+If the project has a SQLite, PostgreSQL or MongoDB database, add it once, in a terminal:
 
 ```powershell
 emetgate db add main data\app.db
@@ -118,11 +118,35 @@ emetgate db protect main
 emetgate db list
 ```
 
-- The agent reads it with `emetgate_db`: tables, columns, sample rows and one `SELECT` per call. It cannot write: the file is opened read-only and every statement is checked by SQLite before it runs.
+- The agent reads it with `emetgate_db`: tables, columns, sample rows and one `SELECT` per call. It cannot write: a SQLite file is opened read-only and every statement is checked by SQLite before it runs.
 - A hidden column reads as NULL in every query; a masked one comes back masked (`a***@example.com`) and may only be selected directly. `emetgate db block main <table>` keeps a table out entirely.
 - To let the agent change data, type `/db write` in the session. It applies to your next prompt only; anything that drops or empties a table needs `/db write --destructive`. `/db read` turns it off, `/db` shows the state.
 - `emetgate doctor` shows one line per database, with a fix when something is wrong.
-- Only SQLite is served for now.
+- A PostgreSQL database is added by URL; its password is sealed with DPAPI, never written to the repository. Leave the password out of the URL and set `PGPASSWORD` for the command instead:
+
+```powershell
+$env:PGPASSWORD = "..."
+emetgate db add prod "postgres://reader@db.example.com:5432/shop?sslmode=verify-full"
+Remove-Item Env:PGPASSWORD
+emetgate db hide prod users.password_hash
+emetgate doctor
+```
+
+  Every read runs in a `READ ONLY` transaction that is rolled back, after emetgate checked the query's plan: a hidden or masked column may only be selected directly, and `pg_stats`, `pg_read_file`, `COPY` and functions off the built-in list are refused. Use a role that has only `SELECT`; `emetgate doctor` warns when the role is a superuser or can write.
+
+For a MongoDB database, add its URI instead. emetgate logs in once to check it and keeps it, password included, sealed with DPAPI; give it a MongoDB user with the `read` role (`readWrite` only if you will use `/db write`):
+
+```powershell
+emetgate db add shop "mongodb://app:secret@db.local:27017/shop?authSource=admin&tls=true"
+emetgate db hide shop users.ssn
+emetgate db mask shop users.email --mode email
+emetgate db list
+```
+
+- A rule names `collection.field`, a top-level field. The agent sends one JSON command per call, for example `{"find":"users","filter":{"age":{"$gt":30}},"limit":10}`; `aggregate`, `distinct` and `countDocuments` work too.
+- A command that names a hidden or masked field, reaches the whole document (`$$ROOT`), runs JavaScript or writes with `$out` is refused before anything is sent.
+- `mongodb+srv://` is not resolved: list the hosts instead. A server that asks for a TLS client certificate cannot be used.
+- MySQL is not served yet.
 
 ## When something goes wrong
 
